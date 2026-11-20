@@ -75,6 +75,7 @@ def protect_literals(
     *,
     source: str = "ja",
     glossary: Mapping[str, str] | None = None,
+    protect_numbers: bool = True,
 ) -> tuple[str, dict[str, str]]:
     """Turn approved terms/numbers outside original RPG codes into sentinels.
 
@@ -94,7 +95,10 @@ def protect_literals(
            for key, value in terms.items()):
         raise ValueError("Unsafe glossary entry")
     patterns = [re.escape(k) for k in sorted(terms, key=len, reverse=True)]
-    patterns.append(NUMERIC)
+    if protect_numbers:
+        patterns.append(NUMERIC)
+    if not patterns:
+        return text, {}
     literal_re = re.compile("|".join(patterns))
     mapping: dict[str, str] = {}
     next_id = 987650
@@ -204,14 +208,30 @@ def _numeric_values_outside_codes(text: str) -> Counter[str]:
     return values
 
 
-def _join_spanish_sentences(parts: list[str]) -> str:
-    """Insert one boundary only where two translated sentences need it."""
+def _join_spanish_sentences(parts: list[tuple[str, str]]) -> str:
+    """Rejoin model clauses using source sentence boundaries, not model luck.
+
+    Some compact MT models omit a final full stop. When the Japanese source
+    clearly ended a sentence, restore the *boundary*, never missing meaning.
+    Do not modify RPG codes, explicit newline markers or numeric literals.
+    """
     result = ""
-    for part in parts:
-        if (result and part and result[-1] in ".!?»…”"
-                and part[0] in "¿¡«\"(ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÁÉÍÓÚÜÑáéíóúüñ"):
-            result += " "
-        result += part
+    previous_source = ""
+    for original, translated in parts:
+        if not translated:
+            continue
+        if result and translated and not translated[0].isspace():
+            previous_ended = bool(
+                re.search(r"[。！？!?][」』】）》]*$", previous_source)
+            )
+            if previous_ended and re.match(r"[A-Za-zÀ-ÿ¿¡«\"(]", translated):
+                tail = result.rstrip()
+                if tail and not re.search(r"[.!?][»”\"')]*$", tail):
+                    result = tail + "."
+                if result and not result[-1].isspace():
+                    result += " "
+        result += translated
+        previous_source = original
     return result
 
 
@@ -273,31 +293,35 @@ def translate_checked(
     source: str = "ja",
     glossary: Mapping[str, str] | None = None,
     required_terms: tuple[str, ...] = (),
+    protect_numbers: bool = True,
 ) -> str:
     """Route only prose to a supplied model, then validate before caching.
 
     This harness deliberately provides NO neural model. The caller must supply
     an appropriately licensed translator; public CI uses deterministic fakes.
     """
-    protected, mapping = protect_literals(original, source=source, glossary=glossary)
+    protected, mapping = protect_literals(
+        original, source=source, glossary=glossary,
+        protect_numbers=protect_numbers,
+    )
     translated_chunks = []
     for protected_code, fragment in code_parts(protected):
         if protected_code or not fragment or not fragment.strip():
             translated_chunks.append(fragment)
             continue
-        sentence_results: list[str] = []
+        sentence_results: list[tuple[str, str]] = []
         for sentence in split_sentences(fragment):
             if not sentence or sentence in ("\r\n", "\r", "\n"):
-                sentence_results.append(sentence)
+                sentence_results.append((sentence, sentence))
                 continue
             if not (JAPANESE.search(sentence) or re.search(r"[A-Za-z]", sentence)):
-                sentence_results.append(sentence)
+                sentence_results.append((sentence, sentence))
                 continue
             value = model_translate(sentence)
             if (not isinstance(value, str) or not value.strip()
                     or "\n" in value or "\r" in value):
                 raise TranslationRejected("MODEL_RESULT_MALFORMED")
-            sentence_results.append(value)
+            sentence_results.append((sentence, value))
         translated_chunks.append(_join_spanish_sentences(sentence_results))
     intermediate = "".join(translated_chunks)
     restored = restore_layout(original, restore_literals(intermediate, mapping))
