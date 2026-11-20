@@ -42,7 +42,9 @@ CASES: tuple[Case, ...] = (
     Case("question", "学校はどこですか？",
          (("escuela", "colegio"), ("dónde", "donde"))),
     Case("club", "今日からクラブ活動が再開します。うれしいです！",
-         (("club", "actividades"), ("reanuda", "recomienza", "reinicia", "vuelve", "regresa", "nuevo"))),
+         (("club", "actividades"),
+          ("reanuda", "recomienza", "reinicia", "vuelve", "regresa", "nuevo"),
+          ("alegr", "feliz", "content", "entusiasm", "emocion", "genial", "encantad"))),
     Case("morning_evening", "夏の授業は午前中に終わります。夕方に図書館へ行きます。",
          (("mañana",), ("tarde", "atardecer"), ("biblioteca",))),
     Case("sports", "私はサッカー部にいます。友人は水泳部です。私たちの学校はサッカーが盛んです。水泳部には新しい先生が来ました。",
@@ -58,7 +60,8 @@ CASES: tuple[Case, ...] = (
              r"\b(?:estoy|estar[eé])\s+(?:enfadad|enojad|molest)[a-záéíóú]*\s+con\s+(?:mis|los)\s+amig",
          )),
     Case("childhood", "花子は私の幼なじみです。家が隣にあります。小学生のころから友達です。",
-         (("hanako",), ("infancia", "niñ", "primaria"), ("casa", "vecin", "lado"))),
+         (("hanako",), ("infancia", "niñ", "primaria"),
+          ("casa", "vecin", "lado"), ("primaria", "niñ", "pequeñ"))),
     Case("waking", "もう朝です。起きましょう。",
          (("mañana", "día"), ("despiert", "levant", "levanta"))),
     Case("numbers_and_code", r"\V[12]の予定は12時30分です。",
@@ -95,6 +98,11 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
         )
         if not recognizable_time:
             errors.append("TIME_RELATION_NOT_PRESERVED")
+        # The source only states 12:30, not a.m. or p.m. Added meridiem
+        # would invent a time-of-day that was absent from the Japanese.
+        if re.search(r"\b[ap]\.\s*m\.|\b[ap]\.m\.|\b[ap]m\b",
+                     spanish.casefold()):
+            errors.append("UNSUPPORTED_AM_PM_ADDED")
     if sample.id == "preparation":
         # In Japanese the omitted speaker subject can be expressed as "I" or
         # "you". What is NOT negotiable: the FRIEND is the angry party, not
