@@ -1,0 +1,81 @@
+name: Public independent 20-case translation quality gate
+
+on:
+  push:
+    paths:
+      - ".github/workflows/independent-pivot-quality.yml"
+      - "tools/independent_pivot_holdout.py"
+      - "tests/test_independent_pivot_holdout.py"
+      - "translation_lab/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-independent-ja-en-es
+  cancel-in-progress: true
+
+jobs:
+  independent-quality:
+    name: Independent Japanese-English-Spanish quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      HF_HOME: /tmp/public-independent-ja-en-es-model-cache
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DOWNLOAD_TIMEOUT: "120"
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      INDEPENDENT_WORKSPACE: /tmp/public-independent-ja-en-es-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Reject private assets and credentials
+        run: python tools/publication_guard.py
+
+      - name: Compile all Python sources
+        run: python -m compileall -q translation_lab tests tools
+
+      - name: Run complete offline regression and independent semantic tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Install CPU-only PyTorch
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            --index-url https://download.pytorch.org/whl/cpu torch==2.6.0
+
+      - name: Install pinned public Marian inference dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            transformers==4.57.1 sentencepiece==0.2.1 sacremoses==0.1.1
+
+      - name: Translate the independent twenty-case Japanese holdout
+        run: |
+          python -m tools.independent_pivot_holdout translate \
+            --workspace "$INDEPENDENT_WORKSPACE"
+
+      - name: Verify accepted cache in a fresh process without model weights
+        if: always()
+        run: |
+          python -m tools.independent_pivot_holdout verify \
+            --workspace "$INDEPENDENT_WORKSPACE"
+
+      - name: Preserve all translations, raw attempts, and restart proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-independent-ja-en-es-quality-receipts
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            /tmp/public-independent-ja-en-es-quality/independent-report.json
+            /tmp/public-independent-ja-en-es-quality/independent-restart-proof.json
+            /tmp/public-independent-ja-en-es-quality/review-queue.json
+            /tmp/public-independent-ja-en-es-quality/cache/translation-cache.sqlite3

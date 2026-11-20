@@ -24,7 +24,70 @@ NUMERIC = r"(?<![0-9０-９])[0-9０-９]+(?![0-9０-９])"
 JAPANESE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 SENTENCE_END = re.compile(r"[。!?！？]+(?:[」』】）》]*)")
 LINE_END = re.compile(r"(\r\n|\r|\n)$")
-INTERNAL_MARKER = re.compile(r"\\V\[9876[5-9]\d+\]|ZXQTX760(?:NUM|TERM)\d+QXZ")
+
+
+def _target_sentences(text: str) -> list[str]:
+    """Split Spanish/English sentences without breaking a. m. or p. m."""
+    stripped = text.strip(" \t\u3000")
+    if not stripped:
+        return []
+    return [
+        part.strip(" \t\u3000")
+        for part in re.split(
+            r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÑ¿¡])",
+            stripped,
+        )
+        if part.strip(" \t\u3000")
+    ]
+
+
+def _restore_document_line_breaks(source: str, translated: str) -> str:
+    """Reapply source line boundaries when target sentence counts align."""
+    source_parts = _split_preserving_newlines(source)
+    source_lines = source_parts[::2]
+    source_breaks = source_parts[1::2]
+    if not source_breaks:
+        return translated
+
+    source_sentence_counts = [
+        len([part for part in split_sentences(line) if part.strip(" \t\u3000")])
+        for line in source_lines
+    ]
+    if any(count == 0 for count in source_sentence_counts):
+        raise TranslationRejected("DOCUMENT_LAYOUT_ALIGNMENT_FAILED")
+
+    target_parts = _split_preserving_newlines(translated)
+    target_lines = target_parts[::2]
+    target_sentence_counts = [len(_target_sentences(line)) for line in target_lines]
+
+    if (
+        len(target_lines) == len(source_lines)
+        and target_sentence_counts == source_sentence_counts
+    ):
+        return "".join(
+            target_lines[index]
+            + (source_breaks[index] if index < len(source_breaks) else "")
+            for index in range(len(source_lines))
+        )
+
+    flattened = " ".join(line.strip(" \t\u3000") for line in target_lines if line.strip(" \t\u3000"))
+    target_sentences = _target_sentences(flattened)
+    if len(target_sentences) != sum(source_sentence_counts):
+        raise TranslationRejected("DOCUMENT_LAYOUT_ALIGNMENT_FAILED")
+
+    rebuilt = []
+    cursor = 0
+    for index, count in enumerate(source_sentence_counts):
+        rebuilt.append(" ".join(target_sentences[cursor:cursor + count]))
+        cursor += count
+        if index < len(source_breaks):
+            rebuilt.append(source_breaks[index])
+    return "".join(rebuilt)
+INTERNAL_MARKER = re.compile(
+    r"\\V\[(?:9876[5-9]\d|987[7-9]\d{2}|98[89]\d{3}|99\d{4})\]"
+    r"|ZXQTX760(?:NUM|TERM)\d+QXZ|ZXQPLB[A-Z]+QXZ"
+)
+DOCUMENT_LAYOUT_MARKER = re.compile(r"ZXQPLB[A-Z]+QXZ")
 
 
 class TranslationRejected(ValueError):
@@ -449,11 +512,12 @@ def translate_checked(
         else:
             translated_chunks.append("".join(value for _, value in sentence_results))
     intermediate = "".join(translated_chunks)
+    restored_prose = restore_literals(intermediate, mapping)
+    if split_model_sentences == "document":
+        restored_prose = _restore_document_line_breaks(original, restored_prose)
     restored = restore_layout(
         original,
-        restore_contextual_name_codes(
-            restore_literals(intermediate, mapping), contextual_name_codes
-        ),
+        restore_contextual_name_codes(restored_prose, contextual_name_codes),
     )
     validate_translation(original, restored, source=source, required_terms=required_terms)
     return restored
