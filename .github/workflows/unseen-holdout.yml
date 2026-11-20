@@ -1,0 +1,66 @@
+name: Public NLLB unseen Japanese dialogue holdout
+
+on:
+  push:
+    paths:
+      - ".github/workflows/unseen-holdout.yml"
+      - "tools/unseen_holdout.py"
+      - "tools/nllb_research_acceptance.py"
+      - "tools/direct_marian_acceptance.py"
+      - "tools/neural_acceptance.py"
+      - "tests/test_unseen_holdout.py"
+      - "translation_lab/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-unseen-holdout-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unseen-holdout:
+    name: Ten unseen Japanese dialogues, raw NLLB inference and cold SQLite replay
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_HOME: /tmp/public-nllb-holdout-model-cache
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DOWNLOAD_TIMEOUT: "90"
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      HOLDOUT_WORKSPACE: /tmp/public-nllb-unseen-holdout
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Reject private assets and credentials
+        run: python tools/publication_guard.py
+      - name: Run offline holdout-contract and full regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Install CPU-only PyTorch
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            --index-url https://download.pytorch.org/whl/cpu torch==2.6.0
+      - name: Install pinned public NLLB inference runtime
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            transformers==4.57.1 sentencepiece==0.2.1
+      - name: Evaluate ten previously unused dialogues with raw NLLB output
+        run: python -m tools.unseen_holdout translate --workspace "$HOLDOUT_WORKSPACE"
+      - name: Verify approved holdout rows in a fresh process without model weights
+        if: always()
+        run: python -m tools.unseen_holdout verify --workspace "$HOLDOUT_WORKSPACE"
+      - name: Preserve the full holdout decision and restart receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-nllb-unseen-holdout-receipts
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            /tmp/public-nllb-unseen-holdout/holdout-report.json
+            /tmp/public-nllb-unseen-holdout/holdout-restart-proof.json

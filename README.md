@@ -158,3 +158,28 @@ Con Python 3.11 y desde la raíz del repositorio:
 La carpeta `--workspace` debe ser nueva. El informe se escribe en
 `cache-stress-report.json` dentro de esa carpeta, y el comando devuelve
 un código distinto de cero ante un fallo.
+
+
+## Etapa de generalización: conjunto ciego de diez diálogos nuevos
+
+El workflow Public NLLB unseen Japanese dialogue holdout evalúa diez frases y
+diálogos sintéticos que no pertenecen a los doce casos de desarrollo del
+runner neural_acceptance. Incluyen negación, condiciones, causalidad, roles de
+hablantes, cantidades, direcciones, horarios, códigos de control y saltos CRLF.
+
+**La puerta es 10/10:** un solo error semántico o estructural impide aprobar
+la etapa. El runner usa el modelo público NLLB directamente con la protección
+estructural de translate_checked; no aplica paráfrasis de origen, correcciones
+léxicas, respuestas preparadas ni reintentos específicos por caso. Las
+comprobaciones semánticas se ejecutan antes de guardar y al recuperar SQLite.
+
+La segunda fase abre la caché desde un proceso nuevo, sin cargar pesos, y
+comprueba que se recuperen exactamente las traducciones aceptadas y que no se
+haya guardado ninguna rechazada. Los informes JSON y la prueba de reinicio
+quedan como artifacts de la ejecución, incluso si el holdout falla.
+
+**Licencia y alcance:** facebook/nllb-200-distilled-600M declara
+CC-BY-NC-4.0. Esta prueba es exclusivamente de investigación/no comercial;
+no autoriza su uso en producción comercial ni certifica el motor original.
+Un resultado 10/10 demuestra únicamente que este modelo público pasó este
+pequeño conjunto sintético y sus validaciones, no calidad universal.
