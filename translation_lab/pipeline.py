@@ -293,6 +293,47 @@ def validate_translation(
             raise TranslationRejected("REQUIRED_SEMANTIC_TERM_MISSING")
 
 
+def _contextualize_name_codes(original: str) -> tuple[str, tuple[str, ...]]:
+    """Expose a name-variable's grammatical role without sending RPG syntax.
+
+    A leading RPG name token followed by a Japanese topic/subject/object
+    particle otherwise gets split away from the clause before inference.
+    Replace one unambiguous name token with a neutral Japanese noun for the
+    model, then restore the exact original token in Spanish output.
+    """
+    pattern = re.compile(r"\\\\N\\[\\d+\\](?=[はがをにへと])")
+    matches = list(pattern.finditer(original))
+    if not matches:
+        return original, ()
+    unique_codes = {match.group(0) for match in matches}
+    if len(matches) != 1 or len(unique_codes) != 1:
+        raise TranslationRejected("CONTEXTUAL_NAME_CODE_CARDINALITY_UNSUPPORTED")
+    code = matches[0].group(0)
+    contextualized = original[:matches[0].start()] + "登場人物" + original[matches[0].end():]
+    return contextualized, (code,)
+
+
+def _restore_contextual_name_codes(
+    translated: str, codes: tuple[str, ...]
+) -> str:
+    """Restore name variables after the model has translated their clause."""
+    result = translated
+    for code in codes:
+        alias = re.compile(
+            r"\\b(?:(?:el|la|un|una|este|esta|ese|esa)\\s+)?"
+            r"(?:personaje|persona|protagonista|individuo)\\b",
+            re.IGNORECASE,
+        )
+        match = alias.search(result)
+        if match:
+            result = result[:match.start()] + code + " " + result[match.end():].lstrip()
+        else:
+            # Spanish permits a null subject. Preserve the source's explicit
+            # RPG name token even when the model omits the noun phrase.
+            result = code + " " + result.lstrip()
+    return result
+
+
 def translate_checked(
     original: str,
     model_translate: Callable[[str], str],
@@ -302,15 +343,22 @@ def translate_checked(
     required_terms: tuple[str, ...] = (),
     protect_numbers: bool = True,
     inline_glossary: bool = False,
-    split_model_sentences: bool = True,
+    split_model_sentences: bool | str = True,
+    contextualize_name_codes: bool = False,
 ) -> str:
     """Route only prose to a supplied model, then validate before caching.
 
     This harness deliberately provides NO neural model. The caller must supply
     an appropriately licensed translator; public CI uses deterministic fakes.
     """
+    model_source = original
+    contextual_name_codes: tuple[str, ...] = ()
+    if contextualize_name_codes and source == "ja":
+        model_source, contextual_name_codes = _contextualize_name_codes(original)
+    if split_model_sentences not in (True, False, "lines"):
+        raise ValueError("UNKNOWN_SENTENCE_SEGMENTATION_MODE")
     protected, mapping = protect_literals(
-        original, source=source, glossary=glossary,
+        model_source, source=source, glossary=glossary,
         protect_numbers=protect_numbers,
         inline_glossary=inline_glossary,
     )
@@ -320,7 +368,12 @@ def translate_checked(
             translated_chunks.append(fragment)
             continue
         sentence_results: list[tuple[str, str]] = []
-        sentences = split_sentences(fragment) if split_model_sentences else [fragment]
+        if split_model_sentences == "lines":
+            sentences = _split_preserving_newlines(fragment)
+        elif split_model_sentences is True:
+            sentences = split_sentences(fragment)
+        else:
+            sentences = [fragment]
         for sentence in sentences:
             if not sentence or sentence in ("\r\n", "\r", "\n"):
                 sentence_results.append((sentence, sentence))
@@ -333,8 +386,16 @@ def translate_checked(
                     or "\n" in value or "\r" in value):
                 raise TranslationRejected("MODEL_RESULT_MALFORMED")
             sentence_results.append((sentence, value))
-        translated_chunks.append(_join_spanish_sentences(sentence_results))
+        if split_model_sentences is True:
+            translated_chunks.append(_join_spanish_sentences(sentence_results))
+        else:
+            translated_chunks.append("".join(value for _, value in sentence_results))
     intermediate = "".join(translated_chunks)
-    restored = restore_layout(original, restore_literals(intermediate, mapping))
+    restored = restore_layout(
+        original,
+        _restore_contextual_name_codes(
+            restore_literals(intermediate, mapping), contextual_name_codes
+        ),
+    )
     validate_translation(original, restored, source=source, required_terms=required_terms)
     return restored

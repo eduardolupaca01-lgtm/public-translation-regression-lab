@@ -249,3 +249,81 @@ class TestInlineGlossaryContext(unittest.TestCase):
         )
         self.assertNotIn("Hanako", altered)
         self.assertEqual(len(mapping), 1)
+
+
+    def test_unprotected_numeric_context_reaches_model_as_one_clause(self):
+        source = "明日は午前10時に開きます。"
+        seen = []
+
+        def model(fragment):
+            seen.append(fragment)
+            return "Mañana abrirá a las 10 de la mañana."
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False
+        )
+        self.assertEqual(seen, [source])
+        self.assertEqual(
+            result, "Mañana abrirá a las 10 de la mañana."
+        )
+
+    def test_line_context_mode_preserves_crlf_and_full_line_context(self):
+        source = (
+            "今日は店が休みです。\\r\\n"
+            "明日は午前10時に開きます。"
+        )
+        seen = []
+        outputs = {
+            "今日は店が休みです。": "La tienda está cerrada hoy.",
+            "明日は午前10時に開きます。":
+                "Mañana abrirá a las 10 de la mañana.",
+        }
+
+        def model(fragment):
+            seen.append(fragment)
+            return outputs[fragment]
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            split_model_sentences="lines",
+        )
+        self.assertEqual(seen, list(outputs))
+        self.assertEqual(
+            result,
+            "La tienda está cerrada hoy.\\r\\n"
+            "Mañana abrirá a las 10 de la mañana.",
+        )
+
+    def test_contextual_name_code_keeps_its_subject_clause(self):
+        source = r"\\N[7]は明日の午後3時に来ます。"
+        seen = []
+
+        def model(fragment):
+            seen.append(fragment)
+            self.assertTrue(fragment.startswith("登場人物は"))
+            return "El personaje vendrá mañana a las 3 de la tarde."
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            contextualize_name_codes=True,
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(
+            result, r"\\N[7] vendrá mañana a las 3 de la tarde."
+        )
+        validate_translation(source, result, source="ja")
+
+    def test_contextual_name_code_can_restore_a_null_spanish_subject(self):
+        source = r"\\N[7]は明日の午後3時に来ます。"
+
+        def model(_fragment):
+            return "Vendrá mañana a las 3 de la tarde."
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            contextualize_name_codes=True,
+        )
+        self.assertEqual(
+            result, r"\\N[7] Vendrá mañana a las 3 de la tarde."
+        )
+        validate_translation(source, result, source="ja")
