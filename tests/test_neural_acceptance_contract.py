@@ -295,7 +295,7 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
     def test_neighboring_homes_is_valid_synonym_not_ambiguous_house(self):
         sample = next(c for c in acceptance.CASES if c.id == "childhood")
         valid = ("Hanako es mi amiga desde niña. "
-                 "Nuestros hogares están juntos. "
+                 "Nuestras casas están una al lado de la otra. "
                  "Somos amigas desde la escuela primaria.")
         self.assertEqual(acceptance._semantic_errors(sample, valid), [])
         wrong = ("Hanako es mi amiga desde niña. "
@@ -310,13 +310,13 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         original_result = (
             "Estoy en el club de fútbol. "
             "Mi amigo es miembro del club de natación. "
-            "En nuestras escuelas, el fútbol es muy activo. "
+            "En nuestras escuelas, el fútbol es muy popular. "
             "Un nuevo profesor llegó al club de natación."
         )
         corrected, edits = acceptance._restore_reviewed_time_terms(
             sample.japanese, original_result
         )
-        self.assertIn("En nuestra escuela, el fútbol es muy activo.", corrected)
+        self.assertIn("En nuestra escuela, el fútbol es muy popular.", corrected)
         self.assertEqual(len(edits), 1)
         self.assertEqual(edits[0]["source_anchor"], "私たちの学校")
         self.assertEqual(edits[0]["basis"], "reviewed_ja_es_singular_alignment")
