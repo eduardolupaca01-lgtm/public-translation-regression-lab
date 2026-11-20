@@ -101,12 +101,27 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
 )
 
 
+def _normalize_concept_surface(value: str) -> str:
+    """Normalize Spanish meridiem typography without changing its meaning.
+
+    Spanish commonly writes the afternoon abbreviation as "p. m.", including
+    non-breaking spaces. The semantic gate must treat it as equivalent to
+    "p.m." and "pm", while keeping "a. m." distinct.
+    """
+    folded = value.casefold().replace("\u00a0", " ")
+    return re.sub(
+        r"(?<!\w)([ap])\s*\.\s*m\s*\.?(?!\w)",
+        r"\1m",
+        folded,
+    )
+
+
 def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
-    folded = spanish.casefold()
+    folded = _normalize_concept_surface(spanish)
     errors: list[str] = []
     missing = [
         list(group) for group in sample.required_groups
-        if not any(option.casefold() in folded for option in group)
+        if not any(_normalize_concept_surface(option) in folded for option in group)
     ]
     if missing:
         errors.append("MISSING_CONCEPTS:" + json.dumps(missing, ensure_ascii=False))
