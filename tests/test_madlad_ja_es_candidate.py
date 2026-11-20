@@ -44,7 +44,7 @@ class FakeCTranslate2:
 
 
 class TestMadladCandidateContracts(unittest.TestCase):
-    def test_protected_literals_stay_in_model_context_without_fragmentation(self):
+    def test_native_rpg_placeholders_stay_in_model_context_without_fragmentation(self):
         self.assertTrue(PROTECT_NUMBERS)
         self.assertFalse(CONTEXTUALIZE_NAME_CODES)
         self.assertTrue(PROTECT_LITERALS_IN_CONTEXT)
