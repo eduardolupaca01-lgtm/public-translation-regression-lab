@@ -232,6 +232,17 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
         translated = "El maestro dijo: «Silencio», pero los niños siguieron riéndose."
         self.assertEqual(_semantic_errors(case, translated), [])
 
+    def test_accepts_imperfect_laughter_after_quoted_silence_command(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "teacher_and_children")
+        translated = 'El maestro dijo: "Silencio", pero los niños se reían.'
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_rejects_simple_past_when_continuing_laughter_is_required(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "teacher_and_children")
+        translated = "El maestro dijo: «Silencio», pero los niños rieron."
+        errors = _semantic_errors(case, translated)
+        self.assertIn("CONTINUING_LAUGHTER_ASPECT_LOST", errors)
+
     def test_accepts_plural_subjunctive_request_to_children(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "teacher_and_children")
         translated = (
