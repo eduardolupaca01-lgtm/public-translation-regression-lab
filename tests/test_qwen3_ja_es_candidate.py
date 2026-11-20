@@ -11,6 +11,7 @@ from tools.qwen3_ja_es_candidate import (
     MODEL_REVISION,
     MODEL_SHA256,
     PROTECT_NUMBERS,
+    PROTECT_LITERALS_IN_CONTEXT,
     QUANTIZATION,
     SYSTEM_PROMPT,
     QwenTranslator,
@@ -33,6 +34,7 @@ class TestQwenCandidateContracts(unittest.TestCase):
     def test_control_codes_and_numbers_use_structural_protection(self):
         self.assertTrue(PROTECT_NUMBERS)
         self.assertFalse(CONTEXTUALIZE_NAME_CODES)
+        self.assertTrue(PROTECT_LITERALS_IN_CONTEXT)
 
     def test_system_prompt_targets_faithful_latin_american_translation(self):
         prompt = SYSTEM_PROMPT.casefold()
@@ -45,6 +47,9 @@ class TestQwenCandidateContracts(unittest.TestCase):
             "younger or older",
             "do not invent a recipient",
             "return only the translation",
+            "zxqphcode0000qxz",
+            "exactly once",
+            "grammatically correct spanish position",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, prompt)
