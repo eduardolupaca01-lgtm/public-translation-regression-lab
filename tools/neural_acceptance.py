@@ -173,7 +173,9 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
         if not any(
             re.search(r"\b(?:nuestras?\s+casas?|nuestros?\s+hogares?|"
                       r"sus?\s+casas?|mis?\s+casas?|las\s+casas|"
-                      r"vivimos|vecin[oa]s?)\b", clause)
+                      r"vivimos|vecin[oa]s?|"
+                      r"cada\s+un[oa](?:\s+de\s+nosotr[oa]s)?\s+vive"
+                      r"\s+en\s+una\s+casa)\b", clause)
             and re.search(r"\b(?:junt[oa]s?|lado|vecin[oa]s?|"
                           r"contigu[oa]s?|cerca)\b", clause)
             for clause in clauses[1:]
@@ -201,6 +203,33 @@ def _restore_reviewed_time_terms(original: str, translated: str):
     """
     normalized = translated
     edits = []
+
+    # General weather predicate repair, not a prepared dialogue translation:
+    # Japanese いい天気 expresses good weather, while the compact model may
+    # write ungrammatical Spanish "Hoy es buen tiempo". Preserve all meaning
+    # and record the exact one-word grammatical edit for independent review.
+    if (("いい天気" in original or "良い天気" in original) and
+            not any(neg in original for neg in
+                    ("ではない", "ではありません", "じゃない", "悪い天気"))):
+        awkward_weather = re.compile(
+            r"\bhoy\s+es\s+buen\s+tiempo\b", re.IGNORECASE
+        )
+        matches = list(awkward_weather.finditer(normalized))
+        if len(matches) == 1:
+            item = matches[0]
+            before = item.group(0)
+            after = re.sub(r"\bes\b", "hace", before, count=1,
+                           flags=re.IGNORECASE)
+            normalized = (
+                normalized[:item.start()] + after + normalized[item.end():]
+            )
+            edits.append({
+                "source_anchor": ("いい天気" if "いい天気" in original
+                                  else "良い天気"),
+                "replaced": before,
+                "restored": after,
+                "basis": "reviewed_es_weather_grammar",
+            })
 
     if ("夕方" in original and
             not any(night in original for night in ("夜", "深夜", "真夜中"))):

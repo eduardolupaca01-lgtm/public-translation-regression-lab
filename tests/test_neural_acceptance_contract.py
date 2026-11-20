@@ -391,6 +391,39 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         self.assertEqual(unchanged, original)
         self.assertEqual(edits, [])
 
+    def test_adjacent_houses_expressed_as_individual_residences_pass(self):
+        sample = next(case for case in acceptance.CASES
+                      if case.id == "childhood")
+        correct = ("Hanako es mi amiga desde que era niña. "
+                   "Cada uno de nosotros vive en una casa al lado de la otra. "
+                   "Somos amigos desde que estuvimos en la escuela primaria.")
+        self.assertEqual(acceptance._semantic_errors(sample, correct), [])
+        ambiguous = ("Hanako es mi amiga desde que era niña. "
+                     "La casa está al lado. "
+                     "Somos amigos desde que estuvimos en la escuela primaria.")
+        self.assertIn(
+            "CHILDHOOD_NEIGHBORING_HOUSES_RELATION_LOST",
+            acceptance._semantic_errors(sample, ambiguous)
+        )
+
+    def test_source_grounded_weather_grammar_only_edits_one_predicate(self):
+        sample = next(case for case in acceptance.CASES
+                      if case.id == "weather")
+        original = "今日はいい天気ですね。"
+        before = "Hoy es buen tiempo."
+        after, edits = acceptance._restore_reviewed_time_terms(original, before)
+        self.assertEqual(after, "Hoy hace buen tiempo.")
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["basis"], "reviewed_es_weather_grammar")
+        self.assertEqual(acceptance._semantic_errors(sample, after), [])
+        for unrelated in ("明日は悪い天気です。",
+                          "今日はいい天気ではありません。"):
+            result, unsupported = acceptance._restore_reviewed_time_terms(
+                unrelated, before
+            )
+            self.assertEqual(result, before)
+            self.assertEqual(unsupported, [])
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"
