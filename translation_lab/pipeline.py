@@ -285,13 +285,18 @@ def _protect_literals_in_context(
 def _restore_contextual_placeholders(
     translated: str, mapping: Mapping[str, str]
 ) -> str:
-    """Require every opaque token exactly once and in source order, then restore."""
+    """Require each opaque token exactly once, then restore it.
+
+    Japanese and Spanish word order can differ. A protected literal may therefore
+    move with its semantic phrase; token identity and cardinality are immutable,
+    but source order is not imposed on the target-language sentence.
+    """
     if not isinstance(translated, str):
         raise TranslationRejected("NON_STRING_TRANSLATION")
-    expected = list(mapping.keys())
-    observed = _CONTEXTUAL_LITERAL_MARKER.findall(translated)
+    expected = Counter(mapping.keys())
+    observed = Counter(_CONTEXTUAL_LITERAL_MARKER.findall(translated))
     if observed != expected:
-        raise TranslationRejected("CONTEXTUAL_LITERAL_MARKER_MISSING_DUPLICATED_OR_REORDERED")
+        raise TranslationRejected("CONTEXTUAL_LITERAL_MARKER_MISSING_DUPLICATED_OR_UNKNOWN")
 
     restored = translated
     for marker, value in mapping.items():
@@ -590,7 +595,8 @@ def translate_checked(
 
     When protect_literals_in_context is true, original control codes, numbers,
     and glossary sentinels remain inside the model's sentence as opaque markers.
-    They must be returned exactly once and in source order before restoration.
+    Each marker must be returned exactly once. Markers may move to a grammatically
+    correct target-language position, but must not be changed or omitted.
     """
     model_source = original
     contextual_name_codes: tuple[str, ...] = ()
