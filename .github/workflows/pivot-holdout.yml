@@ -8,6 +8,8 @@ on:
       - "tools/unseen_holdout.py"
       - "tests/test_pivot_holdout.py"
       - "tests/test_unseen_holdout.py"
+      - "tests/test_review_queue.py"
+      - "tests/test_review_queue_integration.py"
       - "translation_lab/**"
   workflow_dispatch:
 
@@ -63,3 +65,5 @@ jobs:
           path: |
             /tmp/public-ja-en-es-pivot-holdout/pivot-report.json
             /tmp/public-ja-en-es-pivot-holdout/pivot-restart-proof.json
+            /tmp/public-ja-en-es-pivot-holdout/review-queue.json
+            /tmp/public-ja-en-es-pivot-holdout/cache/translation-cache.sqlite3

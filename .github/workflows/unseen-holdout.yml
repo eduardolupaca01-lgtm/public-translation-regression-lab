@@ -9,6 +9,8 @@ on:
       - "tools/direct_marian_acceptance.py"
       - "tools/neural_acceptance.py"
       - "tests/test_unseen_holdout.py"
+      - "tests/test_review_queue.py"
+      - "tests/test_review_queue_integration.py"
       - "translation_lab/**"
   workflow_dispatch:
 
@@ -64,3 +66,5 @@ jobs:
           path: |
             /tmp/public-nllb-unseen-holdout/holdout-report.json
             /tmp/public-nllb-unseen-holdout/holdout-restart-proof.json
+            /tmp/public-nllb-unseen-holdout/review-queue.json
+            /tmp/public-nllb-unseen-holdout/cache/translation-cache.sqlite3

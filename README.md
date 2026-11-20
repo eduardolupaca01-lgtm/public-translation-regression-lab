@@ -233,3 +233,52 @@ cargar los modelos.
 Esta ruta es una evaluación experimental: traducir por pivote puede introducir
 errores adicionales. No se considera apta para producción hasta que pase el
 conjunto completo y una revisión humana independiente.
+
+
+## Etapa de recuperación: cola persistente de revisión humana
+
+Los runners del conjunto NLLB, la comparación Marian/M2M100 y la ruta por
+pivote ahora envían cada caso rechazado a una cola SQLite persistente. Se
+conservan el texto de origen, la propuesta del modelo (si llegó a producirse),
+el motivo del rechazo, el modelo utilizado y los fragmentos de salida cruda.
+Una propuesta rechazada nunca se guarda como traducción aprobada.
+
+La cola comparte el archivo translation-cache.sqlite3, pero usa tablas
+separadas de las traducciones aceptadas. La aprobación humana y la promoción
+de la corrección a la caché se realizan en una sola transacción SQLite. Se
+requieren revisor, revisión vigente, confirmación humana explícita y notas.
+La validación estructural se vuelve a ejecutar; la API también permite añadir
+un validador semántico específico. Si ya existe otra traducción aprobada, el
+reemplazo exige una opción explícita. Las propuestas competidoras quedan
+marcadas como sustituidas.
+
+Cada transición se registra en review_queue_events. Los comandos reject y
+revise conservan el historial y permiten volver a poner una propuesta
+rechazada en revisión sin borrar la decisión anterior. Las revisiones obsoletas
+no pueden aprobarse. Los workflows adjuntan review-queue.json y la base
+SQLite como artifacts para que la cola pueda recuperarse después del runner.
+
+### Operar la cola
+
+El argumento --workspace debe apuntar a la carpeta que contiene
+translation-cache.sqlite3 (por ejemplo, la carpeta cache extraída del
+artifact del workflow):
+
+    python -m translation_lab.review_queue list --workspace ./cache
+    python -m translation_lab.review_queue show --workspace ./cache --id ITEM_ID
+
+Para aprobar una corrección después de comprobar manualmente el significado,
+los hablantes, las negaciones, las cantidades y el contexto:
+
+    python -m translation_lab.review_queue approve --workspace ./cache --id ITEM_ID --expected-revision 1 --reviewer "Nombre del revisor" --correction "Traducción corregida" --human-verified --notes "Verifiqué significado, sujetos, negación y contexto."
+
+Para rechazar o volver a presentar una propuesta:
+
+    python -m translation_lab.review_queue reject --workspace ./cache --id ITEM_ID --expected-revision 1 --reviewer "Nombre del revisor" --reason "La relación entre los hablantes no es correcta."
+    python -m translation_lab.review_queue revise --workspace ./cache --id ITEM_ID --expected-revision 2 --reviewer "Nombre del revisor" --proposed "Nueva propuesta" --reason "Se corrigió la relación entre los hablantes."
+
+La herramienta no aprueba traducciones automáticamente ni convierte una
+revisión humana en una garantía universal. La aprobación registra quién
+revisó el texto y vuelve a comprobar su estructura; la calidad semántica
+depende de la revisión humana y, cuando se suministra, de un validador
+semántico específico del caso.

@@ -15,6 +15,7 @@ import time
 
 from tools.unseen_holdout import HOLDOUT_CASES, _require_semantic_fidelity
 from translation_lab.cache import DurableTranslationCache
+from translation_lab.review_queue import ReviewQueue
 from translation_lab.pipeline import translate_checked, validate_translation
 
 JA_EN_MODEL_ID = "Helsinki-NLP/opus-mt-ja-en"
@@ -117,7 +118,7 @@ def translate_phase(workspace: Path) -> int:
             raise RuntimeError("PIVOT_MODEL_LICENSE_PROVENANCE_INVALID")
         report["backend_executed"] = True
         report["models"] = provenance
-        with DurableTranslationCache(workspace / "cache") as cache:
+        with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
             for sample in HOLDOUT_CASES:
                 ja_en_attempts: list[dict] = []
                 en_es_attempts: list[dict] = []
@@ -128,6 +129,7 @@ def translate_phase(workspace: Path) -> int:
                     "ja_en_raw_attempts": ja_en_attempts,
                     "en_es_raw_attempts": en_es_attempts,
                 }
+                candidate_box: list[str] = []
 
                 def producer(source_text: str) -> str:
                     def translate_ja_en(fragment: str) -> str:
@@ -156,6 +158,7 @@ def translate_phase(workspace: Path) -> int:
                         english, translate_en_es, source="en",
                         protect_numbers=True, split_model_sentences=True,
                     )
+                    candidate_box.append(spanish)
                     _require_semantic_fidelity(sample, spanish)
                     return spanish
 
@@ -174,6 +177,21 @@ def translate_phase(workspace: Path) -> int:
                     ).hexdigest()
                 except Exception as exc:
                     entry["error"] = type(exc).__name__ + ":" + str(exc)[:700]
+                    review_item = review_queue.enqueue(
+                        "ja", "es", sample.japanese,
+                        candidate_box[-1] if candidate_box else "",
+                        reason=entry["error"],
+                        context={
+                            "case_id": sample.id,
+                            "route": ["ja-en", "en-es"],
+                            "model_provenance": provenance,
+                            "intermediate_english": entry.get("intermediate_english", ""),
+                            "ja_en_raw_attempts": ja_en_attempts,
+                            "en_es_raw_attempts": en_es_attempts,
+                        },
+                    )
+                    entry["review_item_id"] = review_item.item_id
+                    entry["review_status"] = review_item.status
                 report["cases"].append(entry)
                 print(
                     "PIVOT_HOLDOUT_CASE " + sample.id + " " +
@@ -181,6 +199,9 @@ def translate_phase(workspace: Path) -> int:
                     flush=True,
                 )
             report["cache_rows"] = cache.count()
+            report["review_queue_pending"] = review_queue.count("pending")
+            report["review_queue_total"] = review_queue.count()
+            review_queue.export_snapshot(workspace / "review-queue.json")
     except Exception as exc:
         report["setup_error"] = type(exc).__name__ + ":" + str(exc)[:900]
         print("PIVOT_HOLDOUT_SETUP_FAILURE " + report["setup_error"], flush=True)
@@ -229,8 +250,8 @@ def verify_phase(workspace: Path) -> int:
     if not db_path.is_file():
         errors.append("PIVOT_SQLITE_DATABASE_MISSING")
     else:
-        with DurableTranslationCache(workspace / "cache") as cache:
-            if cache.count() != len(accepted):
+        with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
+            if cache.count() != len(accepted) + review_queue.count("approved"):
                 errors.append("PIVOT_REJECTED_ROW_CACHED_OR_ACCEPTED_ROW_LOST")
             for row in accepted:
                 sample = by_id.get(row.get("case"))
@@ -263,6 +284,19 @@ def verify_phase(workspace: Path) -> int:
                     sample = by_id.get(row.get("case"))
                     if sample and cache.get("ja", "es", sample.japanese) is not None:
                         errors.append("PIVOT_REJECTED_CASE_WAS_CACHED:" + sample.id)
+                    if sample is not None:
+                        review_item = review_queue.get(row.get("review_item_id", ""))
+                        if review_item is None:
+                            errors.append("REJECTED_CASE_MISSING_REVIEW_ITEM:" + sample.id)
+                        elif (review_item.source, review_item.target, review_item.original) != ("ja", "es", sample.japanese):
+                            errors.append("REVIEW_ITEM_SOURCE_MISMATCH:" + sample.id)
+                        elif review_item.status == "approved":
+                            promoted = cache.get(
+                                "ja", "es", sample.japanese,
+                                quality_validator=lambda candidate, current=sample: _require_semantic_fidelity(current, candidate),
+                            )
+                            if promoted != review_item.correction:
+                                errors.append("HUMAN_APPROVAL_NOT_IN_ACCEPTED_CACHE:" + sample.id)
 
     proof = {
         "schema": "public-ja-en-es-pivot-restart-v1",

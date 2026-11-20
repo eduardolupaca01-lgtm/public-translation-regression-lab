@@ -19,6 +19,7 @@ from tools.direct_marian_acceptance import _load_public_model
 from tools.m2m_acceptance import _load_public_m2m_model
 from tools.unseen_holdout import HOLDOUT_CASES, _require_semantic_fidelity
 from translation_lab.cache import DurableTranslationCache
+from translation_lab.review_queue import ReviewQueue
 from translation_lab.pipeline import translate_checked, validate_translation
 
 
@@ -93,7 +94,7 @@ def translate_phase(backend: str, workspace: Path) -> int:
         model, provenance = _load_backend(backend)
         report["backend_executed"] = True
         report["models"] = provenance
-        with DurableTranslationCache(workspace / "cache") as cache:
+        with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
             for sample in HOLDOUT_CASES:
                 attempts: list[dict] = []
                 entry = {
@@ -102,6 +103,7 @@ def translate_phase(backend: str, workspace: Path) -> int:
                     "status": "rejected",
                     "raw_model_attempts": attempts,
                 }
+                candidate_box: list[str] = []
 
                 def producer(source_text: str) -> str:
                     def model_piece(fragment: str) -> str:
@@ -116,6 +118,7 @@ def translate_phase(backend: str, workspace: Path) -> int:
                         protect_numbers=True,
                         split_model_sentences=True,
                     )
+                    candidate_box.append(candidate)
                     _require_semantic_fidelity(sample, candidate)
                     return candidate
 
@@ -134,6 +137,19 @@ def translate_phase(backend: str, workspace: Path) -> int:
                     ).hexdigest()
                 except Exception as exc:
                     entry["error"] = type(exc).__name__ + ":" + str(exc)[:700]
+                    review_item = review_queue.enqueue(
+                        "ja", "es", sample.japanese,
+                        candidate_box[-1] if candidate_box else "",
+                        reason=entry["error"],
+                        context={
+                            "case_id": sample.id,
+                            "backend": backend,
+                            "model_provenance": provenance,
+                            "raw_model_attempts": attempts,
+                        },
+                    )
+                    entry["review_item_id"] = review_item.item_id
+                    entry["review_status"] = review_item.status
                 report["cases"].append(entry)
                 print(
                     "LICENSED_HOLDOUT_CASE " + backend + " " + sample.id + " " +
@@ -141,6 +157,9 @@ def translate_phase(backend: str, workspace: Path) -> int:
                     flush=True,
                 )
             report["cache_rows"] = cache.count()
+            report["review_queue_pending"] = review_queue.count("pending")
+            report["review_queue_total"] = review_queue.count()
+            review_queue.export_snapshot(workspace / "review-queue.json")
     except Exception as exc:
         report["setup_error"] = type(exc).__name__ + ":" + str(exc)[:900]
         print("LICENSED_HOLDOUT_SETUP_FAILURE " + report["setup_error"], flush=True)
@@ -193,8 +212,8 @@ def verify_phase(backend: str, workspace: Path) -> int:
     if not db_path.is_file():
         errors.append("HOLDOUT_SQLITE_DATABASE_MISSING")
     else:
-        with DurableTranslationCache(workspace / "cache") as cache:
-            if cache.count() != len(accepted):
+        with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
+            if cache.count() != len(accepted) + review_queue.count("approved"):
                 errors.append("REJECTED_ROW_CACHED_OR_ACCEPTED_ROW_LOST")
             for row in accepted:
                 sample = case_by_id.get(row.get("case"))
@@ -227,6 +246,19 @@ def verify_phase(backend: str, workspace: Path) -> int:
                     sample = case_by_id.get(row.get("case"))
                     if sample and cache.get("ja", "es", sample.japanese) is not None:
                         errors.append("REJECTED_ROW_WAS_CACHED:" + sample.id)
+                    if sample is not None:
+                        review_item = review_queue.get(row.get("review_item_id", ""))
+                        if review_item is None:
+                            errors.append("REJECTED_CASE_MISSING_REVIEW_ITEM:" + sample.id)
+                        elif (review_item.source, review_item.target, review_item.original) != ("ja", "es", sample.japanese):
+                            errors.append("REVIEW_ITEM_SOURCE_MISMATCH:" + sample.id)
+                        elif review_item.status == "approved":
+                            promoted = cache.get(
+                                "ja", "es", sample.japanese,
+                                quality_validator=lambda candidate, current=sample: _require_semantic_fidelity(current, candidate),
+                            )
+                            if promoted != review_item.correction:
+                                errors.append("HUMAN_APPROVAL_NOT_IN_ACCEPTED_CACHE:" + sample.id)
 
     proof = {
         "schema": "public-licensed-unseen-holdout-restart-v1",
