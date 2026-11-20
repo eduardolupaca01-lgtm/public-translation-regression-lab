@@ -348,7 +348,7 @@ def validate_translation(
             raise TranslationRejected("REQUIRED_SEMANTIC_TERM_MISSING")
 
 
-def _contextualize_name_codes(original: str) -> tuple[str, tuple[str, ...]]:
+def contextualize_name_code_source(original: str) -> tuple[str, tuple[str, ...]]:
     """Expose a name-variable's grammatical role without sending RPG syntax.
 
     A leading RPG name token followed by a Japanese topic/subject/object
@@ -368,7 +368,7 @@ def _contextualize_name_codes(original: str) -> tuple[str, tuple[str, ...]]:
     return contextualized, (code,)
 
 
-def _restore_contextual_name_codes(
+def restore_contextual_name_codes(
     translated: str, codes: tuple[str, ...]
 ) -> str:
     """Restore name variables after the model has translated their clause."""
@@ -409,7 +409,7 @@ def translate_checked(
     model_source = original
     contextual_name_codes: tuple[str, ...] = ()
     if contextualize_name_codes and source == "ja":
-        model_source, contextual_name_codes = _contextualize_name_codes(original)
+        model_source, contextual_name_codes = contextualize_name_code_source(original)
     if split_model_sentences not in (True, False, "lines", "document"):
         raise ValueError("UNKNOWN_SENTENCE_SEGMENTATION_MODE")
     protected, mapping = protect_literals(
@@ -451,7 +451,7 @@ def translate_checked(
     intermediate = "".join(translated_chunks)
     restored = restore_layout(
         original,
-        _restore_contextual_name_codes(
+        restore_contextual_name_codes(
             restore_literals(intermediate, mapping), contextual_name_codes
         ),
     )

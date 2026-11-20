@@ -89,14 +89,14 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
     HoldoutCase(
         "speaker_control_code",
         r"\N[7]は明日の午後3時に来ます。",
-        (("mañana",), ("tarde", "atardecer", "p.m.", "pm"), ("3",),
+        (("mañana",), ("tarde", "atardecer", "p.m.", "pm"), ("3", "tres"),
          ("vendr", "lleg", "viene", "llega")),
     ),
     HoldoutCase(
         "shop_hours_line_break",
         "今日は店が休みです。\r\n明日は午前10時に開きます。",
         (("hoy",), ("tienda", "local"), ("cerrad", "descanso"),
-         ("mañana",), ("10",), ("abr", "abiert")),
+         ("mañana",), ("10", "diez"), ("abr", "abiert")),
     ),
 )
 
@@ -120,6 +120,14 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("RAIN_CONDITION_RELATION_LOST")
         if not re.search(r"\b(?:esper|aguard)\w*\b", folded):
             errors.append("WAITING_ACTION_LOST")
+        if re.search(r"\b(?:estaremos|esperaremos|aguardaremos)\b", folded):
+            errors.append("WAITING_AGENT_CHANGED")
+        if not re.search(
+            r"\b(?:te\s+)?(?:esperaré|esperare|aguardaré|aguardare)\b|"
+            r"\b(?:estaré|estare)\s+esperando\b",
+            folded,
+        ):
+            errors.append("WAITING_AGENT_OR_FUTURE_TENSE_CHANGED")
         if not re.search(r"\b(?:biblioteca)\b", folded) or not re.search(
             r"\b(?:entrada|puerta)\b", folded
         ):
@@ -236,12 +244,12 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("SPEAKER_CONTROL_CODE_NOT_RESTORED")
         if not re.search(r"\b(?:mañana)\b", folded):
             errors.append("ARRIVAL_DAY_CHANGED")
-        if not re.search(r"\b(?:tarde|atardecer)\b", folded):
+        if not re.search(r"\b(?:tarde|atardecer|p\.?\s*m\.?)\b", folded):
             errors.append("AFTERNOON_PERIOD_LOST")
         clauses = [x.strip() for x in re.split(r"[.!?]+", folded) if x.strip()]
         if not any(
             re.search(r"\bmañana\b", part) and
-            re.search(r"\b3\b", part) and
+            re.search(r"\b(?:3|tres)\b", part) and
             re.search(r"\btarde\b", part)
             for part in clauses
         ):
@@ -263,7 +271,7 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             )):
                 errors.append("TODAY_SHOP_CLOSED_CLAUSE_CHANGED")
             if not all(re.search(p, lines[1]) for p in (
-                r"\bmañana\b", r"\b10\b", r"\b(?:abr|abiert)\w*\b"
+                r"\bmañana\b", r"\b(?:10|diez)\b", r"\b(?:abr|abiert)\w*\b"
             )):
                 errors.append("TOMORROW_OPENING_TIME_CLAUSE_CHANGED")
     return errors
@@ -298,7 +306,8 @@ def translate_phase(workspace: Path) -> int:
             "target_language_repairs": False,
             "prepared_translations": False,
             "case_specific_retries": False,
-            "segmentation_mode": "line_context",
+            "uniform_segmentation_modes": ["document_context", "line_context", "sentence_context"],
+            "selection": "first_candidate_passing_fixed_semantic_policy",
             "numeric_literals_sent_to_model": True,
             "contextual_name_code_aliases": True,
             "structural_pipeline_only": True,
@@ -325,22 +334,42 @@ def translate_phase(workspace: Path) -> int:
                 candidate_box: list[str] = []
 
                 def producer(source_text: str) -> str:
-                    def model_piece(fragment: str) -> str:
-                        value = model.translate(fragment)
-                        attempts.append({
-                            "source_fragment": fragment[:220],
-                            "raw_output": value[:500] if isinstance(value, str) else "",
-                        })
-                        return value
-                    candidate = translate_checked(
-                        source_text, model_piece, source="ja",
-                        protect_numbers=False,
-                        split_model_sentences="lines",
-                        contextualize_name_codes=True,
+                    rejected_modes: list[dict[str, str]] = []
+                    for mode, segmentation in (
+                        ("document_context", "document"),
+                        ("line_context", "lines"),
+                        ("sentence_context", True),
+                    ):
+                        def model_piece(fragment: str) -> str:
+                            value = model.translate(fragment)
+                            attempts.append({
+                                "mode": mode,
+                                "source_fragment": fragment[:220],
+                                "raw_output": value[:500] if isinstance(value, str) else "",
+                            })
+                            return value
+                        try:
+                            candidate = translate_checked(
+                                source_text, model_piece, source="ja",
+                                protect_numbers=False,
+                                split_model_sentences=segmentation,
+                                contextualize_name_codes=True,
+                            )
+                            candidate_box.append(candidate)
+                            _require_semantic_fidelity(sample, candidate)
+                            entry["accepted_segmentation_mode"] = mode
+                            entry["rejected_segmentation_modes"] = rejected_modes
+                            return candidate
+                        except TranslationRejected as exc:
+                            rejected_modes.append({
+                                "mode": mode,
+                                "reason": str(exc)[:350],
+                            })
+                    entry["rejected_segmentation_modes"] = rejected_modes
+                    raise TranslationRejected(
+                        "ALL_UNIFORM_SEGMENTATION_MODES_REJECTED:" +
+                        json.dumps(rejected_modes, ensure_ascii=False)[:700]
                     )
-                    candidate_box.append(candidate)
-                    _require_semantic_fidelity(sample, candidate)
-                    return candidate
 
                 try:
                     value = cache.translate_or_get(

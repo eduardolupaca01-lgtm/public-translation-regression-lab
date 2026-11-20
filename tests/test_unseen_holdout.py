@@ -92,6 +92,16 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
         self.assertIn("BROTHER_TOKYO_ROLE_MISMATCH", errors)
         self.assertIn("SPEAKER_OSAKA_ROLE_MISMATCH", errors)
 
+    def test_rainy_meeting_rejects_plural_waiting_agent(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "rainy_meeting")
+        errors = _semantic_errors(
+            case,
+            "Nos vemos mañana por la tarde frente a la estación. "
+            "Cuando llueva, estaremos esperando en la entrada de la biblioteca.",
+        )
+        self.assertIn("WAITING_AGENT_CHANGED", errors)
+        self.assertIn("WAITING_AGENT_OR_FUTURE_TENSE_CHANGED", errors)
+
     def test_rain_condition_accepts_valid_present_tense_paraphrase(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "rainy_meeting")
         self.assertEqual(
