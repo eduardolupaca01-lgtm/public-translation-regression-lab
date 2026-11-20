@@ -1,6 +1,7 @@
+import re
 import unittest
 from translation_lab.pipeline import (
-    TranslationRejected, code_parts, protect_literals, restore_literals,
+    TranslationRejected, INTERNAL_MARKER, code_parts, protect_literals, restore_literals,
     split_sentences, restore_layout, validate_translation, translate_checked
 )
 
@@ -161,6 +162,28 @@ class TestModelIsolation(unittest.TestCase):
             validate_translation("学校。", "escuela ZXQTX760TERM001QXZ")
         with self.assertRaises(TranslationRejected):
             validate_translation("学校。", r"escuela \V[987650]")
+
+    def test_entire_generated_native_marker_range_is_reserved(self):
+        reserved = (
+            r"\V[987650]", r"\V[987699]", r"\V[987700]",
+            r"\V[987999]", r"\V[988000]", r"\V[989999]",
+            r"\V[990000]", r"\V[999999]",
+        )
+        for marker in reserved:
+            with self.subTest(marker=marker):
+                self.assertIsNotNone(INTERNAL_MARKER.fullmatch(marker))
+                with self.assertRaisesRegex(
+                    TranslationRejected, "INTERNAL_MARKER_LEAK"
+                ):
+                    validate_translation("学校。", "escuela " + marker)
+        self.assertIsNone(INTERNAL_MARKER.fullmatch(r"\V[987649]"))
+
+    def test_preexisting_native_variables_inside_reserved_range_are_preserved(self):
+        for marker in (r"\V[988000]", r"\V[999999]"):
+            with self.subTest(marker=marker):
+                validate_translation(
+                    marker + " は学校。", marker + " es la escuela."
+                )
 
     def test_unicode_replacement_is_rejected(self):
         with self.assertRaises(TranslationRejected):
@@ -329,13 +352,14 @@ class TestInlineGlossaryContext(unittest.TestCase):
         validate_translation(source, result, source="ja")
 
 
-    def test_document_context_mode_keeps_multiline_context_and_exact_breaks(self):
+    def test_document_context_mode_realigns_two_sentences_to_source_lines(self):
         source = "今日は店が休みです。\r\n明日は午前10時に開きます。"
         seen = []
 
         def model(fragment):
             seen.append(fragment)
-            return "Hoy la tienda está cerrada.\r\nMañana abrirá a las diez."
+            self.assertEqual(fragment, source)
+            return "La tienda está cerrada hoy. Mañana abrirá a las 10 a. m."
 
         result = translate_checked(
             source, model, source="ja", protect_numbers=False,
@@ -343,8 +367,47 @@ class TestInlineGlossaryContext(unittest.TestCase):
         )
         self.assertEqual(seen, [source])
         self.assertEqual(
-            result, "Hoy la tienda está cerrada.\r\nMañana abrirá a las diez."
+            result,
+            "La tienda está cerrada hoy.\r\nMañana abrirá a las 10 a. m.",
         )
+
+    def test_document_context_mode_restores_multiple_sentences_per_source_line(self):
+        source = "一行目。二行目。\r\n三行目。"
+
+        def model(_fragment):
+            return "Primera. Segunda. Tercera."
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            split_model_sentences="document",
+        )
+        self.assertEqual(result, "Primera. Segunda.\r\nTercera.")
+
+    def test_document_context_mode_rejects_ambiguous_sentence_alignment(self):
+        source = "一行目。\r\n二行目。"
+
+        def model(_fragment):
+            return "Primera línea y segunda línea."
+
+        with self.assertRaisesRegex(
+            TranslationRejected, "DOCUMENT_LAYOUT_ALIGNMENT_FAILED"
+        ):
+            translate_checked(
+                source, model, source="ja", protect_numbers=False,
+                split_model_sentences="document",
+            )
+
+    def test_document_context_mode_normalizes_model_line_ending_style(self):
+        source = "一行目。\r\n二行目。"
+
+        def model(_fragment):
+            return "Primera.\nSegunda."
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            split_model_sentences="document",
+        )
+        self.assertEqual(result, "Primera.\r\nSegunda.")
 
     def test_numeric_validation_accepts_spanish_number_words_for_source_digits(self):
         validate_translation(
