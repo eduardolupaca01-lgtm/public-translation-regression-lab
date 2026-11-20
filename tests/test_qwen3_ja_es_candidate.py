@@ -37,7 +37,7 @@ class TestQwenCandidateContracts(unittest.TestCase):
         self.assertTrue(PROTECT_LITERALS_IN_CONTEXT)
 
     def test_system_prompt_targets_faithful_latin_american_translation(self):
-        prompt = SYSTEM_PROMPT.casefold()
+        prompt = " ".join(SYSTEM_PROMPT.casefold().split())
         for phrase in (
             "japanese-to-spanish",
             "latin america",
