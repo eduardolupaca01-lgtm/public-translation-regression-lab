@@ -76,6 +76,7 @@ def protect_literals(
     source: str = "ja",
     glossary: Mapping[str, str] | None = None,
     protect_numbers: bool = True,
+    inline_glossary: bool = False,
 ) -> tuple[str, dict[str, str]]:
     """Turn approved terms/numbers outside original RPG codes into sentinels.
 
@@ -94,6 +95,8 @@ def protect_literals(
            or not value.strip() or RPG_CODE.search(value)
            for key, value in terms.items()):
         raise ValueError("Unsafe glossary entry")
+    if inline_glossary and any(JAPANESE.search(v) for v in terms.values()):
+        raise ValueError("Inline glossary cannot contain Japanese")
     patterns = [re.escape(k) for k in sorted(terms, key=len, reverse=True)]
     if protect_numbers:
         patterns.append(NUMERIC)
@@ -105,6 +108,11 @@ def protect_literals(
 
     def replace(match: re.Match[str]) -> str:
         nonlocal next_id
+        observed = match.group(0)
+        if inline_glossary and observed in terms:
+            # Maintain sentence context for names/roles. Structural numeric
+            # sentinels and real RPG codes remain independently protected.
+            return terms[observed]
         token = ""
         while next_id <= 999999:
             candidate = r"\V[" + str(next_id) + "]"
@@ -114,7 +122,6 @@ def protect_literals(
                 break
         if not token:
             raise TranslationRejected("INTERNAL_MARKER_SPACE_EXHAUSTED")
-        observed = match.group(0)
         mapping[token] = terms.get(observed, observed)
         return token
 
@@ -294,6 +301,8 @@ def translate_checked(
     glossary: Mapping[str, str] | None = None,
     required_terms: tuple[str, ...] = (),
     protect_numbers: bool = True,
+    inline_glossary: bool = False,
+    split_model_sentences: bool = True,
 ) -> str:
     """Route only prose to a supplied model, then validate before caching.
 
@@ -303,6 +312,7 @@ def translate_checked(
     protected, mapping = protect_literals(
         original, source=source, glossary=glossary,
         protect_numbers=protect_numbers,
+        inline_glossary=inline_glossary,
     )
     translated_chunks = []
     for protected_code, fragment in code_parts(protected):
@@ -310,7 +320,8 @@ def translate_checked(
             translated_chunks.append(fragment)
             continue
         sentence_results: list[tuple[str, str]] = []
-        for sentence in split_sentences(fragment):
+        sentences = split_sentences(fragment) if split_model_sentences else [fragment]
+        for sentence in sentences:
             if not sentence or sentence in ("\r\n", "\r", "\n"):
                 sentence_results.append((sentence, sentence))
                 continue

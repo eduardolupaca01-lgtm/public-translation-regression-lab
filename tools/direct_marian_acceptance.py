@@ -106,24 +106,59 @@ def run(
                 steps = []
                 glossary_corrections = []
 
-                def direct(fragment: str) -> str:
-                    result = model.translate(fragment)
-                    steps.append({"source": fragment[:180], "result_es": result[:300]})
-                    if not result.strip():
-                        raise TranslationRejected("DIRECT_MODEL_EMPTY_OUTPUT")
-                    return result
-
                 def producer(japanese: str) -> str:
-                    output = translate_checked(
-                        japanese, direct, source="ja",
-                        glossary=dict(sample.glossary),
-                        protect_numbers=sample.id != "numbers_and_code",
+                    # Make at most three genuine model-based attempts. The
+                    # original Japanese meaning, codes and acceptance checks
+                    # remain unchanged. No prepared translations are inserted.
+                    has_glossary = bool(sample.glossary)
+                    variants = (
+                        [("inline-sentences", True, True)]
+                        if has_glossary else
+                        [("sentences", False, True)]
                     )
-                    output, approved_edits = _restore_reviewed_time_terms(
-                        japanese, output
+                    if not any(ch in japanese for ch in ("\n", "\r")):
+                        variants.append(("whole-context", has_glossary, False))
+                    if has_glossary:
+                        variants.append(("protected-sentences", False, True))
+                    rejected_attempts = []
+                    for mode, inline, sentence_split in variants:
+                        def model_piece(fragment: str) -> str:
+                            value = model.translate(fragment)
+                            steps.append({
+                                "mode": mode,
+                                "source": fragment[:180],
+                                "result_es": value[:300] if isinstance(value, str) else "",
+                            })
+                            if not isinstance(value, str) or not value.strip():
+                                raise TranslationRejected("DIRECT_MODEL_EMPTY_OUTPUT")
+                            return value
+                        try:
+                            candidate = translate_checked(
+                                japanese, model_piece, source="ja",
+                                glossary=dict(sample.glossary),
+                                protect_numbers=sample.id != "numbers_and_code",
+                                inline_glossary=inline,
+                                split_model_sentences=sentence_split,
+                            )
+                            candidate, approved_edits = _restore_reviewed_time_terms(
+                                japanese, candidate
+                            )
+                            _require_semantic_fidelity(sample, candidate)
+                            glossary_corrections.extend([
+                                {**edit, "variant": mode}
+                                for edit in approved_edits
+                            ])
+                            entry["accepted_variant"] = mode
+                            return candidate
+                        except TranslationRejected as exc:
+                            rejected_attempts.append({
+                                "mode": mode,
+                                "reason": str(exc)[:250],
+                            })
+                    raise TranslationRejected(
+                        "ALL_REAL_MODEL_VARIANTS_REJECTED:" +
+                        json.dumps(rejected_attempts, ensure_ascii=False)[:700]
                     )
-                    glossary_corrections.extend(approved_edits)
-                    return output
 
                 entry = {"case": sample.id, "source": sample.japanese,
                          "status": "rejected", "stages": steps,

@@ -198,3 +198,54 @@ class TestModelIsolation(unittest.TestCase):
             validate_translation("学校", "")
         with self.assertRaises(TranslationRejected):
             validate_translation("学校", "   ")
+
+
+
+class TestInlineGlossaryContext(unittest.TestCase):
+    def test_inline_glossary_preserves_full_japanese_clause_for_model(self):
+        source = "花子は私の幼なじみです。"
+        seen = []
+        def model(text):
+            seen.append(text)
+            return "Hanako es mi amiga de la infancia."
+        result = translate_checked(
+            source, model, glossary={"花子": "Hanako"},
+            inline_glossary=True, required_terms=("Hanako",),
+        )
+        self.assertEqual(seen, ["Hanakoは私の幼なじみです。"])
+        self.assertEqual(result, "Hanako es mi amiga de la infancia.")
+
+    def test_inline_glossary_does_not_modify_original_native_rpg_code(self):
+        source = r"\N[花子]と花子は学校。"
+        altered, mapping = protect_literals(
+            source, glossary={"花子": "Hanako"},
+            inline_glossary=True, protect_numbers=False,
+        )
+        self.assertEqual(altered, r"\N[花子]とHanakoは学校。")
+        self.assertEqual(mapping, {})
+
+    def test_inline_glossary_rejects_untranslated_japanese_values(self):
+        with self.assertRaises(ValueError):
+            protect_literals(
+                "花子は学校。", glossary={"花子": "はなこ"},
+                inline_glossary=True,
+            )
+
+    def test_whole_context_mode_sends_two_sentences_as_one(self):
+        source = "学校へ行く。明日も行く。"
+        calls = []
+        def model(text):
+            calls.append(text)
+            return "Voy a la escuela. Mañana también iré."
+        translated = translate_checked(
+            source, model, split_model_sentences=False,
+        )
+        self.assertEqual(calls, [source])
+        self.assertEqual(translated, "Voy a la escuela. Mañana también iré.")
+
+    def test_old_marker_mode_keeps_legacy_behavior_by_default(self):
+        altered, mapping = protect_literals(
+            "花子は学校。", glossary={"花子": "Hanako"},
+        )
+        self.assertNotIn("Hanako", altered)
+        self.assertEqual(len(mapping), 1)
