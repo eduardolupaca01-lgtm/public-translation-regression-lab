@@ -67,7 +67,7 @@ CASES: tuple[Case, ...] = (
          )),
     Case("childhood", "花子は私の幼なじみです。家が隣にあります。小学生のころから友達です。",
          (("hanako",), ("infancia", "niñ", "primaria"),
-          ("casa", "vecin", "lado"), ("primaria", "niñ", "pequeñ")),
+          ("casa", "vecin", "lado", "hogar"), ("primaria", "niñ", "pequeñ")),
          (("花子", "Hanako"), ("小学生", "estudiante de primaria"))),
     Case("waking", "もう朝です。起きましょう。",
          (("mañana", "día"), ("despiert", "levant", "levanta")),
