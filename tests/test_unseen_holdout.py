@@ -36,7 +36,7 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
             ),
             "sister_homework": (
                 "Mi hermana menor todavía no ha terminado los deberes. "
-                "Cuando haya terminado, iremos al parque."
+                "Cuando haya terminado, iremos juntos al parque."
             ),
             "red_and_blue_apples": (
                 "En esta caja hay tres manzanas rojas. No hay ninguna manzana azul."
@@ -226,6 +226,83 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
             "La maestra dijo que se callara, pero los niños siguieron riéndose.",
         )
         self.assertIn("TEACHER_REQUEST_FOR_SILENCE_LOST", errors)
+
+    def test_accepts_direct_quoted_silence_command(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "teacher_and_children")
+        translated = "El maestro dijo: «Silencio», pero los niños siguieron riéndose."
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_accepts_plural_subjunctive_request_to_children(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "teacher_and_children")
+        translated = (
+            "La maestra dijo que los niños se callaran, "
+            "pero ellos siguieron riéndose."
+        )
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_accepts_comma_linked_sister_completion_condition(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "sister_homework")
+        translated = (
+            "Mi hermana aún no ha terminado su tarea, y cuando termine, "
+            "iremos juntos al parque."
+        )
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_rejects_redundant_self_companion_in_sister_case(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "sister_homework")
+        translated = (
+            "Mi hermana todavía no ha terminado las tareas de casa; "
+            "al finalizar, vamos con nosotros al parque."
+        )
+        errors = _semantic_errors(case, translated)
+        self.assertIn("SELF_COMPANION_REDUNDANCY", errors)
+        self.assertIn("TOGETHER_OR_COMPANION_RELATION_LOST", errors)
+
+    def test_rejects_ungrammatical_blue_apple_number_agreement(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "red_and_blue_apples")
+        translated = (
+            "En esta caja hay tres manzanas rojas; "
+            "no hay ninguna manzanas azules."
+        )
+        errors = _semantic_errors(case, translated)
+        self.assertIn("BLUE_APPLE_NUMBER_AGREEMENT_ERROR", errors)
+        self.assertIn("BLUE_APPLE_ABSENCE_INVERTED", errors)
+
+    def test_accepts_plural_blue_apple_absence(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "red_and_blue_apples")
+        translated = (
+            "En esta caja hay tres manzanas rojas. "
+            "No hay manzanas azules."
+        )
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_speaker_code_accepts_will_be_here_paraphrase(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
+        translated = r"\N[7] estará aquí mañana a las 3:00 p. m."
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_speaker_code_accepts_character_label_before_control_code(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
+        translated = (
+            r"El personaje \N[7] llegará mañana a las tres de la tarde."
+        )
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_shop_hours_accepts_closed_day_as_no_opening(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "shop_hours_line_break")
+        translated = (
+            "Hoy la tienda no abre.\r\n"
+            "Mañana abrirá a las 10."
+        )
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_second_corner_accepts_de_frente_paraphrase(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "second_corner")
+        translated = (
+            "Siga de frente por este camino y gire a la derecha "
+            "en la segunda esquina."
+        )
+        self.assertEqual(_semantic_errors(case, translated), [])
 
     def test_structure_rejects_missing_control_code(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
