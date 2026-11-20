@@ -109,7 +109,7 @@ def run(
                 glossary_corrections = []
 
                 def producer(japanese: str) -> str:
-                    # Make at most three genuine model-based attempts. The
+                    # Try bounded genuine model-based variants. The
                     # original Japanese meaning, codes and acceptance checks
                     # remain unchanged. No prepared translations are inserted.
                     has_glossary = bool(sample.glossary)

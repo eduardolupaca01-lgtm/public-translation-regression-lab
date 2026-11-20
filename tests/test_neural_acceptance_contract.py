@@ -241,7 +241,7 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         self.assertIn(r"\V[12]", rewritten)
         self.assertIn("水泳部に所属しています。", rewritten)
         self.assertIn("サッカーが活発に行われています。", rewritten)
-        self.assertIn("友人に叱られます。", rewritten)
+        self.assertIn("友人が怒ります。", rewritten)
         self.assertEqual(len(edits), 3)
         self.assertTrue(all(e["basis"] == "audited_source_language_paraphrase"
                             for e in edits))
@@ -262,6 +262,35 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         output, edits = _source_disambiguation_variant(original)
         self.assertEqual(output, original)
         self.assertEqual(edits, [])
+
+    def test_neighboring_houses_and_single_school_are_not_optional(self):
+        childhood = next(c for c in acceptance.CASES if c.id == "childhood")
+        sports = next(c for c in acceptance.CASES if c.id == "sports")
+        self.assertIn(
+            "CHILDHOOD_NEIGHBORING_HOUSES_RELATION_LOST",
+            acceptance._semantic_errors(
+                childhood,
+                "Hanako es mi amiga desde niña. La casa está al lado. "
+                "Somos amigas desde primaria."
+            )
+        )
+        self.assertIn(
+            "SINGULAR_SCHOOL_BECAME_PLURAL",
+            acceptance._semantic_errors(
+                sports, "Mi amigo pertenece al club de natación. "
+                "Nuestras escuelas son muy activas en el fútbol. "
+                "Un nuevo profesor llegó al club de natación."
+            )
+        )
+
+    def test_audited_source_rewrite_clarifies_houses_and_single_school(self):
+        from tools.neural_acceptance import _source_disambiguation_variant
+        original = ("私たちの学校はサッカーが盛んです。"
+                    "家が隣にあります。")
+        rewritten, edits = _source_disambiguation_variant(original)
+        self.assertIn("私たちが通う学校では", rewritten)
+        self.assertIn("私たちの家は隣同士です。", rewritten)
+        self.assertEqual(len(edits), 3)
 
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:

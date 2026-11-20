@@ -140,6 +140,8 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
             for part in friend_clauses
         ):
             errors.append("FRIEND_SWIMMING_CLUB_MEMBERSHIP_NOT_DEMONSTRATED")
+        if re.search(r"\bescuelas\b", spanish.casefold()):
+            errors.append("SINGULAR_SCHOOL_BECAME_PLURAL")
     if sample.id == "childhood":
         clauses = [s.strip() for s in re.split(r"[.!?]", spanish.casefold())
                    if s.strip()]
@@ -158,6 +160,16 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
             for clause in clauses[1:]
         ):
             errors.append("CHILDHOOD_LONG_TERM_FRIENDSHIP_LOST")
+        if not any(
+            re.search(r"\b(?:nuestras?\s+casas?|sus?\s+casas?|"
+                      r"mis?\s+casas?|las\s+casas|"
+                      r"vivimos|vecin[oa]s?)\b", clause)
+            for clause in clauses[1:]
+        ):
+            errors.append("CHILDHOOD_NEIGHBORING_HOUSES_RELATION_LOST")
+        if re.search(r"\b(?:soy|ser[eé]|era)\s+amig[oa]\s+m[ií][oa]\b",
+                     spanish.casefold()):
+            errors.append("CHILDHOOD_IMPOSSIBLE_SELF_FRIENDSHIP")
     return errors
 
 
@@ -248,11 +260,13 @@ def _source_disambiguation_variant(original: str):
     retry after normal model inference has been rejected.
     """
     changes = (
+        ("私たちの学校は", "私たちが通う学校では"),
         ("部です。", "部に所属しています。"),
         ("が盛んです。", "が活発に行われています。"),
+        ("家が隣にあります。", "私たちの家は隣同士です。"),
         ("幼なじみ", "子供の頃からの友達"),
         ("小学生のころ", "小学校に通っていたころ"),
-        ("に怒られます。", "に叱られます。"),
+        ("に怒られます。", "が怒ります。"),
     )
     rewritten = []
     applied = []
