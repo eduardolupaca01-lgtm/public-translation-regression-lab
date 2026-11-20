@@ -26,55 +26,63 @@ SENTENCE_END = re.compile(r"[。!?！？]+(?:[」』】）》]*)")
 LINE_END = re.compile(r"(\r\n|\r|\n)$")
 
 
-def _layout_marker(index: int) -> str:
-    """Return an alphabetic-only placeholder safe from numeric protection."""
-    value = index + 1
-    letters = ""
-    while value:
-        value, remainder = divmod(value - 1, 26)
-        letters = chr(65 + remainder) + letters
-    return "ZXQPLB" + letters + "QXZ"
+def _target_sentences(text: str) -> list[str]:
+    """Split Spanish/English sentences without breaking a. m. or p. m."""
+    stripped = text.strip(" \t\u3000")
+    if not stripped:
+        return []
+    return [
+        part.strip(" \t\u3000")
+        for part in re.split(
+            r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÑ¿¡])",
+            stripped,
+        )
+        if part.strip(" \t\u3000")
+    ]
 
 
-def _protect_document_line_breaks(text: str) -> tuple[str, dict[str, str]]:
-    """Expose line boundaries to a document-context model as opaque tokens."""
-    if DOCUMENT_LAYOUT_MARKER.search(text):
-        raise TranslationRejected("DOCUMENT_LAYOUT_MARKER_COLLISION")
-    mapping: dict[str, str] = {}
-    next_index = 0
+def _restore_document_line_breaks(source: str, translated: str) -> str:
+    """Reapply source line boundaries when target sentence counts align."""
+    source_parts = _split_preserving_newlines(source)
+    source_lines = source_parts[::2]
+    source_breaks = source_parts[1::2]
+    if not source_breaks:
+        return translated
 
-    def replace(match: re.Match[str]) -> str:
-        nonlocal next_index
-        token = _layout_marker(next_index)
-        while token in text or token in mapping:
-            next_index += 1
-            token = _layout_marker(next_index)
-        mapping[token] = match.group(0)
-        next_index += 1
-        return token
+    source_sentence_counts = [
+        len([part for part in split_sentences(line) if part.strip(" \t\u3000")])
+        for line in source_lines
+    ]
+    if any(count == 0 for count in source_sentence_counts):
+        raise TranslationRejected("DOCUMENT_LAYOUT_ALIGNMENT_FAILED")
 
-    return re.sub(r"\r\n|\r|\n", replace, text), mapping
+    target_parts = _split_preserving_newlines(translated)
+    target_lines = target_parts[::2]
+    target_sentence_counts = [len(_target_sentences(line)) for line in target_lines]
 
+    if (
+        len(target_lines) == len(source_lines)
+        and target_sentence_counts == source_sentence_counts
+    ):
+        return "".join(
+            target_lines[index]
+            + (source_breaks[index] if index < len(source_breaks) else "")
+            for index in range(len(source_lines))
+        )
 
-def _restore_document_line_breaks(
-    translated: str, mapping: dict[str, str]
-) -> str:
-    """Restore exact line endings only when every placeholder survives in order."""
-    observed = DOCUMENT_LAYOUT_MARKER.findall(translated)
-    expected = list(mapping)
-    if observed != expected:
-        if observed or expected:
-            raise TranslationRejected(
-                "DOCUMENT_LAYOUT_MARKER_MISSING_DUPLICATED_OR_REORDERED"
-            )
-    if expected and ("\r" in translated or "\n" in translated):
-        raise TranslationRejected("DOCUMENT_LAYOUT_NEWLINE_NOT_PROTECTED")
-    restored = translated
-    for token, line_break in mapping.items():
-        restored = restored.replace(token, line_break, 1)
-    if DOCUMENT_LAYOUT_MARKER.search(restored):
-        raise TranslationRejected("INTERNAL_MARKER_LEAK")
-    return restored
+    flattened = " ".join(line.strip(" \t\u3000") for line in target_lines if line.strip(" \t\u3000"))
+    target_sentences = _target_sentences(flattened)
+    if len(target_sentences) != sum(source_sentence_counts):
+        raise TranslationRejected("DOCUMENT_LAYOUT_ALIGNMENT_FAILED")
+
+    rebuilt = []
+    cursor = 0
+    for index, count in enumerate(source_sentence_counts):
+        rebuilt.append(" ".join(target_sentences[cursor:cursor + count]))
+        cursor += count
+        if index < len(source_breaks):
+            rebuilt.append(source_breaks[index])
+    return "".join(rebuilt)
 INTERNAL_MARKER = re.compile(
     r"\\V\[(?:9876[5-9]\d|987[7-9]\d{2}|98[89]\d{3}|99\d{4})\]"
     r"|ZXQTX760(?:NUM|TERM)\d+QXZ|ZXQPLB[A-Z]+QXZ"
@@ -465,9 +473,6 @@ def translate_checked(
     contextual_name_codes: tuple[str, ...] = ()
     if contextualize_name_codes and source == "ja":
         model_source, contextual_name_codes = contextualize_name_code_source(original)
-    layout_mapping: dict[str, str] = {}
-    if split_model_sentences == "document" and ("\r" in model_source or "\n" in model_source):
-        model_source, layout_mapping = _protect_document_line_breaks(model_source)
     if split_model_sentences not in (True, False, "lines", "document"):
         raise ValueError("UNKNOWN_SENTENCE_SEGMENTATION_MODE")
     protected, mapping = protect_literals(
@@ -508,7 +513,8 @@ def translate_checked(
             translated_chunks.append("".join(value for _, value in sentence_results))
     intermediate = "".join(translated_chunks)
     restored_prose = restore_literals(intermediate, mapping)
-    restored_prose = _restore_document_line_breaks(restored_prose, layout_mapping)
+    if split_model_sentences == "document":
+        restored_prose = _restore_document_line_breaks(original, restored_prose)
     restored = restore_layout(
         original,
         restore_contextual_name_codes(restored_prose, contextual_name_codes),
