@@ -16,7 +16,10 @@ import time
 from tools.unseen_holdout import HOLDOUT_CASES, _require_semantic_fidelity
 from translation_lab.cache import DurableTranslationCache
 from translation_lab.review_queue import ReviewQueue
-from translation_lab.pipeline import translate_checked, validate_translation
+from translation_lab.pipeline import (
+    TranslationRejected, contextualize_name_code_source,
+    restore_contextual_name_codes, translate_checked, validate_translation,
+)
 
 JA_EN_MODEL_ID = "Helsinki-NLP/opus-mt-ja-en"
 EN_ES_MODEL_ID = "Helsinki-NLP/opus-mt-en-es"
@@ -101,7 +104,8 @@ def translate_phase(workspace: Path) -> int:
             "prepared_translations": False,
             "case_specific_retries": False,
             "glossary_edits": False,
-            "segmentation_mode": "line_context",
+            "uniform_segmentation_modes": ["document_context", "line_context", "sentence_context"],
+            "selection": "first_candidate_passing_fixed_semantic_policy",
             "numeric_literals_sent_to_model": True,
             "contextual_name_code_aliases": True,
             "structural_protection_only": True,
@@ -135,37 +139,61 @@ def translate_phase(workspace: Path) -> int:
                 candidate_box: list[str] = []
 
                 def producer(source_text: str) -> str:
-                    def translate_ja_en(fragment: str) -> str:
-                        value = ja_en.translate(fragment)
-                        ja_en_attempts.append({
-                            "source_fragment": fragment[:220],
-                            "raw_output": value[:600],
-                        })
-                        return value
+                    rejected_modes: list[dict[str, str]] = []
+                    for mode, segmentation in (
+                        ("document_context", "document"),
+                        ("line_context", "lines"),
+                        ("sentence_context", True),
+                    ):
+                        model_source, name_codes = contextualize_name_code_source(source_text)
 
-                    english = translate_checked(
-                        source_text, translate_ja_en, source="ja",
-                        protect_numbers=False, split_model_sentences="lines",
-                        contextualize_name_codes=True,
+                        def translate_ja_en(fragment: str) -> str:
+                            value = ja_en.translate(fragment)
+                            ja_en_attempts.append({
+                                "mode": mode,
+                                "source_fragment": fragment[:220],
+                                "raw_output": value[:600],
+                            })
+                            return value
+
+                        def translate_en_es(fragment: str) -> str:
+                            value = en_es.translate(fragment)
+                            en_es_attempts.append({
+                                "mode": mode,
+                                "source_fragment": fragment[:220],
+                                "raw_output": value[:600],
+                            })
+                            return value
+
+                        try:
+                            english = translate_checked(
+                                model_source, translate_ja_en, source="ja",
+                                protect_numbers=False,
+                                split_model_sentences=segmentation,
+                            )
+                            entry["intermediate_english"] = english[:1400]
+                            spanish = translate_checked(
+                                english, translate_en_es, source="en",
+                                protect_numbers=False,
+                                split_model_sentences=segmentation,
+                            )
+                            spanish = restore_contextual_name_codes(spanish, name_codes)
+                            validate_translation(source_text, spanish, source="ja")
+                            candidate_box.append(spanish)
+                            _require_semantic_fidelity(sample, spanish)
+                            entry["accepted_segmentation_mode"] = mode
+                            entry["rejected_segmentation_modes"] = rejected_modes
+                            return spanish
+                        except TranslationRejected as exc:
+                            rejected_modes.append({
+                                "mode": mode,
+                                "reason": str(exc)[:350],
+                            })
+                    entry["rejected_segmentation_modes"] = rejected_modes
+                    raise TranslationRejected(
+                        "ALL_PIVOT_SEGMENTATION_MODES_REJECTED:" +
+                        json.dumps(rejected_modes, ensure_ascii=False)[:700]
                     )
-                    entry["intermediate_english"] = english[:1400]
-
-                    def translate_en_es(fragment: str) -> str:
-                        value = en_es.translate(fragment)
-                        en_es_attempts.append({
-                            "source_fragment": fragment[:220],
-                            "raw_output": value[:600],
-                        })
-                        return value
-
-                    spanish = translate_checked(
-                        english, translate_en_es, source="en",
-                        protect_numbers=False, split_model_sentences="lines",
-                        contextualize_name_codes=True,
-                    )
-                    candidate_box.append(spanish)
-                    _require_semantic_fidelity(sample, spanish)
-                    return spanish
 
                 try:
                     value = cache.translate_or_get(
