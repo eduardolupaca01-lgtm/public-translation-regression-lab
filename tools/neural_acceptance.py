@@ -16,6 +16,7 @@ import sys
 import time
 
 from translation_lab.cache import DurableTranslationCache
+from translation_lab.review_queue import ReviewQueue
 from translation_lab.pipeline import (
     TranslationRejected, code_parts, translate_checked, validate_translation
 )
@@ -497,7 +498,7 @@ def translate_phase(workspace: Path) -> int:
         engine, provenance = _create_models()
         report["models"] = provenance
         report["backend_executed"] = True
-        with DurableTranslationCache(workspace / "cache") as cache:
+        with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
             for sample in CASES:
                 steps = []
                 glossary_corrections = []
@@ -539,6 +540,8 @@ def translate_phase(workspace: Path) -> int:
                         return spanish
                     raise TranslationRejected(last_error)
 
+                candidate_box: list[str] = []
+
                 def producer(japanese: str) -> str:
                     spanish = translate_checked(
                         japanese, neural, source="ja",
@@ -553,6 +556,7 @@ def translate_phase(workspace: Path) -> int:
                         japanese, spanish
                     )
                     glossary_corrections.extend(approved_edits)
+                    candidate_box.append(spanish)
                     return spanish
 
                 case_record = {"case": sample.id, "source": sample.japanese,
@@ -569,10 +573,27 @@ def translate_phase(workspace: Path) -> int:
                         value.encode("utf-8")).hexdigest()
                 except Exception as exc:
                     case_record["error"] = type(exc).__name__ + ":" + str(exc)[:450]
+                    review_item = review_queue.enqueue(
+                        "ja", "es", sample.japanese,
+                        candidate_box[-1] if candidate_box else "",
+                        reason=case_record["error"],
+                        context={
+                            "case_id": sample.id,
+                            "semantic_policy": "neural_acceptance_v1",
+                            "model_provenance": provenance,
+                            "raw_model_attempts": steps,
+                            "reviewed_term_corrections": glossary_corrections,
+                        },
+                    )
+                    case_record["review_item_id"] = review_item.item_id
+                    case_record["review_status"] = review_item.status
                 report["cases"].append(case_record)
                 print("NEURAL_CASE " + sample.id + " " + case_record["status"] +
                       " " + case_record.get("error", ""), flush=True)
             report["cache_rows"] = cache.count()
+            report["review_queue_pending"] = review_queue.count("pending")
+            report["review_queue_total"] = review_queue.count()
+            review_queue.export_snapshot(workspace / "review-queue.json")
     except Exception as exc:
         report["setup_error"] = type(exc).__name__ + ":" + str(exc)[:800]
         print("NEURAL_SETUP_FAILURE " + report["setup_error"], flush=True)
@@ -599,14 +620,25 @@ def verify_phase(workspace: Path) -> int:
     errors = []
     if not report.get("backend_executed"):
         errors.append("REAL_NEURAL_INFERENCE_WAS_NOT_EXECUTED")
-    if not accepted:
+    if not accepted and not report.get("review_queue_total"):
         errors.append("NO_VALID_TRANSLATIONS_AVAILABLE_TO_RESTORE")
     db_path = workspace / "cache" / "translation-cache.sqlite3"
     if not db_path.is_file():
         errors.append("PERSISTENT_SQLITE_DATABASE_MISSING")
     else:
-        with DurableTranslationCache(workspace / "cache") as cache:
-            if cache.count() != len(accepted):
+        with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
+            approved_items = [
+                item for item in review_queue.list_items(status="approved", limit=1000)
+                if item.source == "ja" and item.target == "es"
+                and item.context.get("semantic_policy") == "neural_acceptance_v1"
+            ]
+            approved_by_original = {
+                item.original: item for item in sorted(
+                    approved_items, key=lambda value: value.approved_at or value.updated_at
+                )
+            }
+            total_accepted = len(accepted) + len(approved_by_original)
+            if cache.count() != total_accepted:
                 errors.append("REJECTED_TRANSLATION_WAS_CACHED_OR_VALID_ROW_LOST")
             for row in accepted:
                 case = case_by_id.get(row["case"])
@@ -641,17 +673,34 @@ def verify_phase(workspace: Path) -> int:
                 except Exception as exc:
                     errors.append("REPLAY_FAILED:" + row["case"] + ":" + str(exc)[:150])
             for row in report["cases"]:
-                if row["status"] != "accepted" and cache.get(
-                        "ja", "es", row["source"]) is not None:
-                    errors.append("REJECTED_ITEM_PERSISTED:" + row["case"])
+                if row["status"] != "accepted":
+                    case = case_by_id.get(row["case"])
+                    approved_item = approved_by_original.get(row["source"])
+                    if approved_item is not None:
+                        if case is None:
+                            errors.append("HUMAN_APPROVAL_UNKNOWN_CASE:" + row["case"])
+                        else:
+                            try:
+                                _require_semantic_fidelity(case, approved_item.correction or "")
+                            except Exception as exc:
+                                errors.append("HUMAN_APPROVAL_SEMANTIC_FAILURE:" + row["case"] + ":" + str(exc)[:180])
+                            cached = cache.get(
+                                "ja", "es", row["source"],
+                                quality_validator=lambda candidate, current=case: _require_semantic_fidelity(current, candidate),
+                            )
+                            if cached != approved_item.correction:
+                                errors.append("HUMAN_APPROVAL_NOT_IN_ACCEPTED_CACHE:" + row["case"])
+                    elif cache.get("ja", "es", row["source"]) is not None:
+                        errors.append("REJECTED_ITEM_PERSISTED:" + row["case"])
     proof = {"schema": "public-real-neural-cache-restart-v1",
-             "accepted": len(accepted), "required": len(CASES),
+             "accepted": len(accepted), "human_approved": len(approved_by_original),
+             "total_accepted": total_accepted, "required": len(CASES),
              "backend_executed_before_restart": report.get("backend_executed", False),
              "models_loaded_during_restart": False, "errors": errors}
     _save_json(workspace / "restart-proof.json", proof)
     print("NEURAL_RESTART_PROOF " +
           json.dumps(proof, ensure_ascii=True, sort_keys=True), flush=True)
-    return 0 if not errors and len(accepted) == len(CASES) else 1
+    return 0 if not errors and total_accepted == len(CASES) else 1
 
 
 def main() -> int:

@@ -19,6 +19,7 @@ from tools.neural_acceptance import (
     _source_fluency_variant, verify_phase,
 )
 from translation_lab.cache import DurableTranslationCache
+from translation_lab.review_queue import ReviewQueue
 from translation_lab.pipeline import (
     TranslationRejected, translate_checked, validate_translation
 )
@@ -104,10 +105,12 @@ def run(
         )
         report["backend_executed"] = True
         report["models"] = provenance
-        with DurableTranslationCache(workspace / "cache") as cache:
+        with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
             for sample in CASES:
                 steps = []
                 glossary_corrections = []
+
+                candidate_box: list[str] = []
 
                 def producer(japanese: str) -> str:
                     # Try bounded genuine model-based variants. The
@@ -162,6 +165,7 @@ def run(
                             )
                             # Recheck every proposal against the ORIGINAL
                             # Japanese even when a source paraphrase was used.
+                            candidate_box.append(candidate)
                             validate_translation(japanese, candidate, source="ja")
                             candidate, approved_edits = _restore_reviewed_time_terms(
                                 japanese, candidate
@@ -201,10 +205,28 @@ def run(
                         value.encode("utf-8")).hexdigest()
                 except Exception as exc:
                     entry["error"] = type(exc).__name__ + ":" + str(exc)[:500]
+                    review_item = review_queue.enqueue(
+                        "ja", "es", sample.japanese,
+                        candidate_box[-1] if candidate_box else "",
+                        reason=entry["error"],
+                        context={
+                            "case_id": sample.id,
+                            "semantic_policy": "neural_acceptance_v1",
+                            "model_kind": model_kind,
+                            "model_provenance": provenance,
+                            "raw_model_attempts": steps,
+                            "reviewed_term_corrections": glossary_corrections,
+                        },
+                    )
+                    entry["review_item_id"] = review_item.item_id
+                    entry["review_status"] = review_item.status
                 report["cases"].append(entry)
                 print("DIRECT_CASE " + sample.id + " " + entry["status"] +
                       " " + entry.get("error", ""), flush=True)
             report["cache_rows"] = cache.count()
+            report["review_queue_pending"] = review_queue.count("pending")
+            report["review_queue_total"] = review_queue.count()
+            review_queue.export_snapshot(workspace / "review-queue.json")
     except Exception as exc:
         report["setup_error"] = type(exc).__name__ + ":" + str(exc)[:1000]
         print("DIRECT_SETUP_FAILURE " + report["setup_error"], flush=True)

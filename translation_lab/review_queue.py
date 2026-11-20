@@ -398,6 +398,8 @@ class ReviewQueue:
             raise InvalidReviewState("REVIEW_ITEM_NOT_PENDING")
         if item.revision != expected_revision:
             raise ReviewConflict("REVIEW_REVISION_CHANGED")
+        if item.context.get("semantic_policy") and quality_validator is None:
+            raise ReviewQueueError("REVIEW_SEMANTIC_VALIDATOR_REQUIRED")
 
         try:
             validate_translation(
@@ -659,6 +661,24 @@ def _emit(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def _quality_validator_for_item(item: ReviewItem) -> Callable[[str], None] | None:
+    policy = item.context.get("semantic_policy")
+    if policy is None:
+        return None
+    if policy == "unseen_holdout_v1":
+        from tools.unseen_holdout import HOLDOUT_CASES, _require_semantic_fidelity
+        cases = HOLDOUT_CASES
+    elif policy == "neural_acceptance_v1":
+        from tools.neural_acceptance import CASES, _require_semantic_fidelity
+        cases = CASES
+    else:
+        raise ReviewQueueError("UNKNOWN_REVIEW_SEMANTIC_POLICY:" + str(policy))
+    sample = next((case for case in cases if case.id == item.context.get("case_id")), None)
+    if sample is None:
+        raise ReviewQueueError("REVIEW_SEMANTIC_POLICY_CASE_NOT_FOUND")
+    return lambda correction: _require_semantic_fidelity(sample, correction)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -729,12 +749,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 _emit(asdict(item))
             elif args.command == "approve":
+                pending_item = queue.get(args.id)
+                if pending_item is None:
+                    raise ReviewNotFound("REVIEW_ITEM_NOT_FOUND:" + args.id)
+                quality_validator = _quality_validator_for_item(pending_item)
                 item = queue.approve(
                     args.id, args.correction,
                     actor=args.reviewer,
                     expected_revision=args.expected_revision,
                     human_verified=args.human_verified,
                     notes=args.notes,
+                    quality_validator=quality_validator,
                     replace_existing=args.replace_existing,
                 )
                 _emit(asdict(item))

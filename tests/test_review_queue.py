@@ -12,6 +12,7 @@ from translation_lab.review_queue import (
     InvalidReviewState,
     ReviewConflict,
     ReviewQueue,
+    ReviewQueueError,
 )
 
 
@@ -120,6 +121,27 @@ class TestHumanReviewQueue(unittest.TestCase):
             )
         with DurableTranslationCache(self.workspace) as cache:
             self.assertEqual(cache.count(), 0)
+
+    def test_semantic_policy_requires_matching_validator(self):
+        with ReviewQueue(self.workspace) as queue:
+            item = queue.enqueue(
+                "ja", "es", "雨が降ったら待っています。", "Cuando llueve, espero.",
+                reason="SEMANTIC_VALIDATION_FAILED",
+                context={
+                    "case_id": "rainy_meeting",
+                    "semantic_policy": "unseen_holdout_v1",
+                },
+            )
+            with self.assertRaisesRegex(
+                ReviewQueueError, "REVIEW_SEMANTIC_VALIDATOR_REQUIRED"
+            ):
+                queue.approve(
+                    item.item_id, "Cuando llueve, espero.",
+                    actor="reviewer", expected_revision=1,
+                    human_verified=True,
+                    notes="Revisé el texto.",
+                )
+            self.assertEqual(queue.get(item.item_id).status, "pending")
 
     def test_human_verification_and_notes_are_mandatory(self):
         with ReviewQueue(self.workspace) as queue:
