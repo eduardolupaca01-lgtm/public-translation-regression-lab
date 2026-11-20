@@ -232,6 +232,37 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
             self.assertEqual(result, "El plan es a las 12:30 p.m.")
             self.assertFalse(edits)
 
+    def test_japanese_paraphrase_retains_original_values_and_rpg_codes(self):
+        from tools.neural_acceptance import _source_disambiguation_variant
+        raw = (r"\V[12]" +
+               "友人は水泳部です。学校はサッカーが盛んです。" +
+               "早く準備しないと、友人に怒られます。")
+        rewritten, edits = _source_disambiguation_variant(raw)
+        self.assertIn(r"\V[12]", rewritten)
+        self.assertIn("水泳部に所属しています。", rewritten)
+        self.assertIn("サッカーが活発に行われています。", rewritten)
+        self.assertIn("友人に叱られます。", rewritten)
+        self.assertEqual(len(edits), 3)
+        self.assertTrue(all(e["basis"] == "audited_source_language_paraphrase"
+                            for e in edits))
+
+    def test_japanese_paraphrase_does_not_touch_rpg_arguments(self):
+        from tools.neural_acceptance import _source_disambiguation_variant
+        raw = r"\N[花子]花子は私の幼なじみです。" + "\r\n" + "小学生のころから友達です。"
+        rewritten, edits = _source_disambiguation_variant(raw)
+        self.assertIn(r"\N[花子]", rewritten)
+        self.assertIn("子供の頃からの友達", rewritten)
+        self.assertIn("小学校に通っていたころ", rewritten)
+        self.assertIn("\r\n", rewritten)
+        self.assertEqual(len(edits), 2)
+
+    def test_no_source_paraphrase_when_not_needed(self):
+        from tools.neural_acceptance import _source_disambiguation_variant
+        original = "今日はいい天気ですね。"
+        output, edits = _source_disambiguation_variant(original)
+        self.assertEqual(output, original)
+        self.assertEqual(edits, [])
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"

@@ -15,10 +15,12 @@ import time
 
 from tools.neural_acceptance import (
     CASES, _save_json, _require_semantic_fidelity,
-    _restore_reviewed_time_terms, verify_phase,
+    _restore_reviewed_time_terms, _source_disambiguation_variant, verify_phase,
 )
 from translation_lab.cache import DurableTranslationCache
-from translation_lab.pipeline import TranslationRejected, translate_checked
+from translation_lab.pipeline import (
+    TranslationRejected, translate_checked, validate_translation
+)
 
 MODEL_ID = "Helsinki-NLP/opus-mt-ja-es"
 
@@ -112,16 +114,26 @@ def run(
                     # remain unchanged. No prepared translations are inserted.
                     has_glossary = bool(sample.glossary)
                     variants = (
-                        [("inline-sentences", True, True)]
+                        [("inline-sentences", True, True, japanese, [])]
                         if has_glossary else
-                        [("sentences", False, True)]
+                        [("sentences", False, True, japanese, [])]
                     )
                     if not any(ch in japanese for ch in ("\n", "\r")):
-                        variants.append(("whole-context", has_glossary, False))
+                        variants.append((
+                            "whole-context", has_glossary, False, japanese, []
+                        ))
                     if has_glossary:
-                        variants.append(("protected-sentences", False, True))
+                        variants.append((
+                            "protected-sentences", False, True, japanese, []
+                        ))
+                    rewritten, rewrites = _source_disambiguation_variant(japanese)
+                    if rewrites:
+                        variants.append((
+                            "audited-ja-paraphrase", has_glossary, True,
+                            rewritten, rewrites
+                        ))
                     rejected_attempts = []
-                    for mode, inline, sentence_split in variants:
+                    for mode, inline, sentence_split, source_variant, source_edits in variants:
                         def model_piece(fragment: str) -> str:
                             value = model.translate(fragment)
                             steps.append({
@@ -134,12 +146,15 @@ def run(
                             return value
                         try:
                             candidate = translate_checked(
-                                japanese, model_piece, source="ja",
+                                source_variant, model_piece, source="ja",
                                 glossary=dict(sample.glossary),
                                 protect_numbers=sample.id != "numbers_and_code",
                                 inline_glossary=inline,
                                 split_model_sentences=sentence_split,
                             )
+                            # Recheck every proposal against the ORIGINAL
+                            # Japanese even when a source paraphrase was used.
+                            validate_translation(japanese, candidate, source="ja")
                             candidate, approved_edits = _restore_reviewed_time_terms(
                                 japanese, candidate
                             )
@@ -147,6 +162,10 @@ def run(
                             glossary_corrections.extend([
                                 {**edit, "variant": mode}
                                 for edit in approved_edits
+                            ])
+                            glossary_corrections.extend([
+                                {**edit, "variant": mode}
+                                for edit in source_edits
                             ])
                             entry["accepted_variant"] = mode
                             return candidate

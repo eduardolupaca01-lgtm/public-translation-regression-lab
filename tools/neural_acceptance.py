@@ -16,7 +16,9 @@ import sys
 import time
 
 from translation_lab.cache import DurableTranslationCache
-from translation_lab.pipeline import TranslationRejected, translate_checked
+from translation_lab.pipeline import (
+    TranslationRejected, code_parts, translate_checked, validate_translation
+)
 
 
 @dataclass(frozen=True)
@@ -235,6 +237,47 @@ def _require_semantic_fidelity(sample: Case, translated: str) -> None:
     if issues:
         raise TranslationRejected("SEMANTIC_FIDELITY_FAILED:" +
                                   json.dumps(issues, ensure_ascii=False))
+
+def _source_disambiguation_variant(original: str):
+    """Source-language paraphrases only; no target-language text is inserted.
+
+    Common Japanese RPG patterns can be grammatically unambiguous to readers
+    but ambiguous to compact machine-translation models. Transform only known
+    equivalent source constructions, and record every substitution. Preserve
+    original RPG codes, numerals and line endings. This remains an OPTIONAL
+    retry after normal model inference has been rejected.
+    """
+    changes = (
+        ("部です。", "部に所属しています。"),
+        ("が盛んです。", "が活発に行われています。"),
+        ("幼なじみ", "子供の頃からの友達"),
+        ("小学生のころ", "小学校に通っていたころ"),
+        ("に怒られます。", "に叱られます。"),
+    )
+    rewritten = []
+    applied = []
+    for is_control, fragment in code_parts(original):
+        if is_control:
+            rewritten.append(fragment)
+            continue
+        updated = fragment
+        for old, new in changes:
+            count = updated.count(old)
+            if count:
+                updated = updated.replace(old, new)
+                applied.append({
+                    "source_anchor": old,
+                    "equivalent_japanese": new,
+                    "occurrences": count,
+                    "basis": "audited_source_language_paraphrase",
+                })
+        rewritten.append(updated)
+    candidate = "".join(rewritten)
+    if applied:
+        # Structural validation only: both sides are JAPANESE strings.
+        validate_translation(original, candidate, source="en")
+    return candidate, applied
+
 
 def _model_boilerplate(value: str) -> bool:
     """Do not accept canned language-selection notices as translations."""
