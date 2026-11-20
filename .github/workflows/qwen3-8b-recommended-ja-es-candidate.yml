@@ -90,8 +90,8 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
           path: |
-            /tmp/qwen8b-rec-ja-es-quality/qwen-candidate-report.json
-            /tmp/qwen8b-rec-ja-es-quality/qwen-restart-proof.json
+            /tmp/qwen8b-rec-ja-es-quality/qwen8b-rec-candidate-report.json
+            /tmp/qwen8b-rec-ja-es-quality/qwen8b-rec-restart-proof.json
             /tmp/qwen8b-rec-ja-es-quality/review-queue.json
             /tmp/qwen8b-rec-ja-es-quality/llama-server.log
             /tmp/qwen8b-rec-ja-es-quality/cache/translation-cache.sqlite3
