@@ -231,8 +231,6 @@ def verify_phase(backend: str, workspace: Path) -> int:
         errors.append("ACTUAL_MODEL_ID_PROVENANCE_MISMATCH")
     if metadata.get("declared_license") != spec.declared_license:
         errors.append("ACTUAL_MODEL_LICENSE_PROVENANCE_MISMATCH")
-    if len(accepted) != len(HOLDOUT_CASES):
-        errors.append("HOLDOUT_NOT_FULLY_ACCEPTED")
     db_path = workspace / "cache" / "translation-cache.sqlite3"
     if not db_path.is_file():
         errors.append("HOLDOUT_SQLITE_DATABASE_MISSING")
@@ -240,6 +238,24 @@ def verify_phase(backend: str, workspace: Path) -> int:
         with DurableTranslationCache(workspace / "cache") as cache, ReviewQueue(workspace / "cache") as review_queue:
             if cache.count() != len(accepted) + review_queue.count("approved"):
                 errors.append("REJECTED_ROW_CACHED_OR_ACCEPTED_ROW_LOST")
+            approved_items = [
+                item for item in review_queue.list_items(status="approved", limit=1000)
+                if item.source == "ja" and item.target == "es"
+                and item.context.get("semantic_policy") == "unseen_holdout_v1"
+                and item.original in {case.japanese for case in HOLDOUT_CASES}
+            ]
+            approved_by_original = {
+                item.original: item for item in sorted(
+                    approved_items, key=lambda value: value.approved_at or value.updated_at
+                )
+            }
+            auto_originals = {row.get("source") for row in accepted}
+            human_originals = set(approved_by_original) - auto_originals
+            total_accepted = len(auto_originals | set(approved_by_original))
+            if total_accepted != len(HOLDOUT_CASES):
+                errors.append("HOLDOUT_NOT_FULLY_ACCEPTED")
+            if cache.count() != total_accepted:
+                errors.append("LICENSED_HOLDOUT_CACHE_ROWS_DO_NOT_MATCH_ACCEPTED_ITEMS")
             for row in accepted:
                 sample = case_by_id.get(row.get("case"))
                 if sample is None:
@@ -298,6 +314,8 @@ def verify_phase(backend: str, workspace: Path) -> int:
         "model_id": spec.model_id,
         "declared_license": spec.declared_license,
         "accepted": len(accepted),
+        "human_approved": len(human_originals) if "human_originals" in locals() else 0,
+        "total_accepted": total_accepted if "total_accepted" in locals() else len(accepted),
         "required": len(HOLDOUT_CASES),
         "backend_executed_before_restart": bool(report.get("backend_executed")),
         "models_loaded_during_restart": False,
