@@ -1,0 +1,49 @@
+name: Public concurrent translation-cache durability acceptance
+
+on:
+  push:
+    paths:
+      - ".github/workflows/public-cache-stress.yml"
+      - "translation_lab/cache.py"
+      - "translation_lab/pipeline.py"
+      - "tools/cache_stress.py"
+      - "tests/test_cache_concurrency.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-singleflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  multi-process-cache:
+    name: Concurrent SQLite, cold replay, crash recovery (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Keep public tests free of private models and installations
+        run: python tools/publication_guard.py
+      - name: Compile public Python source
+        run: python -m compileall -q translation_lab tools tests
+      - name: Validate cache stress contracts
+        run: python -m unittest discover -s tests -v
+      - name: Run real concurrent-process durable cache stress with simulated translation
+        run: python -m tools.cache_stress stress --workspace "${{ runner.temp }}/public-cache-stress" --cases 36 --workers 8
+      - name: Preserve inspectable synthetic-only concurrency receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-singleflight-${{ matrix.os }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/public-cache-stress/cache-stress-report.json
