@@ -47,9 +47,11 @@ class TestQwenCandidateContracts(unittest.TestCase):
             "younger or older",
             "do not invent a recipient",
             "return only the translation",
-            "zxqphcode0000qxz",
+            "v[987650]",
+            "n[3]",
             "exactly once",
             "grammatically correct spanish position",
+            "singular person",
         ):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, prompt)
