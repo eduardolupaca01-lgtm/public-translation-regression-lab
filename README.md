@@ -214,3 +214,22 @@ se mantiene fijo como conjunto comparativo, sin usarlo para entrenar modelos.
 Las licencias declaradas son una condición inicial de selección, no una
 certificación legal de todos los usos o dependencias. Ningún resultado
 autoriza el uso del motor original ni certifica calidad universal.
+
+
+## Siguiente ruta evaluada: pivote japonés → inglés → español
+
+Como los tres modelos directos no alcanzaron 10/10, se añadió una prueba
+independiente de traducción en dos etapas con los modelos públicos
+Helsinki-NLP opus-mt-ja-en y opus-mt-en-es, ambos con licencia declarada
+Apache-2.0. Se reutilizan los mismos diez casos y los mismos controles
+semánticos, estructurales y de persistencia.
+
+La salida intermedia en inglés queda registrada para inspección. No se
+permiten paráfrasis, correcciones manuales, glosarios ni reintentos por caso.
+La puerta sigue siendo 10/10; cualquier caso rechazado queda fuera de la
+caché aceptada. La recuperación SQLite se verifica en un proceso nuevo sin
+cargar los modelos.
+
+Esta ruta es una evaluación experimental: traducir por pivote puede introducir
+errores adicionales. No se considera apta para producción hasta que pase el
+conjunto completo y una revisión humana independiente.
