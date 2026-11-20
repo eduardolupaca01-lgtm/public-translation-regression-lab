@@ -142,6 +142,35 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
         self.assertIn("ARRIVAL_TIME_CONTEXT_LOST", errors)
         self.assertIn("ARRIVAL_ACTION_LOST", errors)
 
+
+    def test_rejects_wrong_sister_condition_and_self_companion(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "sister_homework")
+        errors = _semantic_errors(
+            case,
+            "Mi hermana aún no ha terminado sus tareas. "
+            "Cuando terminemos, iré al parque conmigo.",
+        )
+        self.assertIn("AFTER_COMPLETION_CONDITION_LOST", errors)
+        self.assertIn("TOGETHER_OR_COMPANION_RELATION_LOST", errors)
+
+    def test_accepts_train_late_paraphrase_without_requiring_retrasado(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "delayed_train")
+        self.assertEqual(
+            _semantic_errors(
+                case,
+                "El tren llega tarde, así que la reunión comenzará en media hora.",
+            ),
+            [],
+        )
+
+    def test_rejects_singular_unaddressed_teacher_request(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "teacher_and_children")
+        errors = _semantic_errors(
+            case,
+            "La maestra dijo que se callara, pero los niños siguieron riéndose.",
+        )
+        self.assertIn("TEACHER_REQUEST_FOR_SILENCE_LOST", errors)
+
     def test_structure_rejects_missing_control_code(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
         with self.assertRaises(TranslationRejected):

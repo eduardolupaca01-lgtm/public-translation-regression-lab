@@ -64,13 +64,13 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
     HoldoutCase(
         "teacher_and_children",
         "先生は「静かにしてください」と言いましたが、子どもたちは笑い続けました。",
-        (("profesor", "maestro", "docente"), ("silencio", "callad"),
+        (("profesor", "maestr", "docente"), ("silencio", "call"),
          ("niñ",), ("riendo", "riéndose", "reí", "risa"), ("sigu", "continu", "segu")),
     ),
     HoldoutCase(
         "delayed_train",
         "電車が遅れているので、会議は三十分後に始まります。",
-        (("tren",), ("retras", "demor"), ("reunión",),
+        (("tren",), ("retras", "demor", "tard"), ("reunión",),
          ("treinta", "30", "media hora"), ("minut", "hora"),
          ("porque", "como", "ya que", "debido", "así que", "por lo que", "por eso")),
     ),
@@ -143,11 +143,11 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("HOMEWORK_NEGATION_LOST")
         if not re.search(r"\b(?:termin)\w*\b", first):
             errors.append("HOMEWORK_COMPLETION_STATE_LOST")
-        if not re.search(r"\b(?:cuando|una\s+vez\s+que|después\s+de\s+que)\b", later):
+        if not re.search(r"\b(?:cuando|una\s+vez\s+que|después\s+de\s+que)\s+(?:(?:ella)\s+)?(?:termine|haya\s+terminado|acabe|haya\s+acabado)\b", later):
             errors.append("AFTER_COMPLETION_CONDITION_LOST")
         if not re.search(r"\b(?:parque)\b", later):
             errors.append("FUTURE_PARK_DESTINATION_LOST")
-        if not re.search(r"\b(?:junt\w*|con\s+ella|conmigo|acompañ\w*|llevar\w*|iremos|vamos)\b", later):
+        if not re.search(r"\b(?:junt\w*|con\s+ella|acompañ\w*|llevar\w*|iremos|vamos)\b", later):
             errors.append("TOGETHER_OR_COMPANION_RELATION_LOST")
 
     elif sample.id == "red_and_blue_apples":
@@ -165,10 +165,16 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
 
     elif sample.id == "teacher_and_children":
         request_present = re.search(
-            r"\b(?:pid|solicit|orden|dij)\w*\b.{0,70}\b(?:silencio|callad\w*|cáll\w*|guard\w*|hagan)\b",
+            r"\b(?:pid|solicit|orden|dij)\w*\b.{0,70}\b(?:silencio|call\w*|cáll\w*|guard\w*|hagan)\b",
             folded,
         )
-        if not re.search(r"\b(?:profesor|maestro|docente)\b", folded) or not request_present:
+        addressed_to_children = re.search(
+            r"\b(?:a\s+los\s+niños|les\s+(?:pid|solicit|orden|dij)\w*|"
+            r"cállense|callen|callaran|callasen|se\s+callen|se\s+callaran|"
+            r"guarden|guardaran|guardasen|hagan\s+silencio)\b",
+            folded,
+        )
+        if not re.search(r"\b(?:profesor|maestr|docente)\b", folded) or not request_present or not addressed_to_children:
             errors.append("TEACHER_REQUEST_FOR_SILENCE_LOST")
         if re.search(r"\b(?:siguen|continúan)\s+callad\w*\b", folded):
             errors.append("TEACHER_SILENCE_QUOTE_IS_NOT_A_REQUEST")
