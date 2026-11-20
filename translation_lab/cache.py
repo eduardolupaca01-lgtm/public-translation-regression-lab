@@ -30,7 +30,8 @@ class DurableTranslationCache:
             """)
 
     def get(self, source: str, target: str, original: str, *,
-            required_terms: tuple[str, ...] = ()) -> str | None:
+            required_terms: tuple[str, ...] = (),
+            quality_validator: Callable[[str], None] | None = None) -> str | None:
         row = self.connection.execute("""
             SELECT translated FROM translations
              WHERE source=? AND target=? AND original=?
@@ -40,13 +41,18 @@ class DurableTranslationCache:
         value = row[0]
         try:
             validate_translation(original, value, source=source, required_terms=required_terms)
+            if quality_validator is not None:
+                quality_validator(value)
         except TranslationRejected:
             return None
         return value
 
     def put(self, source: str, target: str, original: str, translated: str, *,
-            required_terms: tuple[str, ...] = ()) -> None:
+            required_terms: tuple[str, ...] = (),
+            quality_validator: Callable[[str], None] | None = None) -> None:
         validate_translation(original, translated, source=source, required_terms=required_terms)
+        if quality_validator is not None:
+            quality_validator(translated)
         with self.connection:
             self.connection.execute("""
                 INSERT INTO translations(source,target,original,translated)
@@ -60,12 +66,19 @@ class DurableTranslationCache:
         source: str, target: str, original: str,
         translator: Callable[[str], str],
         *, required_terms: tuple[str, ...] = (),
+        quality_validator: Callable[[str], None] | None = None,
     ) -> str:
-        cached = self.get(source, target, original, required_terms=required_terms)
+        cached = self.get(
+            source, target, original, required_terms=required_terms,
+            quality_validator=quality_validator,
+        )
         if cached is not None:
             return cached
         result = translator(original)
-        self.put(source, target, original, result, required_terms=required_terms)
+        self.put(
+            source, target, original, result, required_terms=required_terms,
+            quality_validator=quality_validator,
+        )
         return result
 
     def count(self) -> int:
