@@ -65,7 +65,7 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
         "teacher_and_children",
         "先生は「静かにしてください」と言いましたが、子どもたちは笑い続けました。",
         (("profesor", "maestro", "docente"), ("silencio", "callad"),
-         ("niñ",), ("reí", "riendo", "risa"), ("sigu", "continu", "segu")),
+         ("niñ",), ("riendo", "riéndose", "reí", "risa"), ("sigu", "continu", "segu")),
     ),
     HoldoutCase(
         "delayed_train",
