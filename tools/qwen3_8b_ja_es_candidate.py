@@ -29,7 +29,7 @@ from tools.independent_pivot_holdout import (
     _require_semantic_fidelity,
 )
 
-MODEL_REPO = "lmstudio-community/Qwen3-8B-GGUF-GGUF"
+MODEL_REPO = "Qwen/Qwen3-8B-GGUF"
 MODEL_REVISION = "7c41481f57cb95916b40956ab2f0b139b296d974"
 MODEL_FILENAME = "Qwen3-8B-Q4_K_M.gguf"
 MODEL_SHA256 = "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
