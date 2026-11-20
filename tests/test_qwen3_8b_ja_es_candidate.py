@@ -70,7 +70,7 @@ class TestQwenCandidateContracts(unittest.TestCase):
         self.assertEqual(payload["temperature"], 0.0)
         self.assertEqual(payload["top_p"], 1.0)
         self.assertEqual(payload["seed"], 42)
-        self.assertEqual(payload["max_tokens"], 256)
+        self.assertEqual(payload["max_tokens"], 512)
         self.assertFalse(payload["stream"])
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertEqual(payload["messages"][0]["content"], SYSTEM_PROMPT)
