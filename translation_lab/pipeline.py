@@ -246,84 +246,6 @@ def restore_literals(translated: str, mapping: Mapping[str, str]) -> str:
 
 
 
-_CONTEXTUAL_LITERAL_MARKER = re.compile(r"ZXQPH(?:CODE|NUM|TERM)\d+QXZ")
-
-
-def _protect_literals_in_context(
-    protected: str, mapping: Mapping[str, str]
-) -> tuple[str, dict[str, str]]:
-    """Replace every protected token with an opaque marker inside its sentence.
-
-    Unlike code_parts-based splitting, the marker remains in the model context.
-    Original RPG codes are restored verbatim; numeric/glossary sentinels restore
-    to their approved source literal or glossary value.
-    """
-    contextual_mapping: dict[str, str] = {}
-    chunks: list[str] = []
-    index = 0
-    for is_code, fragment in code_parts(protected):
-        if not is_code:
-            chunks.append(fragment)
-            continue
-        value = mapping.get(fragment, fragment)
-        if fragment not in mapping:
-            kind = "CODE"
-        elif re.fullmatch(NUMERIC, value):
-            kind = "NUM"
-        else:
-            kind = "TERM"
-        marker = f"ZXQPH{kind}{index:04d}QXZ"
-        while marker in protected or marker in contextual_mapping:
-            index += 1
-            marker = f"ZXQPH{kind}{index:04d}QXZ"
-        contextual_mapping[marker] = value
-        chunks.append(marker)
-        index += 1
-    return "".join(chunks), contextual_mapping
-
-
-def _restore_contextual_placeholders(
-    translated: str, mapping: Mapping[str, str]
-) -> str:
-    """Require each opaque token exactly once, then restore it.
-
-    Japanese and Spanish word order can differ. A protected literal may therefore
-    move with its semantic phrase; token identity and cardinality are immutable,
-    but source order is not imposed on the target-language sentence.
-    """
-    if not isinstance(translated, str):
-        raise TranslationRejected("NON_STRING_TRANSLATION")
-    expected = Counter(mapping.keys())
-    observed = Counter(_CONTEXTUAL_LITERAL_MARKER.findall(translated))
-    if observed != expected:
-        raise TranslationRejected("CONTEXTUAL_LITERAL_MARKER_MISSING_DUPLICATED_OR_UNKNOWN")
-
-    restored = translated
-    for marker, value in mapping.items():
-        index = restored.index(marker)
-        left = restored[:index]
-        right = restored[index + len(marker):]
-        numeric = marker.startswith("ZXQPHNUM")
-        if numeric:
-            prefix = suffix = ""
-        elif marker.startswith("ZXQPHCODE"):
-            prefix = (
-                " " if left and not left[-1].isspace()
-                and left[-1] not in "¿¡«“(" else ""
-            )
-            suffix = (
-                " " if right and not right[0].isspace()
-                and right[0] not in ".,;:!?)]}»”" else ""
-            )
-        else:
-            prefix = _insert_word_separator(left, value)
-            suffix = _insert_word_separator(value, right)
-        restored = left + prefix + value + suffix + right
-
-    if _CONTEXTUAL_LITERAL_MARKER.search(restored):
-        raise TranslationRejected("CONTEXTUAL_LITERAL_MARKER_LEAK")
-    return _normalize_prose_punctuation(restored)
-
 
 def _translate_with_contextual_literals(
     protected: str,
@@ -345,7 +267,10 @@ def _translate_with_contextual_literals(
         if not sentence or sentence in ("\r\n", "\r", "\n"):
             sentence_results.append((sentence, sentence))
             continue
-        without_markers = _CONTEXTUAL_LITERAL_MARKER.sub("", sentence)
+        without_markers = "".join(
+            fragment for is_code, fragment in code_parts(sentence)
+            if not is_code
+        )
         if not (
             JAPANESE.search(without_markers)
             or re.search(r"[A-Za-z]", without_markers)
@@ -593,10 +518,10 @@ def translate_checked(
     This harness deliberately provides NO neural model. The caller must supply
     an appropriately licensed translator; public CI uses deterministic fakes.
 
-    When protect_literals_in_context is true, original control codes, numbers,
-    and glossary sentinels remain inside the model's sentence as opaque markers.
-    Each marker must be returned exactly once. Markers may move to a grammatically
-    correct target-language position, but must not be changed or omitted.
+    When protect_literals_in_context is true, original control codes and the
+    pipeline's native RPG-style numeric/glossary sentinels remain inside the
+    model's sentence. Every synthetic sentinel must be returned exactly once;
+    native codes are checked verbatim. Target-language word order may differ.
     """
     model_source = original
     contextual_name_codes: tuple[str, ...] = ()
@@ -610,15 +535,13 @@ def translate_checked(
         inline_glossary=inline_glossary,
     )
     if protect_literals_in_context:
-        contextual_protected, contextual_mapping = _protect_literals_in_context(
-            protected, mapping
-        )
+        # Keep native RPG codes and the pipeline's collision-safe \\V[987650]
+        # sentinels inside the sentence so the model sees their semantic context.
+        # restore_literals rejects missing/duplicated numeric or glossary markers.
         intermediate = _translate_with_contextual_literals(
-            contextual_protected, model_translate, split_model_sentences
+            protected, model_translate, split_model_sentences
         )
-        restored_prose = _restore_contextual_placeholders(
-            intermediate, contextual_mapping
-        )
+        restored_prose = restore_literals(intermediate, mapping)
     else:
         translated_chunks = []
         for protected_code, fragment in code_parts(protected):
