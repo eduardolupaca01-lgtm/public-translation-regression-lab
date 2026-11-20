@@ -66,7 +66,8 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
         "teacher_and_children",
         "先生は「静かにしてください」と言いましたが、子どもたちは笑い続けました。",
         (("profesor", "maestr", "docente"), ("silencio", "call"),
-         ("niñ",), ("riendo", "riéndose", "reí", "risa"), ("sigu", "continu", "segu")),
+         ("niñ",), ("riendo", "riéndose", "reí", "risa"),
+         ("sigu", "continu", "segu", "no dejaron de", "no pararon de")),
     ),
     HoldoutCase(
         "delayed_train",
@@ -83,19 +84,20 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
     HoldoutCase(
         "second_corner",
         "この道をまっすぐ進んで、二つ目の角を右に曲がってください。",
-        (("recto", "derecho"), ("segund", "2"), ("esquin", "cruce"),
-         ("derecha",)),
+        (("recto", "derecho", "de frente", "en línea recta"),
+         ("segund", "2"), ("esquin", "cruce"), ("derecha",)),
     ),
     HoldoutCase(
         "speaker_control_code",
         r"\N[7]は明日の午後3時に来ます。",
         (("mañana",), ("tarde", "atardecer", "p.m.", "pm"), ("3", "tres"),
-         ("vendr", "lleg", "viene", "llega")),
+         ("vendr", "lleg", "viene", "llega", "estará aquí", "estara aqui")),
     ),
     HoldoutCase(
         "shop_hours_line_break",
         "今日は店が休みです。\r\n明日は午前10時に開きます。",
-        (("hoy",), ("tienda", "local"), ("cerrad", "descanso"),
+        (("hoy",), ("tienda", "local"),
+         ("cerrad", "descanso", "no abre", "no está abierta", "no esta abierta"),
          ("mañana",), ("10", "diez"), ("abr", "abiert")),
     ),
 )
@@ -159,46 +161,90 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("SHOP_CLOSED_STATE_LOST")
 
     elif sample.id == "sister_homework":
-        clauses = [x.strip() for x in re.split(r"[.!?]+", folded) if x.strip()]
-        first = clauses[0] if clauses else ""
-        later = " ".join(clauses[1:])
+        condition = re.search(
+            r"\b(?:cuando|una\s+vez\s+que|después\s+de\s+que)\b|"
+            r"\bal\s+(?:terminar|acabar|finalizar|concluir)\b",
+            folded,
+        )
+        if condition:
+            first = folded[:condition.start()]
+            later = folded[condition.start():]
+        else:
+            clauses = [x.strip() for x in re.split(r"[.!?]+", folded) if x.strip()]
+            first = clauses[0] if clauses else ""
+            later = " ".join(clauses[1:])
         if not re.search(r"\b(?:herman)\w*\b", first):
             errors.append("SISTER_ACTOR_NOT_IN_HOMEWORK_CLAUSE")
         if not re.search(r"\b(?:no|aún\s+no|todavía\s+no)\b", first):
             errors.append("HOMEWORK_NEGATION_LOST")
         if not re.search(r"\b(?:termin)\w*\b", first):
             errors.append("HOMEWORK_COMPLETION_STATE_LOST")
-        if not re.search(r"\b(?:cuando|una\s+vez\s+que|después\s+de\s+que)\s+(?:(?:ella)\s+)?(?:termine|haya\s+terminado|acabe|haya\s+acabado)\b", later):
+        if not re.search(
+            r"\b(?:cuando|una\s+vez\s+que|después\s+de\s+que)\s+"
+            r"(?:(?:ella|mi\s+hermana)\s+)?"
+            r"(?:termine|haya\s+terminado|acabe|haya\s+acabado|"
+            r"la\s+termine|los\s+termine)\b|"
+            r"\bal\s+(?:terminar|acabar|finalizar|concluir)\b",
+            later,
+        ):
             errors.append("AFTER_COMPLETION_CONDITION_LOST")
         if not re.search(r"\b(?:parque)\b", later):
             errors.append("FUTURE_PARK_DESTINATION_LOST")
-        if not re.search(r"\b(?:junt\w*|con\s+ella|acompañ\w*|llevar\w*|iremos|vamos)\b", later):
+        if not re.search(r"\b(?:junt\w*|con\s+ella|acompañ\w*)\b", later):
             errors.append("TOGETHER_OR_COMPANION_RELATION_LOST")
+        if re.search(
+            r"\b(?:voy\s+a\s+ir|iré)\s+conmigo\b|"
+            r"\b(?:vamos|iremos)\s+con\s+nosotros\b",
+            folded,
+        ):
+            errors.append("SELF_COMPANION_REDUNDANCY")
 
     elif sample.id == "red_and_blue_apples":
         if not re.search(r"\b(?:tres|3)\b", folded) or not re.search(
             r"\bmanzan\w*\b", folded
         ) or not re.search(r"\broj\w*\b", folded):
             errors.append("RED_APPLE_COUNT_OR_COLOR_LOST")
-        blue_is_negated = re.search(
-            r"\b(?:no|ningun[oa]?|ni\s+una)\b.{0,55}\bazul\w*\b|"
-            r"\bazul\w*\b.{0,35}\b(?:no|ningun[oa]?)\b",
+        if re.search(
+            r"\bninguna\s+manzanas\s+azules?\b|"
+            r"\bninguna\s+manzana\s+azules\b|"
+            r"\bningún\s+manzana\s+azul(?:es)?\b",
             folded,
+        ):
+            errors.append("BLUE_APPLE_NUMBER_AGREEMENT_ERROR")
+        blue_is_negated = any(
+            re.search(pattern, folded)
+            for pattern in (
+                r"\bno\s+hay\s+(?:ninguna\s+)?manzana\s+azul\b",
+                r"\bno\s+hay\s+manzanas\s+azules\b",
+                r"\bno\s+hay\s+ni\s+una\s+manzana\s+azul\b",
+                r"\bno\s+(?:existe|queda)\s+ninguna\s+manzana\s+azul\b",
+                r"\bno\s+(?:existen|quedan)\s+manzanas\s+azules\b",
+                r"\bno\s+tenemos\s+(?:ninguna\s+)?manzana\s+azul\b",
+                r"\bno\s+tenemos\s+manzanas\s+azules\b",
+                r"\bninguna\s+manzana\s+azul\b",
+                r"\bni\s+una\s+manzana\s+azul\b",
+            )
         )
         if not blue_is_negated:
             errors.append("BLUE_APPLE_ABSENCE_INVERTED")
 
     elif sample.id == "teacher_and_children":
-        request_present = re.search(
+        quoted_silence_command = bool(re.search(
+            r"\b(?:dij|pid|orden)\w*\b.{0,35}[\"'«“]\s*silencio\s*[\"'»”]",
+            folded,
+        ))
+        request_present = bool(re.search(
             r"\b(?:pid|solicit|orden|dij)\w*\b.{0,70}\b(?:silencio|call\w*|cáll\w*|guard\w*|hagan)\b",
             folded,
-        )
-        addressed_to_children = re.search(
+        ) or quoted_silence_command)
+        addressed_to_children = bool(re.search(
             r"\b(?:a\s+los\s+niños|les\s+(?:pid|solicit|orden|dij)\w*|"
             r"cállense|callen|callaran|callasen|se\s+callen|se\s+callaran|"
+            r"que\s+(?:los\s+niños\s+)?(?:se\s+)?(?:callaran|callasen|"
+            r"guardaran\s+silencio|guardasen\s+silencio)|"
             r"guarden|guardaran|guardasen|hagan\s+silencio)\b",
             folded,
-        )
+        ) or quoted_silence_command)
         if not re.search(r"\b(?:profesor|maestr|docente)\b", folded) or not request_present or not addressed_to_children:
             errors.append("TEACHER_REQUEST_FOR_SILENCE_LOST")
         if re.search(r"\b(?:siguen|continúan)\s+callad\w*\b", folded):
@@ -245,7 +291,7 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("SPEAKER_OSAKA_ROLE_MISMATCH")
 
     elif sample.id == "second_corner":
-        if not re.search(r"\b(?:recto|derecho)\b", folded):
+        if not re.search(r"\b(?:recto|derecho|de\s+frente|en\s+línea\s+recta)\b", folded):
             errors.append("STRAIGHT_AHEAD_INSTRUCTION_LOST")
         if not re.search(r"\b(?:segund\w*|2)\b", folded):
             errors.append("SECOND_CORNER_ORDINAL_CHANGED")
@@ -272,17 +318,26 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             for part in clauses
         ):
             errors.append("ARRIVAL_TIME_CONTEXT_LOST")
+        arrival_action = (
+            r"(?:vendr|lleg|viene|llega)\w*|"
+            r"estar[aá]\s+(?:aquí|aqui|presente)"
+        )
         if not any(
-            re.search(r"\b(?:vendr|lleg|viene|llega)\w*\b", part) and
+            re.search(r"\b(?:" + arrival_action + r")\b", part) and
             re.search(r"\bmañana\b", part)
             for part in clauses
         ):
             errors.append("ARRIVAL_ACTION_LOST")
-        if not re.search(
-            r"\\N\[7\]\s*(?:vendr|lleg|viene|llega)\w*\b",
-            spanish,
-            re.IGNORECASE,
-        ):
+        bound_patterns = (
+            r"\\N\[7\]\s*,?\s*(?:" + arrival_action + r")\b",
+            r"\\N\[7\]\s*,?\s*(?:el|la)\s+"
+            r"(?:personaje|persona|protagonista)\s*,?\s*(?:" +
+            arrival_action + r")\b",
+            r"(?:el|la)\s+(?:personaje|persona|protagonista)\s+"
+            r"\\N\[7\]\s*,?\s*(?:" + arrival_action + r")\b",
+        )
+        if not any(re.search(pattern, spanish, re.IGNORECASE)
+                   for pattern in bound_patterns):
             errors.append("ARRIVAL_AGENT_NOT_BOUND_TO_CONTROL_CODE")
 
     elif sample.id == "shop_hours_line_break":
@@ -291,7 +346,9 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("SHOP_HOURS_LINE_COUNT_CHANGED")
         else:
             if not all(re.search(p, lines[0]) for p in (
-                r"\bhoy\b", r"\b(?:tienda|local)\b", r"\b(?:cerrad|descans)\w*\b"
+                r"\bhoy\b", r"\b(?:tienda|local)\b",
+                r"\b(?:cerrad|descans)\w*\b|"
+                r"\bno\s+(?:abre|está\s+abierta|esta\s+abierta)\b"
             )):
                 errors.append("TODAY_SHOP_CLOSED_CLAUSE_CHANGED")
             if not all(re.search(p, lines[1]) for p in (
