@@ -245,7 +245,7 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             r"guarden|guardaran|guardasen|hagan\s+silencio)\b",
             folded,
         ) or quoted_silence_command)
-        if not re.search(r"\b(?:profesor|maestr|docente)\b", folded) or not request_present or not addressed_to_children:
+        if not re.search(r"\b(?:profesor|maestr\w*|docente)\b", folded) or not request_present or not addressed_to_children:
             errors.append("TEACHER_REQUEST_FOR_SILENCE_LOST")
         if re.search(r"\b(?:siguen|continúan)\s+callad\w*\b", folded):
             errors.append("TEACHER_SILENCE_QUOTE_IS_NOT_A_REQUEST")
