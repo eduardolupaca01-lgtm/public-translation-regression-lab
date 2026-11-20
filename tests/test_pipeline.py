@@ -352,62 +352,62 @@ class TestInlineGlossaryContext(unittest.TestCase):
         validate_translation(source, result, source="ja")
 
 
-    def test_document_context_mode_sends_opaque_line_break_marker_and_restores_crlf(self):
+    def test_document_context_mode_realigns_two_sentences_to_source_lines(self):
         source = "今日は店が休みです。\r\n明日は午前10時に開きます。"
         seen = []
 
         def model(fragment):
             seen.append(fragment)
-            self.assertNotIn("\r", fragment)
-            self.assertNotIn("\n", fragment)
-            self.assertIn("ZXQPLBAQXZ", fragment)
-            return fragment.replace(
-                "今日は店が休みです。",
-                "La tienda está cerrada hoy.",
-            ).replace(
-                "明日は午前10時に開きます。",
-                "Mañana abrirá a las 10.",
-            )
+            self.assertEqual(fragment, source)
+            return "La tienda está cerrada hoy. Mañana abrirá a las 10 a. m."
 
         result = translate_checked(
             source, model, source="ja", protect_numbers=False,
             split_model_sentences="document",
         )
-        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen, [source])
         self.assertEqual(
             result,
-            "La tienda está cerrada hoy.\r\nMañana abrirá a las 10.",
+            "La tienda está cerrada hoy.\r\nMañana abrirá a las 10 a. m.",
         )
 
-    def test_document_context_mode_rejects_missing_layout_marker(self):
+    def test_document_context_mode_restores_multiple_sentences_per_source_line(self):
+        source = "一行目。二行目。\r\n三行目。"
+
+        def model(_fragment):
+            return "Primera. Segunda. Tercera."
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            split_model_sentences="document",
+        )
+        self.assertEqual(result, "Primera. Segunda.\r\nTercera.")
+
+    def test_document_context_mode_rejects_ambiguous_sentence_alignment(self):
         source = "一行目。\r\n二行目。"
 
         def model(_fragment):
-            return "Primera línea. Segunda línea."
+            return "Primera línea y segunda línea."
 
         with self.assertRaisesRegex(
-            TranslationRejected, "DOCUMENT_LAYOUT_MARKER_MISSING"
+            TranslationRejected, "DOCUMENT_LAYOUT_ALIGNMENT_FAILED"
         ):
             translate_checked(
                 source, model, source="ja", protect_numbers=False,
                 split_model_sentences="document",
             )
 
-    def test_document_context_mode_rejects_reordered_layout_markers(self):
-        source = "一行目。\r\n二行目。\n三行目。"
+    def test_document_context_mode_normalizes_model_line_ending_style(self):
+        source = "一行目。\r\n二行目。"
 
-        def model(fragment):
-            markers = re.findall(r"ZXQPLB[A-Z]+QXZ", fragment)
-            self.assertEqual(len(markers), 2)
-            return markers[1] + " Segunda. " + markers[0] + " Primera. Tercera."
+        def model(_fragment):
+            return "Primera.\nSegunda."
 
-        with self.assertRaisesRegex(
-            TranslationRejected, "DOCUMENT_LAYOUT_MARKER_MISSING"
-        ):
-            translate_checked(
-                source, model, source="ja", protect_numbers=False,
-                split_model_sentences="document",
-            )
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            split_model_sentences="document",
+        )
+        self.assertEqual(result, "Primera.\r\nSegunda.")
 
     def test_numeric_validation_accepts_spanish_number_words_for_source_digits(self):
         validate_translation(
