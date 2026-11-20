@@ -1,0 +1,147 @@
+"""Independently measure public DIRECT Japanese-to-Spanish Marian inference.
+
+This uses the public Apache-2.0 Helsinki-NLP opus-mt-ja-es model. It does not
+read private repositories, game files, original worker binaries or credentials.
+Downloaded model weights remain in ephemeral CI storage.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import sys
+import time
+
+from tools.neural_acceptance import CASES, _save_json, _semantic_errors, verify_phase
+from translation_lab.cache import DurableTranslationCache
+from translation_lab.pipeline import TranslationRejected, translate_checked
+
+MODEL_ID = "Helsinki-NLP/opus-mt-ja-es"
+
+
+def _load_public_model():
+    import torch
+    from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+    torch.set_num_threads(2)
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_ID, trust_remote_code=False
+    )
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        MODEL_ID, trust_remote_code=False
+    )
+    model.eval()
+
+    class _Direct:
+        def translate(self, text: str) -> str:
+            if not text.strip():
+                raise TranslationRejected("DIRECT_MODEL_EMPTY_SOURCE")
+            encoded = tokenizer([text], return_tensors="pt", truncation=False)
+            if encoded["input_ids"].shape[-1] > 512:
+                raise TranslationRejected("DIRECT_MODEL_INPUT_CONTEXT_EXCEEDED")
+            with torch.inference_mode():
+                generated = model.generate(
+                    **encoded, max_new_tokens=256, num_beams=4,
+                    renormalize_logits=True,
+                )
+            result = tokenizer.batch_decode(
+                generated, skip_special_tokens=True
+            )
+            if len(result) != 1 or not isinstance(result[0], str):
+                raise TranslationRejected("DIRECT_MODEL_INVALID_OUTPUT")
+            return result[0]
+
+    provenance = [{
+        "model_id": MODEL_ID,
+        "architecture": model.__class__.__name__,
+        "source": "ja", "target": "es",
+        "declared_license": "apache-2.0",
+        "model_page": "https://huggingface.co/" + MODEL_ID,
+        "trust_remote_code": False,
+    }]
+    return _Direct(), provenance
+
+
+def run(workspace: Path) -> int:
+    if workspace.exists():
+        raise RuntimeError("DIRECT_ACCEPTANCE_WORKSPACE_MUST_BE_NEW")
+    workspace.mkdir(parents=True)
+    started = time.monotonic()
+    report = {
+        "schema": "public-real-direct-marian-ja-es-v1",
+        "kind": "REAL_NEURAL_PUBLIC_DIRECT_MARIAN_NOT_ORIGINAL_PRIVATE_MODEL",
+        "required_cases": len(CASES), "routes": ["ja_es"],
+        "backend_executed": False, "cases": [], "models": [],
+    }
+    try:
+        model, provenance = _load_public_model()
+        report["backend_executed"] = True
+        report["models"] = provenance
+        with DurableTranslationCache(workspace / "cache") as cache:
+            for sample in CASES:
+                steps = []
+
+                def direct(fragment: str) -> str:
+                    result = model.translate(fragment)
+                    steps.append({"source": fragment[:180], "result_es": result[:300]})
+                    if not result.strip():
+                        raise TranslationRejected("DIRECT_MODEL_EMPTY_OUTPUT")
+                    return result
+
+                def producer(japanese: str) -> str:
+                    output = translate_checked(
+                        japanese, direct, source="ja",
+                        glossary=dict(sample.glossary),
+                        protect_numbers=sample.id != "numbers_and_code",
+                    )
+                    issues = _semantic_errors(sample, output)
+                    if issues:
+                        raise TranslationRejected(
+                            "SEMANTIC_FIDELITY_FAILED:" +
+                            json.dumps(issues, ensure_ascii=False))
+                    return output
+
+                entry = {"case": sample.id, "source": sample.japanese,
+                         "status": "rejected", "stages": steps}
+                try:
+                    value = cache.translate_or_get(
+                        "ja", "es", sample.japanese, producer
+                    )
+                    entry["status"] = "accepted"
+                    entry["translated"] = value
+                    entry["sha256"] = hashlib.sha256(
+                        value.encode("utf-8")).hexdigest()
+                except Exception as exc:
+                    entry["error"] = type(exc).__name__ + ":" + str(exc)[:500]
+                report["cases"].append(entry)
+                print("DIRECT_CASE " + sample.id + " " + entry["status"] +
+                      " " + entry.get("error", ""), flush=True)
+            report["cache_rows"] = cache.count()
+    except Exception as exc:
+        report["setup_error"] = type(exc).__name__ + ":" + str(exc)[:1000]
+        print("DIRECT_SETUP_FAILURE " + report["setup_error"], flush=True)
+    report["accepted"] = sum(1 for item in report["cases"]
+                             if item["status"] == "accepted")
+    report["rejected"] = len(CASES) - report["accepted"]
+    report["elapsed_seconds"] = round(time.monotonic() - started, 2)
+    _save_json(workspace / "neural-report.json", report)
+    print("DIRECT_ACCEPTANCE_REPORT " +
+          json.dumps(report, ensure_ascii=True, sort_keys=True), flush=True)
+    # Exact same 12-case strict gate; no weakening or pre-written translations.
+    return int(not (report["backend_executed"] and
+                    report["accepted"] == len(CASES)))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("phase", choices=("translate", "verify"))
+    parser.add_argument("--workspace", type=Path, required=True)
+    args = parser.parse_args()
+    if args.phase == "translate":
+        return run(args.workspace)
+    return verify_phase(args.workspace)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
