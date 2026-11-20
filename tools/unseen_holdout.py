@@ -280,7 +280,8 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("ARRIVAL_ACTION_LOST")
         if not re.search(
             r"\\N\[7\]\s*(?:vendr|lleg|viene|llega)\w*\b",
-            folded,
+            spanish,
+            re.IGNORECASE,
         ):
             errors.append("ARRIVAL_AGENT_NOT_BOUND_TO_CONTROL_CODE")
 
