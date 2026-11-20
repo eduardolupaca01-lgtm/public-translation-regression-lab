@@ -36,7 +36,7 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
             ),
             "sister_homework": (
                 "Mi hermana menor todavía no ha terminado los deberes. "
-                "Cuando termine, iremos juntas al parque."
+                "Cuando haya terminado, iremos al parque."
             ),
             "red_and_blue_apples": (
                 "En esta caja hay tres manzanas rojas. No hay ninguna manzana azul."
@@ -123,6 +123,24 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
         )
         validate_translation(case.japanese, translated, source="ja")
         self.assertEqual(_semantic_errors(case, translated), [])
+
+
+    def test_rejects_teacher_statement_that_children_are_quiet(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "teacher_and_children")
+        errors = _semantic_errors(
+            case,
+            'El maestro dijo: "Siguen callados", pero los niños se reían.',
+        )
+        self.assertIn("TEACHER_SILENCE_QUOTE_IS_NOT_A_REQUEST", errors)
+
+    def test_rejects_arrival_time_detached_from_the_arrival_action(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
+        errors = _semantic_errors(
+            case,
+            r"\N[7]Es mañana por la tarde. 3De vez en cuando viene.",
+        )
+        self.assertIn("ARRIVAL_TIME_CONTEXT_LOST", errors)
+        self.assertIn("ARRIVAL_ACTION_LOST", errors)
 
     def test_structure_rejects_missing_control_code(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")

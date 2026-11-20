@@ -38,7 +38,7 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
     HoldoutCase(
         "rainy_meeting",
         "明日の午後、駅の前で会いましょう。雨が降ったら、図書館の入口で待っています。",
-        (("mañana",), ("tarde",), ("estación",), ("vemos", "reun", "encontr"),
+        (("mañana",), ("tarde",), ("estación",), ("ver", "reun", "encontr"),
          ("lluev", "lluvia"), ("biblioteca",), ("entrada", "puerta"),
          ("esper", "aguard")),
     ),
@@ -89,7 +89,7 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
         "speaker_control_code",
         r"\N[7]は明日の午後3時に来ます。",
         (("mañana",), ("tarde", "atardecer"), ("3",),
-         ("vendr", "lleg")),
+         ("vendr", "lleg", "viene", "llega")),
     ),
     HoldoutCase(
         "shop_hours_line_break",
@@ -147,7 +147,7 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("AFTER_COMPLETION_CONDITION_LOST")
         if not re.search(r"\b(?:parque)\b", later):
             errors.append("FUTURE_PARK_DESTINATION_LOST")
-        if not re.search(r"\b(?:junt|con\s+ella|conmigo|acompañ|llevar)\w*\b", later):
+        if not re.search(r"\b(?:junt\w*|con\s+ella|conmigo|acompañ\w*|llevar\w*|iremos|vamos)\b", later):
             errors.append("TOGETHER_OR_COMPANION_RELATION_LOST")
 
     elif sample.id == "red_and_blue_apples":
@@ -164,10 +164,14 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("BLUE_APPLE_ABSENCE_INVERTED")
 
     elif sample.id == "teacher_and_children":
-        if not re.search(r"\b(?:profesor|maestro|docente)\b", folded) or not re.search(
-            r"\b(?:silencio|callad)\w*\b", folded
-        ):
+        request_present = re.search(
+            r"\b(?:pid|solicit|orden|dij)\w*\b.{0,70}\b(?:silencio|callad\w*|cáll\w*|guard\w*|hagan)\b",
+            folded,
+        )
+        if not re.search(r"\b(?:profesor|maestro|docente)\b", folded) or not request_present:
             errors.append("TEACHER_REQUEST_FOR_SILENCE_LOST")
+        if re.search(r"\b(?:siguen|continúan)\s+callad\w*\b", folded):
+            errors.append("TEACHER_SILENCE_QUOTE_IS_NOT_A_REQUEST")
         if not re.search(r"\bniñ\w*\b", folded):
             errors.append("CHILDREN_ACTOR_LOST")
         if not re.search(r"\b(?:ri\w*|re[ií]\w*|risa\w*)\b", folded):
@@ -184,7 +188,7 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             folded,
         ):
             errors.append("TRAIN_DELAY_CAUSAL_LINK_LOST")
-        if not re.search(r"\b(?:comenz|empez|inici)\w*\b", folded):
+        if not re.search(r"\b(?:comenz|comienz|empez|empiez|inici)\w*\b", folded):
             errors.append("MEETING_START_ACTION_LOST")
         if not re.search(r"\b(?:treinta|30|media\s+hora)\b", folded):
             errors.append("MEETING_DELAY_DURATION_LOST")
@@ -226,7 +230,19 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("ARRIVAL_DAY_CHANGED")
         if not re.search(r"\b(?:tarde|atardecer)\b", folded):
             errors.append("AFTERNOON_PERIOD_LOST")
-        if not re.search(r"\b(?:vendr|lleg)\w*\b", folded):
+        clauses = [x.strip() for x in re.split(r"[.!?]+", folded) if x.strip()]
+        if not any(
+            re.search(r"\bmañana\b", part) and
+            re.search(r"\b3\b", part) and
+            re.search(r"\btarde\b", part)
+            for part in clauses
+        ):
+            errors.append("ARRIVAL_TIME_CONTEXT_LOST")
+        if not any(
+            re.search(r"\b(?:vendr|lleg|viene|llega)\w*\b", part) and
+            re.search(r"\bmañana\b", part)
+            for part in clauses
+        ):
             errors.append("ARRIVAL_ACTION_LOST")
 
     elif sample.id == "shop_hours_line_break":

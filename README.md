@@ -183,3 +183,34 @@ CC-BY-NC-4.0. Esta prueba es exclusivamente de investigación/no comercial;
 no autoriza su uso en producción comercial ni certifica el motor original.
 Un resultado 10/10 demuestra únicamente que este modelo público pasó este
 pequeño conjunto sintético y sus validaciones, no calidad universal.
+
+
+## Resultado del primer holdout y comparación de modelos con licencias permisivas
+
+La primera ejecución real de NLLB sobre los diez diálogos nuevos terminó en
+**4/10 (FAIL)**: seis traducciones fueron rechazadas por pérdida de
+relaciones, instrucciones, tiempos o contexto. El registro original se
+conserva en la ejecución
+[44738336632](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44738336632).
+No se modifica ese resultado ni se baja el umbral de aprobación.
+
+Tras revisar el informe se corrigieron dos aspectos del validador: se acepta
+el plural implícito de “iremos” como acción conjunta y se rechaza una cita que
+afirma que los niños están callados cuando el original les pide guardar
+silencio. También se reforzó la comprobación de que la hora y la llegada
+pertenezcan a la misma frase. La primera ejecución NLLB sigue siendo el
+registro histórico de la versión inicial; no se presenta como un resultado
+recalculado.
+
+La siguiente comparación ejecuta, sobre los mismos diez casos fijos, dos
+modelos públicos con licencias declaradas más permisivas: Helsinki-NLP
+opus-mt-ja-es (Apache-2.0) y facebook/m2m100_418M (MIT). Ambos se prueban
+directamente, sin paráfrasis de origen, correcciones de destino, traducciones
+preparadas ni reintentos específicos. La puerta sigue siendo 10/10 y cada
+resultado tiene su propia prueba de reinicio SQLite.
+
+Después de la primera ejecución, este conjunto ya no es ciego para el equipo:
+se mantiene fijo como conjunto comparativo, sin usarlo para entrenar modelos.
+Las licencias declaradas son una condición inicial de selección, no una
+certificación legal de todos los usos o dependencias. Ningún resultado
+autoriza el uso del motor original ni certifica calidad universal.
