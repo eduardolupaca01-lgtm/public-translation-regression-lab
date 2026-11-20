@@ -112,7 +112,7 @@ class TestQwen8BThinkingCandidateContracts(unittest.TestCase):
         translator = Qwen8BThinkingTranslator(
             request_json=lambda _url, _payload, _timeout: {
                 "choices": [
-                    {"message": {"content": "<think>private reasoning</think>\\nTraducción fiel."}}
+                    {"message": {"content": "<think>private reasoning</think>\nTraducción fiel."}}
                 ]
             }
         )
