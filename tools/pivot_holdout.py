@@ -282,21 +282,28 @@ def verify_phase(workspace: Path) -> int:
             for row in report.get("cases", []):
                 if row.get("status") != "accepted":
                     sample = by_id.get(row.get("case"))
-                    if sample and cache.get("ja", "es", sample.japanese) is not None:
-                        errors.append("PIVOT_REJECTED_CASE_WAS_CACHED:" + sample.id)
-                    if sample is not None:
+                    if sample is None:
+                        errors.append("PIVOT_UNKNOWN_REJECTED_CASE:" + str(row.get("case")))
+                    else:
                         review_item = review_queue.get(row.get("review_item_id", ""))
                         if review_item is None:
                             errors.append("REJECTED_CASE_MISSING_REVIEW_ITEM:" + sample.id)
                         elif (review_item.source, review_item.target, review_item.original) != ("ja", "es", sample.japanese):
                             errors.append("REVIEW_ITEM_SOURCE_MISMATCH:" + sample.id)
-                        elif review_item.status == "approved":
+                        approved_for_case = [
+                            candidate for candidate in review_queue.list_items(status="approved", limit=1000)
+                            if (candidate.source, candidate.target, candidate.original) == ("ja", "es", sample.japanese)
+                        ]
+                        if approved_for_case:
+                            approved_correction = approved_for_case[-1].correction
                             promoted = cache.get(
                                 "ja", "es", sample.japanese,
                                 quality_validator=lambda candidate, current=sample: _require_semantic_fidelity(current, candidate),
                             )
-                            if promoted != review_item.correction:
+                            if promoted != approved_correction:
                                 errors.append("HUMAN_APPROVAL_NOT_IN_ACCEPTED_CACHE:" + sample.id)
+                        elif cache.get("ja", "es", sample.japanese) is not None:
+                            errors.append("PIVOT_REJECTED_CASE_WAS_CACHED:" + sample.id)
 
     proof = {
         "schema": "public-ja-en-es-pivot-restart-v1",

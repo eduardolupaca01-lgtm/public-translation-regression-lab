@@ -592,7 +592,10 @@ class ReviewQueue:
         return item
 
     def snapshot(self) -> dict[str, Any]:
-        items = self.list_items(status=None, limit=1000)
+        item_rows = self.connection.execute("""
+            SELECT * FROM review_queue_items ORDER BY created_at, item_id
+        """).fetchall()
+        items = [self._row_to_item(row) for row in item_rows]
         event_rows = self.connection.execute("""
             SELECT event_id,item_id,event_type,actor,from_status,to_status,
                    revision,payload_json,created_at
