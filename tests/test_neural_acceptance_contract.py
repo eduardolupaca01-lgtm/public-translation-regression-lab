@@ -92,6 +92,63 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
                                    lambda part: phrases[part])
         self.assertEqual(output, "Por la mañana. Vamos a levantarnos.")
 
+    def test_friend_is_angry_agent_without_inventing_speaker(self):
+        case = next(c for c in acceptance.CASES if c.id == "preparation")
+        acceptable = "Si no te preparas rápido, tus amigos se enojarán."
+        self.assertEqual(acceptance._semantic_errors(case, acceptable), [])
+
+    def test_mere_keywords_do_not_certify_club_membership(self):
+        case = next(c for c in acceptance.CASES if c.id == "sports")
+        wrong = ("Estoy en el equipo de fútbol. Mi amigo es nadador. "
+                 "Nuestra escuela es un centro de fútbol. "
+                 "Hay un nuevo profesor en el equipo de natación.")
+        errors = acceptance._semantic_errors(case, wrong)
+        self.assertIn("FRIEND_SWIMMING_CLUB_MEMBERSHIP_NOT_DEMONSTRATED", errors)
+
+    def test_ungrounded_ampm_is_rejected_after_correct_numerals(self):
+        case = next(c for c in acceptance.CASES if c.id == "numbers_and_code")
+        errors = acceptance._semantic_errors(
+            case, r"\V[12]El plan es a las 12:30 p. m."
+        )
+        self.assertIn("UNSUPPORTED_AM_PM_ADDED", errors)
+        self.assertEqual(
+            acceptance._semantic_errors(case, r"\V[12]El plan es a las 12:30."),
+            []
+        )
+
+    def test_explicit_evening_correction_is_source_grounded_and_receipted(self):
+        source = "夕方に図書館へ行きます。"
+        corrected, edits = acceptance._restore_reviewed_time_terms(
+            source, "Voy a la biblioteca por la noche."
+        )
+        self.assertEqual(corrected, "Voy a la biblioteca al atardecer.")
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["source_anchor"], "夕方")
+        self.assertEqual(edits[0]["basis"], "reviewed_ja_es_terminology")
+        for other in ("夜に図書館へ行きます。", "夕方と夜に行きます。"):
+            unchanged, edits = acceptance._restore_reviewed_time_terms(
+                other, "Voy a la biblioteca por la noche."
+            )
+            self.assertEqual(unchanged, "Voy a la biblioteca por la noche.")
+            self.assertEqual(edits, [])
+
+    def test_unsupported_joy_and_early_school_eras_are_detected(self):
+        club = next(c for c in acceptance.CASES if c.id == "club")
+        childhood = next(c for c in acceptance.CASES if c.id == "childhood")
+        self.assertTrue(acceptance._semantic_errors(
+            club, "Las actividades del club se reanudan. ¡Es un placer!"
+        ))
+        self.assertTrue(acceptance._semantic_errors(
+            childhood, "Hanako es amiga de infancia. Su casa está al lado. "
+                       "Somos amigos desde la escuela."
+        ))
+
+    def test_wrong_greeting_name_and_speaker_is_not_accepted(self):
+        greeting = next(c for c in acceptance.CASES if c.id == "greeting")
+        self.assertTrue(acceptance._semantic_errors(
+            greeting, "¡Buenos días, Goro! No llegamos tarde hoy."
+        ))
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"
