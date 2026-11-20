@@ -66,6 +66,21 @@ def _load_public_model():
     return _Direct(), provenance
 
 
+def _report_schema(model_kind: str) -> str:
+    known = {
+        "REAL_NEURAL_PUBLIC_DIRECT_MARIAN_NOT_ORIGINAL_PRIVATE_MODEL":
+            "public-real-direct-marian-ja-es-v1",
+        "REAL_NEURAL_PUBLIC_M2M100_NOT_ORIGINAL_PRIVATE_MODEL":
+            "public-real-direct-m2m100-ja-es-v1",
+        "REAL_NEURAL_PUBLIC_NLLB_RESEARCH_NOT_ORIGINAL_PRIVATE_MODEL":
+            "public-real-direct-nllb-research-ja-es-v1",
+    }
+    try:
+        return known[model_kind]
+    except KeyError as exc:
+        raise ValueError("UNKNOWN_REAL_NEURAL_BACKEND_PROVENANCE") from exc
+
+
 def run(
     workspace: Path, *, model_loader=None,
     model_kind="REAL_NEURAL_PUBLIC_DIRECT_MARIAN_NOT_ORIGINAL_PRIVATE_MODEL",
@@ -75,9 +90,7 @@ def run(
     workspace.mkdir(parents=True)
     started = time.monotonic()
     report = {
-        "schema": ("public-real-direct-marian-ja-es-v1"
-                   if "MARIAN" in model_kind else
-                   "public-real-direct-m2m100-ja-es-v1"),
+        "schema": _report_schema(model_kind),
         "kind": model_kind,
         "required_cases": len(CASES), "routes": ["ja_es"],
         "backend_executed": False, "cases": [], "models": [],

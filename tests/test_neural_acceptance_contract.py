@@ -170,6 +170,25 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         self.assertEqual(result, "Al atardecer iré al parque.")
         self.assertEqual(len(edits), 1)
 
+    def test_model_report_never_mislabels_nllb_as_m2m100(self):
+        from tools.direct_marian_acceptance import _report_schema
+        self.assertEqual(
+            _report_schema("REAL_NEURAL_PUBLIC_NLLB_RESEARCH_NOT_ORIGINAL_PRIVATE_MODEL"),
+            "public-real-direct-nllb-research-ja-es-v1"
+        )
+        with self.assertRaises(ValueError):
+            _report_schema("UNRECOGNIZED_MODEL")
+
+    def test_quality_callback_rejects_false_positive_model_output(self):
+        from translation_lab.pipeline import TranslationRejected
+        from tools.neural_acceptance import _require_semantic_fidelity
+        sample = next(c for c in acceptance.CASES if c.id == "sports")
+        with self.assertRaises(TranslationRejected):
+            _require_semantic_fidelity(
+                sample, "Mi amigo es un club de natación. "
+                        "Nuestra escuela está llena de fútbol."
+            )
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"
