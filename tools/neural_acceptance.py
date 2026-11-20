@@ -85,11 +85,34 @@ def _create_models():
                            "package_version": item.package_version,
                            "catalog_url": "https://raw.githubusercontent.com/argosopentech/argospm-index/main/index.json",
                            "download_domains": ["argos-net.com"]})
+    # Argos caches its translation graph. Explicitly rebuild it after both
+    # installations, then log installed package metadata before attempting
+    # real inference. This distinguishes stale graph vs missing models.
+    translation.get_installed_languages.cache_clear()
+    installed = package.get_installed_packages()
+    installed_routes = sorted((p.from_code, p.to_code, p.type)
+                              for p in installed)
+    lang_objects = translation.get_installed_languages()
+    language_codes = sorted(lang.code for lang in lang_objects)
+    print("ARGOS_INSTALLED_ROUTES " + json.dumps(
+        installed_routes, ensure_ascii=True), flush=True)
+    print("ARGOS_LANGUAGE_CODES " + json.dumps(
+        language_codes, ensure_ascii=True), flush=True)
     ja = translation.get_language_from_code("ja")
     en = translation.get_language_from_code("en")
     es = translation.get_language_from_code("es")
-    if not ja or not en or not es or not ja.get_translation(en) or not en.get_translation(es):
-        raise RuntimeError("ARGOS_REQUIRED_EXPLICIT_TWO_STAGE_ROUTES_NOT_INSTALLED")
+    ja_en = ja.get_translation(en) if ja and en else None
+    en_es = en.get_translation(es) if en and es else None
+    print("ARGOS_ROUTE_GRAPH " + json.dumps({
+        "ja_en": ja_en is not None, "en_es": en_es is not None,
+        "packages_discovered": len(installed)
+    }, sort_keys=True), flush=True)
+    if ja_en is None or en_es is None:
+        raise RuntimeError(
+            "ARGOS_REQUIRED_EXPLICIT_TWO_STAGE_ROUTES_NOT_INSTALLED:"
+            + json.dumps({"installed": installed_routes,
+                          "languages": language_codes}, ensure_ascii=True)[:700]
+        )
     return translation, provenance
 
 
