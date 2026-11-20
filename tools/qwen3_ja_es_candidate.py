@@ -66,11 +66,14 @@ Accuracy rules:
 - Use clear, neutral Latin American Spanish. Preserve the source's level of
   politeness where Spanish grammar permits.
 - Keep every line and sentence's meaning. Do not merge or reorder independent lines.
-- Tokens matching ZXQPHCODE0000QXZ, ZXQPHNUM0000QXZ, or ZXQPHTERM0000QXZ
-  are immutable placeholders for source literals. Copy each exact token exactly
-  once; never translate, alter, split, duplicate, delete, or invent one. You may
-  move a placeholder to the grammatically correct Spanish position with the
-  phrase it represents. Do not impose Japanese word order on Spanish.
+- The pipeline may include native RPG-style placeholders such as \\V[987650]
+  for protected numbers or glossary terms. Copy every such code exactly once;
+  never translate, alter, split, duplicate, delete, or invent it. You may move
+  it to the grammatically correct Spanish position with the phrase it represents.
+- Preserve original RPG codes such as \\N[3] exactly once and unchanged. A name
+  code represents one named character: treat it as a singular person, never as
+  plural characters, a generic noun, or text to translate. Do not impose Japanese
+  word order on Spanish.
 - Return only the translation. Do not add a heading, quotation marks, notes, or
   commentary."""
 
