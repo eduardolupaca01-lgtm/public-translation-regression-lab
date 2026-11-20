@@ -13,7 +13,10 @@ from pathlib import Path
 import sys
 import time
 
-from tools.neural_acceptance import CASES, _save_json, _semantic_errors, verify_phase
+from tools.neural_acceptance import (
+    CASES, _save_json, _semantic_errors,
+    _restore_reviewed_time_terms, verify_phase,
+)
 from translation_lab.cache import DurableTranslationCache
 from translation_lab.pipeline import TranslationRejected, translate_checked
 
@@ -81,6 +84,7 @@ def run(workspace: Path) -> int:
         with DurableTranslationCache(workspace / "cache") as cache:
             for sample in CASES:
                 steps = []
+                glossary_corrections = []
 
                 def direct(fragment: str) -> str:
                     result = model.translate(fragment)
@@ -95,6 +99,10 @@ def run(workspace: Path) -> int:
                         glossary=dict(sample.glossary),
                         protect_numbers=sample.id != "numbers_and_code",
                     )
+                    output, approved_edits = _restore_reviewed_time_terms(
+                        japanese, output
+                    )
+                    glossary_corrections.extend(approved_edits)
                     issues = _semantic_errors(sample, output)
                     if issues:
                         raise TranslationRejected(
@@ -103,7 +111,8 @@ def run(workspace: Path) -> int:
                     return output
 
                 entry = {"case": sample.id, "source": sample.japanese,
-                         "status": "rejected", "stages": steps}
+                         "status": "rejected", "stages": steps,
+                         "reviewed_term_corrections": glossary_corrections}
                 try:
                     value = cache.translate_or_get(
                         "ja", "es", sample.japanese, producer
