@@ -70,3 +70,42 @@ sin invocar el traductor de nuevo.
 texto y de la caché SQLite; no implican que un motor neuronal privado esté
 corregido. La etapa de traducción neuronal real sigue pendiente y no debe
 marcarse como aprobada únicamente por superar estas pruebas con dobles.
+
+
+## Etapa neuronal pública (separada de las regresiones simuladas)
+
+El workflow **.github/workflows/real-neural-acceptance.yml** instala
+**Argos Translate 1.11.0** y descarga en un directorio temporal únicamente
+los modelos públicos **ja → en** y **en → es** desde su catálogo oficial.
+Los modelos no se guardan en Git, y no se publica ningún ejecutable.
+
+La prueba emplea **12 frases originales y sintéticas**, con casos de saludos,
+clubes escolares, referencias de mañana/tarde, monólogos, nombres,
+códigos de control RPG, números y saltos de línea. La aceptación requiere
+que se conserve la estructura y que aparezcan los conceptos semánticos
+exigidos; no basta con recibir algún texto en español.
+
+El proceso de prueba realiza dos fases:
+
+1. Inferencia real mediante las dos etapas neuronales; guarda en SQLite
+   solamente las traducciones que superen todas las validaciones.
+2. Abre la base de datos en **otro proceso, sin cargar los modelos**.
+   Debe recuperar exactamente las traducciones aprobadas, sin recalcularlas,
+   y comprobar que ninguna traducción rechazada haya sido almacenada.
+
+La ejecución solo puede terminar aprobada si **todos** los casos superan
+ambas fases. Los errores se registran con su motivo; no se sustituyen
+resultados por traducciones preparadas manualmente.
+
+Fuentes de modelos y licencias:
+- https://github.com/argosopentech/argospm-index
+- https://github.com/argosopentech/argos-translate
+- https://github.com/argosopentech/argos-translate/issues/533
+
+**Límite de la prueba:** valida la ruta neuronal pública y el diseño de
+la caché. No ejecuta ni certifica los modelos originales de la etapa
+privada; una aprobación aquí no demuestra que aquel motor esté reparado.
+
+La prueba se puede abrir en la pestaña Actions, bajo
+**Public real-neural Japanese-to-Spanish acceptance**. No modifica
+instalaciones ni crea entregables de software.
