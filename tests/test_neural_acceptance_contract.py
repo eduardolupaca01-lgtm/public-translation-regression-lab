@@ -344,6 +344,53 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         self.assertEqual(output, spanish)
         self.assertFalse(edits)
 
+
+    def test_awkward_model_spanish_fails_fidelity_review(self):
+        cases = {c.id: c for c in acceptance.CASES}
+        bad = (
+            ("weather", "Hoy es buen tiempo.", "WEATHER_UNNATURAL_SPANISH"),
+            ("sports",
+             "Estoy en el club de fútbol. Mi amigo pertenece al club de natación. "
+             "En nuestra escuela el fútbol es muy activo. "
+             "Un nuevo profesor llegó al club de natación.",
+             "SPORTS_UNNATURAL_SPANISH"),
+            ("childhood",
+             "Hanako es mi amiga desde que era niña. "
+             "Nuestros hogares están juntos. "
+             "Somos amigos desde que estuvimos en la escuela primaria.",
+             "CHILDHOOD_NEIGHBORING_HOUSES_AMBIGUOUS"),
+        )
+        for case_id, result, reason in bad:
+            with self.subTest(case_id=case_id):
+                self.assertIn(
+                    reason,
+                    acceptance._semantic_errors(cases[case_id], result),
+                )
+
+    def test_source_fluency_variant_preserves_original_codes_and_meaning(self):
+        from tools.neural_acceptance import _source_fluency_variant
+        text = (
+            r"\V[12]" + "今日はいい天気ですね。\r\n"
+            "私たちの学校はサッカーが盛んです。"
+            "花子は私の幼なじみです。家が隣にあります。"
+        )
+        rewritten, edits = _source_fluency_variant(text)
+        self.assertIn(r"\V[12]", rewritten)
+        self.assertIn("\r\n", rewritten)
+        self.assertIn("天気が良いですね。", rewritten)
+        self.assertIn("サッカーはとても人気があります。", rewritten)
+        self.assertIn("それぞれ隣り合う家に住んでいます。", rewritten)
+        self.assertTrue(all(e["basis"] == "audited_ja_fluency_paraphrase"
+                            for e in edits))
+        self.assertEqual(len(edits), 5)
+
+    def test_fluency_variant_does_not_apply_without_source_anchor(self):
+        from tools.neural_acceptance import _source_fluency_variant
+        original = r"\N[花子]学校はどこですか？"
+        unchanged, edits = _source_fluency_variant(original)
+        self.assertEqual(unchanged, original)
+        self.assertEqual(edits, [])
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"

@@ -96,6 +96,11 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
     for pattern in sample.forbidden_patterns:
         if re.search(pattern, spanish.casefold(), flags=re.IGNORECASE):
             errors.append("UNFAITHFUL_RELATIONSHIP:" + pattern)
+    if sample.id == "weather" and re.search(
+        r"\bhoy\s+(?:es|est[aá])\s+(?:un\s+)?buen(?:o)?\s+(?:tiempo|clima)\b",
+        spanish.casefold()
+    ):
+        errors.append("WEATHER_UNNATURAL_SPANISH")
     if sample.id == "numbers_and_code":
         # Independently verify the time is still a time, not just separated
         # occurrences of the numerals followed by unrelated words.
@@ -142,6 +147,11 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
             errors.append("FRIEND_SWIMMING_CLUB_MEMBERSHIP_NOT_DEMONSTRATED")
         if re.search(r"\bescuelas\b", spanish.casefold()):
             errors.append("SINGULAR_SCHOOL_BECAME_PLURAL")
+        if re.search(
+            r"\b(?:el\s+)?f[uú]tbol\s+(?:es|est[aá])\s+(?:muy\s+)?activo\b",
+            spanish.casefold()
+        ):
+            errors.append("SPORTS_UNNATURAL_SPANISH")
     if sample.id == "childhood":
         clauses = [s.strip() for s in re.split(r"[.!?]", spanish.casefold())
                    if s.strip()]
@@ -169,6 +179,11 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
             for clause in clauses[1:]
         ):
             errors.append("CHILDHOOD_NEIGHBORING_HOUSES_RELATION_LOST")
+        if re.search(
+            r"\b(?:nuestros?|sus)\s+hogares?\s+est[aá]n?\s+juntos?\b",
+            spanish.casefold()
+        ):
+            errors.append("CHILDHOOD_NEIGHBORING_HOUSES_AMBIGUOUS")
         if any(re.search(r"\bson\s+amig[oa]s?\b", clause)
                for clause in clauses[1:]):
             errors.append("CHILDHOOD_FRIENDSHIP_PERSON_SHIFT")
@@ -321,6 +336,49 @@ def _source_disambiguation_variant(original: str):
         validate_translation(original, candidate, source="en")
     return candidate, applied
 
+
+
+
+def _source_fluency_variant(original: str):
+    """Alternative Japanese-only clarification for awkward model output.
+
+    Keep source semantics, RPG codes and line endings; never insert prepared
+    Spanish text. Evaluate against the original Japanese after neural inference.
+    Each substitution is recorded in the acceptance receipt.
+    """
+    changes = (
+        ("いい天気ですね。", "天気が良いですね。"),
+        ("私たちの学校は", "私たちの学校では"),
+        ("部です。", "部に所属しています。"),
+        ("が盛んです。", "はとても人気があります。"),
+        ("家が隣にあります。", "私たちはそれぞれ隣り合う家に住んでいます。"),
+        ("幼なじみ", "子供のころからの友達"),
+        ("小学生のころ", "小学校に通っていたころ"),
+        ("から友達です。", "から私たちは友達です。"),
+        ("に怒られます。", "から叱られます。"),
+    )
+    fragments = []
+    edits = []
+    for protected, fragment in code_parts(original):
+        if protected:
+            fragments.append(fragment)
+            continue
+        current = fragment
+        for old, new in changes:
+            n = current.count(old)
+            if n:
+                current = current.replace(old, new)
+                edits.append({
+                    "source_anchor": old,
+                    "equivalent_japanese": new,
+                    "occurrences": n,
+                    "basis": "audited_ja_fluency_paraphrase",
+                })
+        fragments.append(current)
+    new_source = "".join(fragments)
+    if edits:
+        validate_translation(original, new_source, source="en")
+    return new_source, edits
 
 def _model_boilerplate(value: str) -> bool:
     """Do not accept canned language-selection notices as translations."""

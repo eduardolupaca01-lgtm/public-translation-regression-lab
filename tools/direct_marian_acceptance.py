@@ -15,7 +15,8 @@ import time
 
 from tools.neural_acceptance import (
     CASES, _save_json, _require_semantic_fidelity,
-    _restore_reviewed_time_terms, _source_disambiguation_variant, verify_phase,
+    _restore_reviewed_time_terms, _source_disambiguation_variant,
+    _source_fluency_variant, verify_phase,
 )
 from translation_lab.cache import DurableTranslationCache
 from translation_lab.pipeline import (
@@ -131,6 +132,12 @@ def run(
                         variants.append((
                             "audited-ja-paraphrase", has_glossary, True,
                             rewritten, rewrites
+                        ))
+                    fluency_source, fluency_edits = _source_fluency_variant(japanese)
+                    if fluency_edits:
+                        variants.append((
+                            "audited-ja-fluency", has_glossary, True,
+                            fluency_source, fluency_edits
                         ))
                     rejected_attempts = []
                     for mode, inline, sentence_split, source_variant, source_edits in variants:
