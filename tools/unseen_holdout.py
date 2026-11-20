@@ -278,6 +278,11 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             for part in clauses
         ):
             errors.append("ARRIVAL_ACTION_LOST")
+        if not re.search(
+            r"\\N\[7\]\s*(?:vendr|lleg|viene|llega)\w*\b",
+            folded,
+        ):
+            errors.append("ARRIVAL_AGENT_NOT_BOUND_TO_CONTROL_CODE")
 
     elif sample.id == "shop_hours_line_break":
         lines = folded.splitlines()
