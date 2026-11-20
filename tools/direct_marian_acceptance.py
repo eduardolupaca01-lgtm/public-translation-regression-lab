@@ -66,19 +66,24 @@ def _load_public_model():
     return _Direct(), provenance
 
 
-def run(workspace: Path) -> int:
+def run(
+    workspace: Path, *, model_loader=None,
+    model_kind="REAL_NEURAL_PUBLIC_DIRECT_MARIAN_NOT_ORIGINAL_PRIVATE_MODEL",
+) -> int:
     if workspace.exists():
         raise RuntimeError("DIRECT_ACCEPTANCE_WORKSPACE_MUST_BE_NEW")
     workspace.mkdir(parents=True)
     started = time.monotonic()
     report = {
         "schema": "public-real-direct-marian-ja-es-v1",
-        "kind": "REAL_NEURAL_PUBLIC_DIRECT_MARIAN_NOT_ORIGINAL_PRIVATE_MODEL",
+        "kind": model_kind,
         "required_cases": len(CASES), "routes": ["ja_es"],
         "backend_executed": False, "cases": [], "models": [],
     }
     try:
-        model, provenance = _load_public_model()
+        model, provenance = (
+            _load_public_model() if model_loader is None else model_loader()
+        )
         report["backend_executed"] = True
         report["models"] = provenance
         with DurableTranslationCache(workspace / "cache") as cache:
