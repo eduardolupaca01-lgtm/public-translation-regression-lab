@@ -185,6 +185,19 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
         self.assertIn("ARRIVAL_TIME_CONTEXT_LOST", errors)
         self.assertIn("ARRIVAL_ACTION_LOST", errors)
 
+    def test_rejects_arrival_agent_detached_from_character_code(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
+        errors = _semantic_errors(
+            case,
+            r"\N[7] Los asistentes llegarán mañana a las tres de la tarde.",
+        )
+        self.assertIn("ARRIVAL_AGENT_NOT_BOUND_TO_CONTROL_CODE", errors)
+
+    def test_accepts_arrival_action_bound_to_character_code(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
+        translated = r"\N[7] llegará mañana a las tres de la tarde."
+        self.assertEqual(_semantic_errors(case, translated), [])
+
 
     def test_rejects_wrong_sister_condition_and_self_companion(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "sister_homework")
