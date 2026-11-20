@@ -102,6 +102,14 @@ class DurableTranslationCache:
             if quality_validator is not None:
                 quality_validator(value)
         except TranslationRejected:
+            # A stale or corrupted value must not remain counted as accepted
+            # if the replacement model call later fails. Match the exact value
+            # so a concurrent newer correction is never deleted.
+            with self.connection:
+                self.connection.execute("""
+                    DELETE FROM translations
+                    WHERE source=? AND target=? AND original=? AND translated=?
+                """, (source, target, original, value))
             return None
         return value
 

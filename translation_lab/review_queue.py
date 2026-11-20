@@ -252,7 +252,23 @@ class ReviewQueue:
                     from_status=None,
                     to_status="pending",
                     revision=1,
-                    payload={"reason": reason.strip()},
+                    payload={"reason": reason.strip(), "context": dict(context or {})},
+                )
+            else:
+                existing = self.connection.execute("""
+                    SELECT status,revision FROM review_queue_items WHERE item_id=?
+                """, (item_id,)).fetchone()
+                self._event(
+                    item_id=item_id,
+                    event_type="duplicate_observed",
+                    actor=actor,
+                    from_status=existing["status"],
+                    to_status=existing["status"],
+                    revision=existing["revision"],
+                    payload={
+                        "reason": reason.strip(),
+                        "context": dict(context or {}),
+                    },
                 )
         item = self.get(item_id)
         if item is None:

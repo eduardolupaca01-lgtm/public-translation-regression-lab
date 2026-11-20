@@ -52,7 +52,15 @@ class TestHumanReviewQueue(unittest.TestCase):
             )
             self.assertEqual(first.item_id, second.item_id)
             self.assertEqual(queue.count(), 1)
-            self.assertEqual(len(queue.events(first.item_id)), 1)
+            self.assertEqual(len(queue.events(first.item_id)), 2)
+            self.assertEqual(
+                queue.events(first.item_id)[-1]["event_type"],
+                "duplicate_observed",
+            )
+            self.assertEqual(
+                queue.events(first.item_id)[-1]["payload"]["reason"],
+                "A_DIFFERENT_OBSERVATION",
+            )
         with ReviewQueue(self.workspace) as queue:
             self.assertEqual(queue.get(first.item_id).revision, 1)
 

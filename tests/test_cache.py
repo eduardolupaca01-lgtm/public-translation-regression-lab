@@ -181,3 +181,24 @@ class TestDurableCache(unittest.TestCase):
                         quality_validator=forbidden
                     )
                 self.assertEqual(cache.count(), 0)
+
+
+    def test_stale_rejected_row_is_removed_if_retranslation_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with DurableTranslationCache(folder) as cache:
+                original = "学校のクラブ。"
+                cache.put("ja", "es", original, "La escuela.")
+
+                def reject_old_value(_candidate):
+                    raise TranslationRejected("QUALITY_POLICY_CHANGED")
+
+                def unavailable_model(_source):
+                    raise RuntimeError("MODEL_UNAVAILABLE")
+
+                with self.assertRaisesRegex(RuntimeError, "MODEL_UNAVAILABLE"):
+                    cache.translate_or_get(
+                        "ja", "es", original, unavailable_model,
+                        quality_validator=reject_old_value,
+                    )
+                self.assertEqual(cache.count(), 0)
+                self.assertIsNone(cache.get("ja", "es", original))
