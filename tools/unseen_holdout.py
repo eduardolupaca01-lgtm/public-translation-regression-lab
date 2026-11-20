@@ -170,7 +170,7 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("TEACHER_REQUEST_FOR_SILENCE_LOST")
         if not re.search(r"\bniñ\w*\b", folded):
             errors.append("CHILDREN_ACTOR_LOST")
-        if not re.search(r"\b(?:re[ií]|riendo|risa)\w*\b", folded):
+        if not re.search(r"\b(?:ri\w*|re[ií]\w*|risa\w*)\b", folded):
             errors.append("CHILDREN_LAUGHTER_LOST")
         if not re.search(
             r"\b(?:sigu|continu|segu)\w*\b|no\s+dejaron\s+de|no\s+pararon\s+de",
