@@ -23,10 +23,10 @@ jobs:
     env:
       ARGOS_CHUNK_TYPE: NONE
       ARGOS_DEVICE_TYPE: cpu
-      ARGOS_PACKAGES_DIR: ${{ runner.temp }}/argos-public-models
+      ARGOS_PACKAGES_DIR: /tmp/argos-public-models
       OMP_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
-      CI_WORKSPACE: ${{ runner.temp }}/real-neural-ja-es
+      CI_WORKSPACE: /tmp/real-neural-ja-es
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
