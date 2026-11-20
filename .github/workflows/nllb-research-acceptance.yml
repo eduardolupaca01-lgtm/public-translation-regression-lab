@@ -62,3 +62,5 @@ jobs:
           path: |
             /tmp/nllb-research-ja-es/neural-report.json
             /tmp/nllb-research-ja-es/restart-proof.json
+            /tmp/nllb-research-ja-es/review-queue.json
+            /tmp/nllb-research-ja-es/cache/translation-cache.sqlite3

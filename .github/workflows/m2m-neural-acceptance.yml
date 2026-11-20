@@ -52,3 +52,15 @@ jobs:
       - name: Verify SQLite replay in a new process without model weights
         if: always()
         run: python -m tools.m2m_acceptance verify --workspace "$CI_WORKSPACE"
+      - name: Preserve translation review queue and restart diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-m2m100-review-and-restart
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            /tmp/m2m100-neural-ja-es/neural-report.json
+            /tmp/m2m100-neural-ja-es/restart-proof.json
+            /tmp/m2m100-neural-ja-es/review-queue.json
+            /tmp/m2m100-neural-ja-es/cache/translation-cache.sqlite3

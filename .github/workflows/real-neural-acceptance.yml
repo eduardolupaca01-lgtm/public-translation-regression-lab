@@ -44,3 +44,15 @@ jobs:
       - name: Verify durable SQLite in a fresh process without importing models
         if: always()
         run: python -m tools.neural_acceptance verify --workspace "$CI_WORKSPACE"
+      - name: Preserve translation review queue and restart diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-argos-review-and-restart
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            /tmp/real-neural-ja-es/neural-report.json
+            /tmp/real-neural-ja-es/restart-proof.json
+            /tmp/real-neural-ja-es/review-queue.json
+            /tmp/real-neural-ja-es/cache/translation-cache.sqlite3
