@@ -35,7 +35,8 @@ CASES: tuple[Case, ...] = (
          (("taro",), ("buen", "hola"),
           ("tarde", "retras", "puntual", "tiempo", "llegad")),
          (("太郎", "Taro"),),
-         forbidden_patterns=(r"\bno\s+llegamos\s+tarde\b",)),
+         forbidden_patterns=(r"\bno\s+llegamos\s+tarde\b",
+                             r"\bbuenas\s+mañanas\b")),
     Case("weather", "今日はいい天気ですね。",
          (("tiempo", "clima", "buen", "día", "sol"),)),
     Case("gratitude", "ありがとうございます。", (("gracias", "agradec"),)),
@@ -51,7 +52,7 @@ CASES: tuple[Case, ...] = (
          (("fútbol", "futbol"), ("natación",), ("escuela", "colegio"), ("nuev", "reciente")),
          forbidden_patterns=(
              r"\bamig[oa]\s+es\s+(?:un|el)\s+club\b",
-             r"\bescuela\s+est[aá]\s+llena\s+de\s+f[uú]tbol\b",
+             r"\bescuela\s+est[aá]\s+llen[ao]\s+de\s+f[uú]tbol\b",
          )),
     Case("preparation", "早く準備しないと、友人に怒られます。",
          (("prepar", "list", "rápido", "pronto"), ("enfad", "enoj", "molest", "furios", "ira")),
@@ -63,11 +64,13 @@ CASES: tuple[Case, ...] = (
          (("hanako",), ("infancia", "niñ", "primaria"),
           ("casa", "vecin", "lado"), ("primaria", "niñ", "pequeñ"))),
     Case("waking", "もう朝です。起きましょう。",
-         (("mañana", "día"), ("despiert", "levant", "levanta"))),
+         (("mañana", "día"), ("despiert", "levant", "levanta")),
+         forbidden_patterns=(r"\bya\s+es\s+mañana\b",)),
     Case("numbers_and_code", r"\V[12]の予定は12時30分です。",
          (("12",), ("30",))),
     Case("line_breaks", "学校に行きます。\r\n明日は休みです。",
-         (("escuela", "colegio"), ("mañana",))),
+         (("escuela", "colegio"), ("mañana",)),
+         forbidden_patterns=(r"\bmañana\s+es\s+vacaciones\b",)),
 )
 
 
@@ -156,7 +159,11 @@ def _restore_reviewed_time_terms(original: str, translated: str):
         return translated, []
     if re.search(r"\b(?:tarde|atardecer)\b", translated, re.IGNORECASE):
         return translated, []
-    normalized = night_pattern.sub("al atardecer", translated, count=1)
+    normalized = night_pattern.sub(
+        lambda match: (
+            "Al atardecer" if match.group(0)[0].isupper() else "al atardecer"
+        ), translated, count=1
+    )
     return normalized, [{
         "source_anchor": "夕方", "replaced": "por la noche",
         "restored": "al atardecer", "basis": "reviewed_ja_es_terminology",
@@ -349,6 +356,7 @@ def verify_phase(workspace: Path) -> int:
         return 1
     report = json.loads(report_path.read_text(encoding="utf-8"))
     accepted = [c for c in report["cases"] if c["status"] == "accepted"]
+    case_by_id = {item.id: item for item in CASES}
     errors = []
     if not report.get("backend_executed"):
         errors.append("REAL_NEURAL_INFERENCE_WAS_NOT_EXECUTED")
@@ -366,6 +374,16 @@ def verify_phase(workspace: Path) -> int:
                 if value != row["translated"]:
                     errors.append("CACHE_CONTENT_CHANGED:" + row["case"])
                     continue
+                case = case_by_id.get(row["case"])
+                if case is None:
+                    errors.append("CACHE_UNKNOWN_OR_REMOVED_CASE:" + row["case"])
+                else:
+                    semantic_problems = _semantic_errors(case, value)
+                    if semantic_problems:
+                        errors.append(
+                            "CACHE_SEMANTIC_FIDELITY_FAILED:" + row["case"] +
+                            ":" + json.dumps(semantic_problems, ensure_ascii=False)[:350]
+                        )
                 def forbidden_model(_unused: str) -> str:
                     raise RuntimeError("CACHE_MISS_TRIGGERED_NEURAL_INFERENCE")
                 try:

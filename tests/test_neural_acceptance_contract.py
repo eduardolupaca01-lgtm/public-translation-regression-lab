@@ -149,6 +149,27 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
             greeting, "¡Buenos días, Goro! No llegamos tarde hoy."
         ))
 
+    def test_reject_ungrammatical_short_model_outputs(self):
+        samples = {item.id: item for item in acceptance.CASES}
+        cases = (
+            ("greeting", "Taro ¡Buenas mañanas! No llegaste tarde."),
+            ("waking", "Ya es mañana. Vamos a levantarnos."),
+            ("line_breaks", "Voy a la escuela.\r\nMañana es vacaciones."),
+            ("sports", "Mi amigo está en el club de natación. "
+                       "Nuestra escuela está lleno de fútbol. "
+                       "Tenemos un nuevo profesor de natación."),
+        )
+        for case_id, bad in cases:
+            with self.subTest(case=case_id):
+                self.assertTrue(acceptance._semantic_errors(samples[case_id], bad))
+
+    def test_evening_glossary_respects_sentence_initial_capitalization(self):
+        result, edits = acceptance._restore_reviewed_time_terms(
+            "夕方に行きます。", "Por la noche iré al parque."
+        )
+        self.assertEqual(result, "Al atardecer iré al parque.")
+        self.assertEqual(len(edits), 1)
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"

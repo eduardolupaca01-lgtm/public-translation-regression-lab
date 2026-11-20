@@ -75,7 +75,9 @@ def run(
     workspace.mkdir(parents=True)
     started = time.monotonic()
     report = {
-        "schema": "public-real-direct-marian-ja-es-v1",
+        "schema": ("public-real-direct-marian-ja-es-v1"
+                   if "MARIAN" in model_kind else
+                   "public-real-direct-m2m100-ja-es-v1"),
         "kind": model_kind,
         "required_cases": len(CASES), "routes": ["ja_es"],
         "backend_executed": False, "cases": [], "models": [],
