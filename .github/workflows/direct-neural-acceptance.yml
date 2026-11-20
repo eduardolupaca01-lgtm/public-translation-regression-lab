@@ -1,0 +1,52 @@
+name: Public direct Japanese-to-Spanish Marian acceptance
+
+on:
+  push:
+    paths:
+      - ".github/workflows/direct-neural-acceptance.yml"
+      - "tools/direct_marian_acceptance.py"
+      - "tools/neural_acceptance.py"
+      - "translation_lab/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-direct-neural-ja-es-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-direct-marian:
+    name: Direct Marian JA-ES + SQLite restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_HOME: /tmp/public-marian-hf-cache
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      CI_WORKSPACE: /tmp/direct-neural-ja-es
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check public repository for private assets
+        run: python tools/publication_guard.py
+      - name: Run structural and acceptance contract checks
+        run: python -m unittest discover -s tests -v
+      - name: Install public PyTorch CPU runtime
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            --index-url https://download.pytorch.org/whl/cpu torch==2.6.0
+      - name: Install pinned public Marian inference dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            transformers==4.57.1 sentencepiece==0.2.1 sacremoses==0.1.1
+      - name: Run real public Japanese-to-Spanish direct neural inference
+        run: python -m tools.direct_marian_acceptance translate --workspace "$CI_WORKSPACE"
+      - name: Reopen durable SQLite in a separate process without model weights
+        if: always()
+        run: python -m tools.direct_marian_acceptance verify --workspace "$CI_WORKSPACE"
