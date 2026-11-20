@@ -1,4 +1,4 @@
-"""Tests for preserving literal tokens without fragmenting translation context."""
+"""Tests for native RPG placeholders that remain in translation context."""
 import re
 import unittest
 
@@ -8,7 +8,7 @@ from translation_lab.pipeline import (
 )
 
 
-MARKER = re.compile(r"ZXQPH(?:CODE|NUM|TERM)\d+QXZ")
+NUMERIC_MARKER = re.compile(r"\\V\[9\d{5}\]")
 
 
 class TestContextualLiteralProtection(unittest.TestCase):
@@ -17,11 +17,12 @@ class TestContextualLiteralProtection(unittest.TestCase):
 
         def fake_translate(fragment):
             observed.append(fragment)
-            markers = MARKER.findall(fragment)
-            self.assertEqual(len(markers), 2)
+            markers = NUMERIC_MARKER.findall(fragment)
+            self.assertEqual(len(markers), 1)
+            self.assertIn(r"\N[3]", fragment)
             return (
-                "Mañana, " + markers[0]
-                + " regresará a las " + markers[1] + " de la tarde."
+                "Mañana, \\N[3] regresará a las "
+                + markers[0] + " de la tarde."
             )
 
         source = "明日、\\N[3]は午後6時に戻ります。"
@@ -41,21 +42,22 @@ class TestContextualLiteralProtection(unittest.TestCase):
         self.assertEqual(len(observed), 1)
         self.assertIn("明日", observed[0])
         self.assertIn("午後", observed[0])
-        self.assertNotIn(r"\N[3]", observed[0])
+        self.assertIn(r"\N[3]", observed[0])
         self.assertNotIn("6", observed[0])
-        self.assertEqual(len(MARKER.findall(observed[0])), 2)
+        self.assertEqual(len(NUMERIC_MARKER.findall(observed[0])), 1)
 
     def test_document_line_breaks_and_two_numeric_literals_are_restored(self):
         observed = []
 
         def fake_translate(fragment):
             observed.append(fragment)
-            markers = MARKER.findall(fragment)
-            self.assertEqual(len(markers), 3)
+            markers = NUMERIC_MARKER.findall(fragment)
+            self.assertEqual(len(markers), 2)
+            self.assertIn(r"\N[3]", fragment)
             return (
-                "Mañana, " + markers[0] + " regresará a las "
-                + markers[1] + " de la tarde.\r\n"
-                "La recepción abrirá a las " + markers[2] + " de la mañana."
+                "Mañana, \\N[3] regresará a las " + markers[0]
+                + " de la tarde.\r\n"
+                "La recepción abrirá a las " + markers[1] + " de la mañana."
             )
 
         source = (
@@ -81,52 +83,76 @@ class TestContextualLiteralProtection(unittest.TestCase):
         )
         self.assertEqual(len(observed), 1)
 
-    def test_missing_marker_is_rejected(self):
-        source = "明日、\\N[3]は戻ります。"
+    def test_missing_numeric_marker_is_rejected(self):
+        source = "明日、\\N[3]は午後6時に戻ります。"
         with self.assertRaises(TranslationRejected):
             translate_checked(
                 source,
-                lambda _fragment: "Mañana regresará.",
+                lambda _fragment: "Mañana, \\N[3] regresará por la tarde.",
                 source="ja",
+                protect_numbers=True,
                 protect_literals_in_context=True,
                 contextualize_name_codes=False,
                 split_model_sentences="document",
             )
 
-    def test_duplicated_marker_is_rejected(self):
-        source = "明日、\\N[3]は戻ります。"
+    def test_duplicated_numeric_marker_is_rejected(self):
+        source = "明日、\\N[3]は午後6時に戻ります。"
 
         def duplicate(fragment):
-            marker = MARKER.findall(fragment)[0]
-            return "Mañana " + marker + " y " + marker + " regresará."
+            marker = NUMERIC_MARKER.findall(fragment)[0]
+            return (
+                "Mañana, \\N[3] regresará a las " + marker
+                + " y luego volverá a las " + marker + "."
+            )
 
         with self.assertRaises(TranslationRejected):
             translate_checked(
                 source,
                 duplicate,
                 source="ja",
+                protect_numbers=True,
                 protect_literals_in_context=True,
                 contextualize_name_codes=False,
                 split_model_sentences="document",
             )
 
-    def test_reordered_markers_follow_spanish_grammar_and_are_restored(self):
+    def test_unknown_numeric_marker_is_rejected(self):
+        source = "明日、\\N[3]は午後6時に戻ります。"
+
+        def substitute_unknown(fragment):
+            marker = NUMERIC_MARKER.findall(fragment)[0]
+            return "Mañana, \\N[3] regresará a las " + marker.replace(
+                "987650", "999999"
+            ) + "."
+
+        with self.assertRaises(TranslationRejected):
+            translate_checked(
+                source,
+                substitute_unknown,
+                source="ja",
+                protect_numbers=True,
+                protect_literals_in_context=True,
+                contextualize_name_codes=False,
+                split_model_sentences="document",
+            )
+
+    def test_name_code_and_numeric_marker_follow_spanish_word_order(self):
         # Japanese places the time before the named subject; natural Spanish
-        # places the subject before the time. Both immutable markers must survive.
+        # places the named subject before the time. Both source literals survive.
         source = "午後6時に\\N[3]は来ます。"
         observed = []
 
-        def reorder(fragment):
-            markers = MARKER.findall(fragment)
-            observed.extend(markers)
-            self.assertEqual(len(markers), 2)
-            # Source order: numeric time, then name code.
-            # Spanish order: name code, then numeric time.
-            return markers[1] + " llegará a las " + markers[0] + "."
+        def reorder_for_spanish(fragment):
+            markers = NUMERIC_MARKER.findall(fragment)
+            observed.append(fragment)
+            self.assertEqual(len(markers), 1)
+            self.assertIn(r"\N[3]", fragment)
+            return "\\N[3] llegará a las " + markers[0] + "."
 
         translated = translate_checked(
             source,
-            reorder,
+            reorder_for_spanish,
             source="ja",
             protect_numbers=True,
             contextualize_name_codes=False,
@@ -134,8 +160,7 @@ class TestContextualLiteralProtection(unittest.TestCase):
             split_model_sentences="document",
         )
         self.assertEqual(translated, "\\N[3] llegará a las 6.")
-        self.assertEqual(len(observed), 2)
-        self.assertEqual(len(set(observed)), 2)
+        self.assertEqual(len(observed), 1)
 
 
 if __name__ == "__main__":
