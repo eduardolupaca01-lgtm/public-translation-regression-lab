@@ -49,6 +49,9 @@ MODEL_SPECS = {
 }
 CT2_VERSION = "4.8.2"
 TRANSFORMERS_VERSION = "4.57.6"
+PROTECT_NUMBERS = True
+CONTEXTUALIZE_NAME_CODES = False
+PROTECT_LITERALS_IN_CONTEXT = True
 
 
 @dataclass
@@ -126,6 +129,9 @@ def _load_model(candidate: str):
         "transformers_version": TRANSFORMERS_VERSION,
         "device": "cpu",
         "trust_remote_code": False,
+        "protect_numbers_before_inference": PROTECT_NUMBERS,
+        "contextualize_name_codes": CONTEXTUALIZE_NAME_CODES,
+        "protect_literals_in_context": PROTECT_LITERALS_IN_CONTEXT,
         "model_page": spec["model_page"],
     }
     return MadladTranslator(tokenizer, translator, spec["target_tag"]), [provenance]
@@ -169,7 +175,13 @@ def translate_phase(candidate: str, workspace: Path, model_loader=None) -> int:
             "uniform_segmentation_modes": [
                 "document_context", "line_context", "sentence_context"
             ],
-            "numeric_literals_sent_to_model": True,
+            "numeric_literals_sent_to_model": False,
+            "numeric_literals_protected_before_inference": PROTECT_NUMBERS,
+            "control_codes_protected_in_original_position": True,
+            "contextualize_name_codes": CONTEXTUALIZE_NAME_CODES,
+            "protected_literals_remain_in_model_context": PROTECT_LITERALS_IN_CONTEXT,
+            "protected_literal_markers_must_appear_exactly_once": True,
+            "protected_literal_order_may_change_for_target_grammar": True,
             "structural_protection_only": True,
             "selection": "first_candidate_passing_frozen_semantic_policy",
             "all_cases_required": True,
@@ -229,9 +241,10 @@ def translate_phase(candidate: str, workspace: Path, model_loader=None) -> int:
                                 source_text,
                                 model_piece,
                                 source="ja",
-                                protect_numbers=False,
+                                protect_numbers=PROTECT_NUMBERS,
                                 split_model_sentences=segmentation,
-                                contextualize_name_codes=True,
+                                contextualize_name_codes=CONTEXTUALIZE_NAME_CODES,
+                                protect_literals_in_context=PROTECT_LITERALS_IN_CONTEXT,
                             )
                             candidate_box.append(translated)
                             validate_translation(
