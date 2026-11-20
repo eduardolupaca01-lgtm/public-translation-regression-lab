@@ -36,6 +36,62 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         self.assertEqual(acceptance._semantic_missing(
             "Gracias.", (("gracias", "agradez"),)), [])
 
+    def test_reject_unfaithful_sports_relation_despite_keywords(self):
+        case = next(sample for sample in acceptance.CASES
+                    if sample.id == "sports")
+        wrong = ("Estoy en el club de fútbol. Mi amigo es un club de natación. "
+                 "Nuestra escuela está llena de fútbol. "
+                 "Hay un nuevo profesor en la zona de natación.")
+        issue = acceptance._semantic_errors(case, wrong)
+        self.assertTrue(any("UNFAITHFUL_RELATIONSHIP" in x for x in issue))
+
+    def test_reject_inverted_passive_actor_despite_keywords(self):
+        case = next(sample for sample in acceptance.CASES
+                    if sample.id == "preparation")
+        wrong = "Si no te preparas, estarás enfadado con tus amigos."
+        issue = acceptance._semantic_errors(case, wrong)
+        self.assertTrue(any("PASSIVE_AGENT" in x or
+                            "UNFAITHFUL_RELATIONSHIP" in x for x in issue))
+
+    def test_reject_unrelated_numeric_fragments(self):
+        case = next(sample for sample in acceptance.CASES
+                    if sample.id == "numbers_and_code")
+        wrong = r"\V[12]Cuadro12Hora30Contáctenos"
+        self.assertIn("TIME_RELATION_NOT_PRESERVED",
+                      acceptance._semantic_errors(case, wrong))
+
+    def test_reject_language_selection_notice_as_translation(self):
+        self.assertTrue(acceptance._model_boilerplate(
+            "Sorry, this entry is only available in Japanese."))
+        self.assertFalse(acceptance._model_boilerplate(
+            "I will go to school tomorrow."))
+
+    def test_numeric_context_reaches_model_and_remains_strict(self):
+        from translation_lab.pipeline import translate_checked, TranslationRejected
+        sample = r"\V[12]の予定は12時30分です。"
+        calls = []
+
+        def good(fragment):
+            calls.append(fragment)
+            return "El horario es a las 12:30."
+        result = translate_checked(sample, good, protect_numbers=False)
+        self.assertEqual(calls, ["の予定は12時30分です。"])
+        self.assertIn(r"\V[12]", result)
+        self.assertIn("12:30", result)
+        with self.assertRaises(TranslationRejected):
+            translate_checked(sample, lambda _: "El horario es a las 12:31.",
+                              protect_numbers=False)
+
+    def test_sentence_boundary_survives_model_omitted_stop(self):
+        from translation_lab.pipeline import translate_checked
+        phrases = {
+            "もう朝です。": "Por la mañana",
+            "起きましょう。": "Vamos a levantarnos.",
+        }
+        output = translate_checked("もう朝です。起きましょう。",
+                                   lambda part: phrases[part])
+        self.assertEqual(output, "Por la mañana. Vamos a levantarnos.")
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"
