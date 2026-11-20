@@ -1,0 +1,46 @@
+name: Public real-neural Japanese-to-Spanish acceptance
+
+on:
+  push:
+    paths:
+      - ".github/workflows/real-neural-acceptance.yml"
+      - "tools/neural_acceptance.py"
+      - "translation_lab/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-neural-ja-es-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  neural-public-models:
+    name: Real Argos ja-en-es + durable SQLite restart
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ARGOS_CHUNK_TYPE: NONE
+      ARGOS_DEVICE_TYPE: cpu
+      ARGOS_PACKAGES_DIR: ${{ runner.temp }}/argos-public-models
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      CI_WORKSPACE: ${{ runner.temp }}/real-neural-ja-es
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Ensure no private assets are in this public repository
+        run: python tools/publication_guard.py
+      - name: Verify structural contracts before model downloads
+        run: python -m unittest discover -s tests -v
+      - name: Install public Argos inference runtime
+        run: python -m pip install --disable-pip-version-check --prefer-binary --no-input argostranslate==1.11.0
+      - name: Download ONLY official public ja-en and en-es models and run neural inference
+        id: neural
+        run: python tools/neural_acceptance.py translate --workspace "$CI_WORKSPACE"
+      - name: Verify durable SQLite in a fresh process without importing models
+        if: always()
+        run: python tools/neural_acceptance.py verify --workspace "$CI_WORKSPACE"
