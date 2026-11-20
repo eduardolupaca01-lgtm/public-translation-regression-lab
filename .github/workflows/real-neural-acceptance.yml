@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      ARGOS_CHUNK_TYPE: NONE
+      ARGOS_CHUNK_TYPE: MINISBD
       ARGOS_DEVICE_TYPE: cpu
       ARGOS_PACKAGES_DIR: /tmp/argos-public-models
       OMP_NUM_THREADS: "2"
