@@ -31,7 +31,7 @@ class TestQwenCandidateContracts(unittest.TestCase):
         self.assertEqual(QUANTIZATION, "Q4_K_M")
         self.assertEqual(LLAMA_CPP_RELEASE, "b12584")
 
-    def test_control_codes_and_numbers_use_structural_protection(self):
+    def test_native_rpg_placeholders_stay_in_model_context(self):
         self.assertTrue(PROTECT_NUMBERS)
         self.assertFalse(CONTEXTUALIZE_NAME_CODES)
         self.assertTrue(PROTECT_LITERALS_IN_CONTEXT)
