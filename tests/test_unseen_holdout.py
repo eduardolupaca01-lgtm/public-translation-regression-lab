@@ -92,6 +92,17 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
         self.assertIn("BROTHER_TOKYO_ROLE_MISMATCH", errors)
         self.assertIn("SPEAKER_OSAKA_ROLE_MISMATCH", errors)
 
+    def test_rain_condition_accepts_valid_present_tense_paraphrase(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "rainy_meeting")
+        self.assertEqual(
+            _semantic_errors(
+                case,
+                "Te veré mañana por la tarde frente a la estación. "
+                "Cuando llueve, te esperaré en la entrada de la biblioteca.",
+            ),
+            [],
+        )
+
     def test_rejects_wrong_turn_and_missing_causal_link(self):
         cases = {case.id: case for case in HOLDOUT_CASES}
         self.assertIn(

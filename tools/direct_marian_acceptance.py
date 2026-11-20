@@ -155,9 +155,10 @@ def run(
                             candidate = translate_checked(
                                 source_variant, model_piece, source="ja",
                                 glossary=dict(sample.glossary),
-                                protect_numbers=sample.id != "numbers_and_code",
+                                protect_numbers=False,
                                 inline_glossary=inline,
                                 split_model_sentences=sentence_split,
+                                contextualize_name_codes=True,
                             )
                             # Recheck every proposal against the ORIGINAL
                             # Japanese even when a source paraphrase was used.

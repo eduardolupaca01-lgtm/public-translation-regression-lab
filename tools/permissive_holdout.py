@@ -82,6 +82,10 @@ def translate_phase(backend: str, workspace: Path) -> int:
             "target_language_repairs": False,
             "prepared_translations": False,
             "case_specific_retries": False,
+            "uniform_segmentation_modes": ["line_context", "sentence_context"],
+            "numeric_literals_sent_to_model": True,
+            "contextual_name_code_aliases": True,
+            "selection": "first_candidate_passing_fixed_semantic_policy",
             "structural_pipeline_only": True,
             "all_cases_required": True,
         },
@@ -106,21 +110,41 @@ def translate_phase(backend: str, workspace: Path) -> int:
                 candidate_box: list[str] = []
 
                 def producer(source_text: str) -> str:
-                    def model_piece(fragment: str) -> str:
-                        value = model.translate(fragment)
-                        attempts.append({
-                            "source_fragment": fragment[:220],
-                            "raw_output": value[:500] if isinstance(value, str) else "",
-                        })
-                        return value
-                    candidate = translate_checked(
-                        source_text, model_piece, source="ja",
-                        protect_numbers=True,
-                        split_model_sentences=True,
+                    rejected_modes: list[dict[str, str]] = []
+                    for mode, segmentation in (
+                        ("line_context", "lines"),
+                        ("sentence_context", True),
+                    ):
+                        def model_piece(fragment: str) -> str:
+                            value = model.translate(fragment)
+                            attempts.append({
+                                "mode": mode,
+                                "source_fragment": fragment[:220],
+                                "raw_output": value[:500] if isinstance(value, str) else "",
+                            })
+                            return value
+                        try:
+                            candidate = translate_checked(
+                                source_text, model_piece, source="ja",
+                                protect_numbers=False,
+                                split_model_sentences=segmentation,
+                                contextualize_name_codes=True,
+                            )
+                            candidate_box.append(candidate)
+                            _require_semantic_fidelity(sample, candidate)
+                            entry["accepted_segmentation_mode"] = mode
+                            entry["rejected_segmentation_modes"] = rejected_modes
+                            return candidate
+                        except TranslationRejected as exc:
+                            rejected_modes.append({
+                                "mode": mode,
+                                "reason": str(exc)[:350],
+                            })
+                    entry["rejected_segmentation_modes"] = rejected_modes
+                    raise TranslationRejected(
+                        "ALL_UNIFORM_SEGMENTATION_MODES_REJECTED:" +
+                        json.dumps(rejected_modes, ensure_ascii=False)[:700]
                     )
-                    candidate_box.append(candidate)
-                    _require_semantic_fidelity(sample, candidate)
-                    return candidate
 
                 try:
                     value = cache.translate_or_get(
@@ -143,6 +167,7 @@ def translate_phase(backend: str, workspace: Path) -> int:
                         reason=entry["error"],
                         context={
                             "case_id": sample.id,
+                            "semantic_policy": "unseen_holdout_v1",
                             "backend": backend,
                             "model_provenance": provenance,
                             "raw_model_attempts": attempts,

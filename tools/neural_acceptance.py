@@ -543,10 +543,12 @@ def translate_phase(workspace: Path) -> int:
                     spanish = translate_checked(
                         japanese, neural, source="ja",
                         glossary=dict(sample.glossary),
-                        # Preserve number *context* during neural inference.
-                        # Exact values still must survive validation before
-                        # a result is allowed to enter SQLite.
-                        protect_numbers=sample.id != "numbers_and_code")
+                        # Keep numbers in the Japanese clause so they do not
+                        # split a time expression into ungrammatical fragments.
+                        # Exact values are still checked before SQLite writes.
+                        protect_numbers=False,
+                        contextualize_name_codes=True,
+                    )
                     spanish, approved_edits = _restore_reviewed_time_terms(
                         japanese, spanish
                     )

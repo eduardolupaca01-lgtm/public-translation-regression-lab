@@ -101,6 +101,9 @@ def translate_phase(workspace: Path) -> int:
             "prepared_translations": False,
             "case_specific_retries": False,
             "glossary_edits": False,
+            "segmentation_mode": "line_context",
+            "numeric_literals_sent_to_model": True,
+            "contextual_name_code_aliases": True,
             "structural_protection_only": True,
             "all_cases_required": True,
         },
@@ -142,7 +145,8 @@ def translate_phase(workspace: Path) -> int:
 
                     english = translate_checked(
                         source_text, translate_ja_en, source="ja",
-                        protect_numbers=True, split_model_sentences=True,
+                        protect_numbers=False, split_model_sentences="lines",
+                        contextualize_name_codes=True,
                     )
                     entry["intermediate_english"] = english[:1400]
 
@@ -156,7 +160,8 @@ def translate_phase(workspace: Path) -> int:
 
                     spanish = translate_checked(
                         english, translate_en_es, source="en",
-                        protect_numbers=True, split_model_sentences=True,
+                        protect_numbers=False, split_model_sentences="lines",
+                        contextualize_name_codes=True,
                     )
                     candidate_box.append(spanish)
                     _require_semantic_fidelity(sample, spanish)
@@ -183,6 +188,7 @@ def translate_phase(workspace: Path) -> int:
                         reason=entry["error"],
                         context={
                             "case_id": sample.id,
+                            "semantic_policy": "unseen_holdout_v1",
                             "route": ["ja-en", "en-es"],
                             "model_provenance": provenance,
                             "intermediate_english": entry.get("intermediate_english", ""),

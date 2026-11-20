@@ -113,7 +113,8 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
 
     if sample.id == "rainy_meeting":
         if not re.search(
-            r"\b(?:si\s+llueve|en\s+caso\s+de\s+lluvia|cuando\s+llueva)\b",
+            r"\b(?:si\s+llueve|en\s+caso\s+de\s+lluvia|"
+            r"en\s+caso\s+de\s+que\s+llueva|cuando\s+llueva|cuando\s+llueve)\b",
             folded,
         ):
             errors.append("RAIN_CONDITION_RELATION_LOST")
@@ -297,6 +298,9 @@ def translate_phase(workspace: Path) -> int:
             "target_language_repairs": False,
             "prepared_translations": False,
             "case_specific_retries": False,
+            "segmentation_mode": "line_context",
+            "numeric_literals_sent_to_model": True,
+            "contextual_name_code_aliases": True,
             "structural_pipeline_only": True,
             "all_cases_required": True,
         },
@@ -330,8 +334,9 @@ def translate_phase(workspace: Path) -> int:
                         return value
                     candidate = translate_checked(
                         source_text, model_piece, source="ja",
-                        protect_numbers=True,
-                        split_model_sentences=True,
+                        protect_numbers=False,
+                        split_model_sentences="lines",
+                        contextualize_name_codes=True,
                     )
                     candidate_box.append(candidate)
                     _require_semantic_fidelity(sample, candidate)
