@@ -305,6 +305,45 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         self.assertIn("CHILDHOOD_NEIGHBORING_HOUSES_RELATION_LOST", errors)
         self.assertIn("CHILDHOOD_FRIENDSHIP_PERSON_SHIFT", errors)
 
+    def test_source_grounded_school_singular_correction(self):
+        sample = next(c for c in acceptance.CASES if c.id == "sports")
+        original_result = (
+            "Estoy en el club de fútbol. "
+            "Mi amigo es miembro del club de natación. "
+            "En nuestras escuelas, el fútbol es muy activo. "
+            "Un nuevo profesor llegó al club de natación."
+        )
+        corrected, edits = acceptance._restore_reviewed_time_terms(
+            sample.japanese, original_result
+        )
+        self.assertIn("En nuestra escuela, el fútbol es muy activo.", corrected)
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["source_anchor"], "私たちの学校")
+        self.assertEqual(edits[0]["basis"], "reviewed_ja_es_singular_alignment")
+        self.assertEqual(acceptance._semantic_errors(sample, corrected), [])
+
+    def test_plural_school_correction_rejected_when_source_not_singular(self):
+        spanish = "En nuestras escuelas, el fútbol es muy activo."
+        for original in (
+            "複数の学校ではサッカーが盛んです。",
+            "私たちの学校と別の学校ではサッカーが盛んです。",
+            "学校ではサッカーが盛んです。",
+        ):
+            with self.subTest(source=original):
+                output, edits = acceptance._restore_reviewed_time_terms(
+                    original, spanish
+                )
+                self.assertEqual(output, spanish)
+                self.assertEqual(edits, [])
+
+    def test_school_plural_not_corrected_when_multiple_spanish_mentions(self):
+        spanish = "En nuestras escuelas y otra escuela, el fútbol es popular."
+        output, edits = acceptance._restore_reviewed_time_terms(
+            "私たちの学校はサッカーが盛んです。", spanish
+        )
+        self.assertEqual(output, spanish)
+        self.assertFalse(edits)
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"

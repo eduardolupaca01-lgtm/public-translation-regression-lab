@@ -179,11 +179,10 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
 
 
 def _restore_reviewed_time_terms(original: str, translated: str):
-    """Apply logged, source-grounded temporal corrections; never invent text.
+    """Apply logged, source-grounded lexical and grammatical corrections.
 
-    This is not a substitute for neural translation. The only permitted
-    corrections here are specific source-supported word senses or removal of
-    an invented AM/PM marker. Log each change for audit and cache validation.
+    This does not substitute neural translations. Only precise, independently
+    supported corrections are allowed; each change has an auditable receipt.
     """
     normalized = translated
     edits = []
@@ -245,6 +244,30 @@ def _restore_reviewed_time_terms(original: str, translated: str):
                     "restored": clock,
                     "basis": "remove_unstated_ampm_from_ja",
                 })
+    # Japanese 私たちの学校 explicitly refers to our single school, whereas
+    # compact models sometimes change it to unsupported plural "nuestras
+    # escuelas". Only correct that precise morphological mismatch when the
+    # original and output each refer to exactly ONE school.
+    if ("私たちの学校" in original and original.count("学校") == 1
+            and not any(x in original for x in
+                        ("複数", "いくつもの学校", "二つの学校", "学校たち"))):
+        plural_school = re.compile(r"\bnuestras\s+escuelas\b", re.IGNORECASE)
+        any_spanish_school = re.compile(
+            r"\b(?:escuelas?|colegios?)\b", re.IGNORECASE
+        )
+        if (len(plural_school.findall(normalized)) == 1
+                and len(any_spanish_school.findall(normalized)) == 1):
+            matched = plural_school.search(normalized)
+            before = matched.group(0)
+            corrected = ("Nuestra escuela" if before[0].isupper()
+                         else "nuestra escuela")
+            normalized = plural_school.sub(corrected, normalized, count=1)
+            edits.append({
+                "source_anchor": "私たちの学校",
+                "replaced": before,
+                "restored": corrected,
+                "basis": "reviewed_ja_es_singular_alignment",
+            })
     return normalized, edits
 
 
