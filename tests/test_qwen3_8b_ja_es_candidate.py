@@ -24,8 +24,8 @@ from translation_lab.pipeline import TranslationRejected
 
 class TestQwenCandidateContracts(unittest.TestCase):
     def test_model_and_runtime_are_pinned(self):
-        self.assertEqual(BASE_MODEL, "Qwen/Qwen3-8B-GGUF")
-        self.assertEqual(MODEL_REPO, "lmstudio-community/Qwen3-8B-GGUF-GGUF")
+        self.assertEqual(BASE_MODEL, "Qwen/Qwen3-8B")
+        self.assertEqual(MODEL_REPO, "Qwen/Qwen3-8B-GGUF")
         self.assertRegex(MODEL_REVISION, r"^[0-9a-f]{40}$")
         self.assertEqual(MODEL_FILENAME, "Qwen3-8B-Q4_K_M.gguf")
         self.assertRegex(MODEL_SHA256, r"^[0-9a-f]{64}$")
