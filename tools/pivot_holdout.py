@@ -2,7 +2,8 @@
 
 Both public Marian models declare Apache-2.0. The route uses raw model output
 with structural token/number/line-break protection only. No paraphrases,
-glossary edits, target repairs, prepared translations, or retries are allowed.
+glossary edits, target repairs, or prepared translations are allowed. Every
+case uses the same fixed segmentation modes; no case-specific retries occur.
 """
 from __future__ import annotations
 

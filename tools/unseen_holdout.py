@@ -246,11 +246,14 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
             errors.append("ARRIVAL_DAY_CHANGED")
         if not re.search(r"\b(?:tarde|atardecer|p\.?\s*m\.?)\b", folded):
             errors.append("AFTERNOON_PERIOD_LOST")
-        clauses = [x.strip() for x in re.split(r"[.!?]+", folded) if x.strip()]
+        clauses = [
+            x.strip() for x in re.split(r"(?<!p)\.(?!\s*m\b)|[!?]+", folded)
+            if x.strip()
+        ]
         if not any(
             re.search(r"\bmañana\b", part) and
             re.search(r"\b(?:3|tres)\b", part) and
-            re.search(r"\btarde\b", part)
+            re.search(r"\b(?:tarde|atardecer|p\.?\s*m\.?)\b", part)
             for part in clauses
         ):
             errors.append("ARRIVAL_TIME_CONTEXT_LOST")

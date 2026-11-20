@@ -154,6 +154,20 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
         )
         self.assertIn("TEACHER_SILENCE_QUOTE_IS_NOT_A_REQUEST", errors)
 
+    def test_speaker_control_code_accepts_pm_clock_notation(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
+        translated = r"\N[7] llegará mañana a las 3:00 p. m."
+        self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_shop_hours_accepts_spelled_ten_without_changing_line_breaks(self):
+        case = next(x for x in HOLDOUT_CASES if x.id == "shop_hours_line_break")
+        translated = (
+            "La tienda está cerrada hoy.\r\n"
+            "Mañana abrirá a las diez de la mañana."
+        )
+        self.assertEqual(_semantic_errors(case, translated), [])
+        validate_translation(case.japanese, translated, source="ja")
+
     def test_rejects_arrival_time_detached_from_the_arrival_action(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
         errors = _semantic_errors(
