@@ -24,7 +24,62 @@ NUMERIC = r"(?<![0-9０-９])[0-9０-９]+(?![0-9０-９])"
 JAPANESE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 SENTENCE_END = re.compile(r"[。!?！？]+(?:[」』】）》]*)")
 LINE_END = re.compile(r"(\r\n|\r|\n)$")
-INTERNAL_MARKER = re.compile(r"\\V\[9876[5-9]\d+\]|ZXQTX760(?:NUM|TERM)\d+QXZ")
+
+
+def _layout_marker(index: int) -> str:
+    """Return an alphabetic-only placeholder safe from numeric protection."""
+    value = index + 1
+    letters = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return "ZXQPLB" + letters + "QXZ"
+
+
+def _protect_document_line_breaks(text: str) -> tuple[str, dict[str, str]]:
+    """Expose line boundaries to a document-context model as opaque tokens."""
+    if DOCUMENT_LAYOUT_MARKER.search(text):
+        raise TranslationRejected("DOCUMENT_LAYOUT_MARKER_COLLISION")
+    mapping: dict[str, str] = {}
+    next_index = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal next_index
+        token = _layout_marker(next_index)
+        while token in text or token in mapping:
+            next_index += 1
+            token = _layout_marker(next_index)
+        mapping[token] = match.group(0)
+        next_index += 1
+        return token
+
+    return re.sub(r"\r\n|\r|\n", replace, text), mapping
+
+
+def _restore_document_line_breaks(
+    translated: str, mapping: dict[str, str]
+) -> str:
+    """Restore exact line endings only when every placeholder survives in order."""
+    observed = DOCUMENT_LAYOUT_MARKER.findall(translated)
+    expected = list(mapping)
+    if observed != expected:
+        if observed or expected:
+            raise TranslationRejected(
+                "DOCUMENT_LAYOUT_MARKER_MISSING_DUPLICATED_OR_REORDERED"
+            )
+    if expected and ("\r" in translated or "\n" in translated):
+        raise TranslationRejected("DOCUMENT_LAYOUT_NEWLINE_NOT_PROTECTED")
+    restored = translated
+    for token, line_break in mapping.items():
+        restored = restored.replace(token, line_break, 1)
+    if DOCUMENT_LAYOUT_MARKER.search(restored):
+        raise TranslationRejected("INTERNAL_MARKER_LEAK")
+    return restored
+INTERNAL_MARKER = re.compile(
+    r"\\V\[(?:9876[5-9]\d|987[7-9]\d{2}|98[89]\d{3}|99\d{4})\]"
+    r"|ZXQTX760(?:NUM|TERM)\d+QXZ|ZXQPLB[A-Z]+QXZ"
+)
+DOCUMENT_LAYOUT_MARKER = re.compile(r"ZXQPLB[A-Z]+QXZ")
 
 
 class TranslationRejected(ValueError):
@@ -410,6 +465,9 @@ def translate_checked(
     contextual_name_codes: tuple[str, ...] = ()
     if contextualize_name_codes and source == "ja":
         model_source, contextual_name_codes = contextualize_name_code_source(original)
+    layout_mapping: dict[str, str] = {}
+    if split_model_sentences == "document" and ("\r" in model_source or "\n" in model_source):
+        model_source, layout_mapping = _protect_document_line_breaks(model_source)
     if split_model_sentences not in (True, False, "lines", "document"):
         raise ValueError("UNKNOWN_SENTENCE_SEGMENTATION_MODE")
     protected, mapping = protect_literals(
@@ -449,11 +507,11 @@ def translate_checked(
         else:
             translated_chunks.append("".join(value for _, value in sentence_results))
     intermediate = "".join(translated_chunks)
+    restored_prose = restore_literals(intermediate, mapping)
+    restored_prose = _restore_document_line_breaks(restored_prose, layout_mapping)
     restored = restore_layout(
         original,
-        restore_contextual_name_codes(
-            restore_literals(intermediate, mapping), contextual_name_codes
-        ),
+        restore_contextual_name_codes(restored_prose, contextual_name_codes),
     )
     validate_translation(original, restored, source=source, required_terms=required_terms)
     return restored
