@@ -3,8 +3,11 @@ from types import SimpleNamespace
 import unittest
 
 from tools.madlad_ja_es_candidate import (
+    CONTEXTUALIZE_NAME_CODES,
     CT2_VERSION,
     MODEL_SPECS,
+    PROTECT_LITERALS_IN_CONTEXT,
+    PROTECT_NUMBERS,
     MadladTranslator,
 )
 from tools.independent_pivot_holdout import INDEPENDENT_CASES
@@ -41,6 +44,11 @@ class FakeCTranslate2:
 
 
 class TestMadladCandidateContracts(unittest.TestCase):
+    def test_protected_literals_stay_in_model_context(self):
+        self.assertTrue(PROTECT_NUMBERS)
+        self.assertFalse(CONTEXTUALIZE_NAME_CODES)
+        self.assertTrue(PROTECT_LITERALS_IN_CONTEXT)
+
     def test_both_candidates_are_pinned_to_immutable_revisions(self):
         self.assertEqual(set(MODEL_SPECS), {"base", "es419"})
         for candidate, spec in MODEL_SPECS.items():
