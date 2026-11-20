@@ -301,7 +301,7 @@ def _contextualize_name_codes(original: str) -> tuple[str, tuple[str, ...]]:
     Replace one unambiguous name token with a neutral Japanese noun for the
     model, then restore the exact original token in Spanish output.
     """
-    pattern = re.compile(r"\\\\N\\[\\d+\\](?=[はがをにへと])")
+    pattern = re.compile(r"\\N\[\d+\](?=[はがをにへと])")
     matches = list(pattern.finditer(original))
     if not matches:
         return original, ()
@@ -320,8 +320,8 @@ def _restore_contextual_name_codes(
     result = translated
     for code in codes:
         alias = re.compile(
-            r"\\b(?:(?:el|la|un|una|este|esta|ese|esa)\\s+)?"
-            r"(?:personaje|persona|protagonista|individuo)\\b",
+            r"\b(?:(?:el|la|un|una|este|esta|ese|esa)\s+)?"
+            r"(?:personaje|persona|protagonista|individuo)\b",
             re.IGNORECASE,
         )
         match = alias.search(result)

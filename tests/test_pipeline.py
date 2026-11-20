@@ -269,7 +269,7 @@ class TestInlineGlossaryContext(unittest.TestCase):
 
     def test_line_context_mode_preserves_crlf_and_full_line_context(self):
         source = (
-            "今日は店が休みです。\\r\\n"
+            "今日は店が休みです。\r\n"
             "明日は午前10時に開きます。"
         )
         seen = []
@@ -290,12 +290,12 @@ class TestInlineGlossaryContext(unittest.TestCase):
         self.assertEqual(seen, list(outputs))
         self.assertEqual(
             result,
-            "La tienda está cerrada hoy.\\r\\n"
+            "La tienda está cerrada hoy.\r\n"
             "Mañana abrirá a las 10 de la mañana.",
         )
 
     def test_contextual_name_code_keeps_its_subject_clause(self):
-        source = r"\\N[7]は明日の午後3時に来ます。"
+        source = r"\N[7]は明日の午後3時に来ます。"
         seen = []
 
         def model(fragment):
@@ -309,12 +309,12 @@ class TestInlineGlossaryContext(unittest.TestCase):
         )
         self.assertEqual(len(seen), 1)
         self.assertEqual(
-            result, r"\\N[7] vendrá mañana a las 3 de la tarde."
+            result, r"\N[7] vendrá mañana a las 3 de la tarde."
         )
         validate_translation(source, result, source="ja")
 
     def test_contextual_name_code_can_restore_a_null_spanish_subject(self):
-        source = r"\\N[7]は明日の午後3時に来ます。"
+        source = r"\N[7]は明日の午後3時に来ます。"
 
         def model(_fragment):
             return "Vendrá mañana a las 3 de la tarde."
@@ -324,6 +324,6 @@ class TestInlineGlossaryContext(unittest.TestCase):
             contextualize_name_codes=True,
         )
         self.assertEqual(
-            result, r"\\N[7] Vendrá mañana a las 3 de la tarde."
+            result, r"\N[7] Vendrá mañana a las 3 de la tarde."
         )
         validate_translation(source, result, source="ja")
