@@ -14,12 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: madlad-ja-es-candidate-${ github.ref }
+  group: madlad-ja-es-candidate-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   compare:
-    name: MADLAD direct ja-es (${ matrix.candidate })
+    name: MADLAD direct ja-es (${{ matrix.candidate }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -33,7 +33,7 @@ jobs:
       TOKENIZERS_PARALLELISM: "false"
       OMP_NUM_THREADS: "2"
       OPENBLAS_NUM_THREADS: "2"
-      MADLAD_WORKSPACE: /tmp/madlad-${ matrix.candidate }-quality
+      MADLAD_WORKSPACE: /tmp/madlad-${{ matrix.candidate }}-quality
     steps:
       - uses: actions/checkout@v4
 
@@ -62,25 +62,25 @@ jobs:
       - name: Run real MADLAD inference on the fixed 20-case development benchmark
         run: |
           python -m tools.madlad_ja_es_candidate translate \
-            --candidate "${ matrix.candidate }" \
+            --candidate "${{ matrix.candidate }}" \
             --workspace "$MADLAD_WORKSPACE"
 
       - name: Verify accepted SQLite rows in a fresh process without model weights
         if: always()
         run: |
           python -m tools.madlad_ja_es_candidate verify \
-            --candidate "${ matrix.candidate }" \
+            --candidate "${{ matrix.candidate }}" \
             --workspace "$MADLAD_WORKSPACE"
 
       - name: Preserve raw outputs, translations, and cold-restart proof
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: madlad-ja-es-${ matrix.candidate }-candidate-receipts
+          name: madlad-ja-es-${{ matrix.candidate }}-candidate-receipts
           retention-days: 30
           if-no-files-found: warn
           path: |
-            /tmp/madlad-${ matrix.candidate }-quality/madlad-candidate-report.json
-            /tmp/madlad-${ matrix.candidate }-quality/madlad-restart-proof.json
-            /tmp/madlad-${ matrix.candidate }-quality/review-queue.json
-            /tmp/madlad-${ matrix.candidate }-quality/cache/translation-cache.sqlite3
+            /tmp/madlad-${{ matrix.candidate }}-quality/madlad-candidate-report.json
+            /tmp/madlad-${{ matrix.candidate }}-quality/madlad-restart-proof.json
+            /tmp/madlad-${{ matrix.candidate }}-quality/review-queue.json
+            /tmp/madlad-${{ matrix.candidate }}-quality/cache/translation-cache.sqlite3
