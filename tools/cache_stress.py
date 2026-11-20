@@ -7,6 +7,7 @@ visible; its output must never be mistaken for real translation quality.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -38,7 +39,7 @@ def audit_database(workspace: Path) -> Path:
 
 
 def setup_audit(workspace: Path) -> None:
-    with sqlite3.connect(audit_database(workspace), timeout=30) as connection:
+    with closing(sqlite3.connect(audit_database(workspace), timeout=30)) as connection:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS attempts("
             " source_id TEXT NOT NULL, worker_id TEXT NOT NULL)"
@@ -128,7 +129,7 @@ def stale_update(workspace: Path, replay_only: bool) -> int:
         def model(_text: str) -> str:
             if replay_only:
                 raise AssertionError("STALE_UPGRADE_RETRANSLATED")
-            with sqlite3.connect(audit_database(workspace), timeout=30) as audit:
+            with closing(sqlite3.connect(audit_database(workspace), timeout=30)) as audit:
                 record_attempt(audit, "stale", "upgrade")
             return expected
         result = cache.translate_or_get(
@@ -158,7 +159,7 @@ def recover_worker(workspace: Path) -> int:
         if cache.get("ja", "es", original) is not None:
             raise AssertionError("CRASH_PERSISTED_INCOMPLETE_RESULT")
         def model(_text: str) -> str:
-            with sqlite3.connect(audit_database(workspace), timeout=30) as audit:
+            with closing(sqlite3.connect(audit_database(workspace), timeout=30)) as audit:
                 record_attempt(audit, "crash", "recovered")
             return expected
         if cache.translate_or_get("ja", "es", original, model) != expected:
@@ -231,7 +232,7 @@ def stress(workspace: Path, cases: int = DEFAULT_CASES,
                     f"CONCURRENT_WORKER_{index}_FAILED_{child.returncode}:"
                     f"{stdout[-500:]}:{stderr[-500:]}"
                 )
-        with sqlite3.connect(audit_database(workspace), timeout=30) as audit:
+        with closing(sqlite3.connect(audit_database(workspace), timeout=30)) as audit:
             rows = audit.execute(
                 "SELECT source_id, COUNT(*) FROM attempts GROUP BY source_id"
             ).fetchall()
@@ -272,7 +273,7 @@ def stress(workspace: Path, cases: int = DEFAULT_CASES,
             workspace, "verify", cases=cases, final=1
         ):
             raise AssertionError("FINAL_REPLAY_NO_SUCCESS_MARKER")
-        with sqlite3.connect(audit_database(workspace), timeout=30) as audit:
+        with closing(sqlite3.connect(audit_database(workspace), timeout=30)) as audit:
             remaining = audit.execute(
                 "SELECT source_id, COUNT(*) FROM attempts "
                 "WHERE source_id IN ('stale','crash') GROUP BY source_id"
