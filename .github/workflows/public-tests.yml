@@ -1,0 +1,30 @@
+name: Public safe translation regression checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    name: Python stdlib checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Reject accidental private assets
+        run: python tools/publication_guard.py
+      - name: Check syntax
+        run: python -m compileall -q translation_lab tests tools
+      - name: Run isolated translation and cache tests
+        run: python -m unittest discover -s tests -v
