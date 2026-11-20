@@ -299,8 +299,20 @@ def _restore_contextual_placeholders(
         left = restored[:index]
         right = restored[index + len(marker):]
         numeric = marker.startswith("ZXQPHNUM")
-        prefix = "" if numeric else _insert_word_separator(left, value)
-        suffix = "" if numeric else _insert_word_separator(value, right)
+        if numeric:
+            prefix = suffix = ""
+        elif marker.startswith("ZXQPHCODE"):
+            prefix = (
+                " " if left and not left[-1].isspace()
+                and left[-1] not in "¿¡«“(" else ""
+            )
+            suffix = (
+                " " if right and not right[0].isspace()
+                and right[0] not in ".,;:!?)]}»”" else ""
+            )
+        else:
+            prefix = _insert_word_separator(left, value)
+            suffix = _insert_word_separator(value, right)
         restored = left + prefix + value + suffix + right
 
     if _CONTEXTUAL_LITERAL_MARKER.search(restored):
