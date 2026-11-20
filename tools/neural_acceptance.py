@@ -139,40 +139,94 @@ def _semantic_errors(sample: Case, spanish: str) -> list[str]:
         ):
             errors.append("FRIEND_SWIMMING_CLUB_MEMBERSHIP_NOT_DEMONSTRATED")
     if sample.id == "childhood":
-        first_clause = re.split(r"[.!?]", spanish.casefold(), maxsplit=1)[0]
+        clauses = [s.strip() for s in re.split(r"[.!?]", spanish.casefold())
+                   if s.strip()]
+        first_clause = clauses[0] if clauses else ""
         if re.search(r"\b(?:soy|somos)\b", first_clause):
             errors.append("CHILDHOOD_FRIEND_ACTOR_CHANGED")
+        if not re.search(r"\b(?:amig[oa]s?|compañer[oa]s?|conocid[oa])\b",
+                         first_clause):
+            errors.append("CHILDHOOD_FRIENDSHIP_NOT_DEMONSTRATED")
+        if re.search(r"\b(?:prim[oa]s?|herman[oa]s?|sobrin[oa]s?)\b",
+                     first_clause):
+            errors.append("CHILDHOOD_FRIEND_CHANGED_TO_RELATIVE")
+        if not any(
+            re.search(r"\b(?:amig[oa]s?|conoc|compañer[oa]s?)\b", clause)
+            and re.search(r"\b(?:primaria|niñ|pequeñ)\b", clause)
+            for clause in clauses[1:]
+        ):
+            errors.append("CHILDHOOD_LONG_TERM_FRIENDSHIP_LOST")
     return errors
 
 
 def _restore_reviewed_time_terms(original: str, translated: str):
-    """Explicit, source-grounded glossary for ONE common evening mistranslation.
+    """Apply logged, source-grounded temporal corrections; never invent text.
 
-    The model repeatedly renders Japanese 夕方 ('toward evening/at dusk') as
-    'por la noche' (night). Only correct that precise phrase when source
-    includes 夕方, contains no other standalone night reference, and output
-    has exactly one incorrect night phrase. This is a reviewed terminology
-    correction, recorded separately from the neural model's raw output.
+    This is not a substitute for neural translation. The only permitted
+    corrections here are specific source-supported word senses or removal of
+    an invented AM/PM marker. Log each change for audit and cache validation.
     """
-    if "夕方" not in original:
-        return translated, []
-    if any(night in original for night in ("夜", "深夜", "真夜中")):
-        return translated, []
-    night_pattern = re.compile(r"\bpor la noche\b", flags=re.IGNORECASE)
-    if len(night_pattern.findall(translated)) != 1:
-        return translated, []
-    if re.search(r"\b(?:tarde|atardecer)\b", translated, re.IGNORECASE):
-        return translated, []
-    normalized = night_pattern.sub(
-        lambda match: (
-            "Al atardecer" if match.group(0)[0].isupper() else "al atardecer"
-        ), translated, count=1
-    )
-    return normalized, [{
-        "source_anchor": "夕方", "replaced": "por la noche",
-        "restored": "al atardecer", "basis": "reviewed_ja_es_terminology",
-    }]
+    normalized = translated
+    edits = []
 
+    if ("夕方" in original and
+            not any(night in original for night in ("夜", "深夜", "真夜中"))):
+        night_pattern = re.compile(r"\bpor la noche\b", re.IGNORECASE)
+        if (len(night_pattern.findall(normalized)) == 1 and
+                not re.search(r"\b(?:tarde|atardecer)\b",
+                              normalized, re.IGNORECASE)):
+            normalized = night_pattern.sub(
+                lambda m: "Al atardecer" if m.group(0)[0].isupper()
+                else "al atardecer",
+                normalized, count=1
+            )
+            edits.append({
+                "source_anchor": "夕方", "replaced": "por la noche",
+                "restored": "al atardecer",
+                "basis": "reviewed_ja_es_terminology",
+            })
+
+    if "もう朝" in original and "明日" not in original:
+        morning_pattern = re.compile(r"\bya es mañana\b", re.IGNORECASE)
+        if len(morning_pattern.findall(normalized)) == 1:
+            normalized = morning_pattern.sub(
+                "Ya es de mañana", normalized, count=1
+            )
+            edits.append({
+                "source_anchor": "もう朝", "replaced": "Ya es mañana",
+                "restored": "Ya es de mañana",
+                "basis": "reviewed_ja_es_time_sense",
+            })
+
+    source_clock = re.findall(r"(?<!\d)(\d{1,2})時(\d{1,2})分", original)
+    qualifiers = ("午前", "午後", "朝", "昼", "夜", "夕方")
+    if len(source_clock) == 1 and not any(q in original for q in qualifiers):
+        hour, minute = (int(x) for x in source_clock[0])
+        meridiem = re.compile(
+            r"(?<!\d)(?P<clock>\d{1,2}:\d{2})\s*[ap]\.\s*m\.",
+            re.IGNORECASE
+        )
+        matches = list(meridiem.finditer(normalized))
+        if len(matches) == 1:
+            clock = matches[0].group("clock")
+            parts = clock.split(":")
+            if int(parts[0]) == hour and int(parts[1]) == minute:
+                original_meridiem = matches[0].group(0)
+                normalized = meridiem.sub(
+                    lambda m: m.group("clock"),
+                    normalized, count=1
+                )
+                if original.endswith("。") and normalized.rstrip().endswith(
+                        tuple("0123456789")):
+                    normalized += "."
+                edits.append({
+                    "source_anchor": source_clock[0][0] + "時" +
+                                     source_clock[0][1] + "分",
+                    "replaced": original_meridiem,
+                    "restored": clock,
+                    "basis": "remove_unstated_ampm_from_ja",
+                })
+    return normalized, edits
 
 
 def _require_semantic_fidelity(sample: Case, translated: str) -> None:

@@ -189,6 +189,49 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
                         "Nuestra escuela está llena de fútbol."
             )
 
+    def test_cousin_and_misassigned_childhood_actor_must_fail(self):
+        case = next(c for c in acceptance.CASES if c.id == "childhood")
+        for bad in (
+            "Hanako es mi prima. La casa está al lado. "
+            "Es mi amigo desde que era estudiante de primaria.",
+            "Hanako es mi niñez. La casa está al lado. "
+            "Es estudiante de primaria.",
+        ):
+            errors = acceptance._semantic_errors(case, bad)
+            self.assertIn("CHILDHOOD_FRIENDSHIP_NOT_DEMONSTRATED", errors)
+        valid = ("Hanako es mi amiga de la infancia. Nuestras casas están juntas. "
+                 "Somos amigas desde la primaria.")
+        self.assertEqual(acceptance._semantic_errors(case, valid), [])
+
+    def test_time_sense_morning_is_derived_from_original_only(self):
+        result, edits = acceptance._restore_reviewed_time_terms(
+            "もう朝です。起きましょう。",
+            "Ya es mañana. Vamos a levantarnos.",
+        )
+        self.assertEqual(result, "Ya es de mañana. Vamos a levantarnos.")
+        self.assertEqual(edits[0]["source_anchor"], "もう朝")
+        result2, edits2 = acceptance._restore_reviewed_time_terms(
+            "明日は休みです。",
+            "Ya es mañana. Vamos a levantarnos.",
+        )
+        self.assertEqual(result2, "Ya es mañana. Vamos a levantarnos.")
+        self.assertFalse(edits2)
+
+    def test_unstated_meridiem_is_removed_without_changing_time(self):
+        original = r"\V[12]の予定は12時30分です。"
+        output, edits = acceptance._restore_reviewed_time_terms(
+            original, r"\V[12]El plan es a las 12:30 p.m."
+        )
+        self.assertEqual(output, r"\V[12]El plan es a las 12:30.")
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0]["source_anchor"], "12時30分")
+        for qualified in ("午後12時30分です。", "午前12時30分です。"):
+            result, edits = acceptance._restore_reviewed_time_terms(
+                qualified, "El plan es a las 12:30 p.m."
+            )
+            self.assertEqual(result, "El plan es a las 12:30 p.m.")
+            self.assertFalse(edits)
+
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
             workspace = Path(root) / "result"
