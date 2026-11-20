@@ -48,6 +48,7 @@ SERVER_CONTEXT = 8192
 SERVER_THREADS = 2
 PROTECT_NUMBERS = True
 CONTEXTUALIZE_NAME_CODES = False
+PROTECT_LITERALS_IN_CONTEXT = True
 MAX_OUTPUT_TOKENS = 256
 
 SYSTEM_PROMPT = """You are a professional Japanese-to-Spanish (Latin America) translator.
@@ -65,6 +66,11 @@ Accuracy rules:
 - Use clear, neutral Latin American Spanish. Preserve the source's level of
   politeness where Spanish grammar permits.
 - Keep every line and sentence's meaning. Do not merge or reorder independent lines.
+- Tokens matching ZXQPHCODE0000QXZ, ZXQPHNUM0000QXZ, or ZXQPHTERM0000QXZ
+  are immutable placeholders for source literals. Copy each exact token exactly
+  once; never translate, alter, split, duplicate, delete, or invent one. You may
+  move a placeholder to the grammatically correct Spanish position with the
+  phrase it represents. Do not impose Japanese word order on Spanish.
 - Return only the translation. Do not add a heading, quotation marks, notes, or
   commentary."""
 
@@ -262,6 +268,7 @@ def _load_model(llama_server: Path, workspace: Path):
         "max_output_tokens": MAX_OUTPUT_TOKENS,
         "protect_numbers_before_inference": PROTECT_NUMBERS,
         "contextualize_name_codes": CONTEXTUALIZE_NAME_CODES,
+        "protect_literals_in_context": PROTECT_LITERALS_IN_CONTEXT,
         "model_page": "https://huggingface.co/" + BASE_MODEL,
         "gguf_page": "https://huggingface.co/" + MODEL_REPO,
         "trust_remote_code": False,
@@ -314,6 +321,9 @@ def translate_phase(
             "numeric_literals_protected_before_inference": True,
             "control_codes_protected_in_original_position": True,
             "contextual_name_code_aliases": False,
+            "protected_literals_remain_in_model_context": PROTECT_LITERALS_IN_CONTEXT,
+            "protected_literal_markers_must_appear_exactly_once": True,
+            "protected_literal_order_may_change_for_target_grammar": True,
             "selection": "first_candidate_passing_frozen_semantic_policy",
             "all_cases_required": True,
         },
@@ -380,6 +390,7 @@ def translate_phase(
                                 protect_numbers=PROTECT_NUMBERS,
                                 split_model_sentences=segmentation,
                                 contextualize_name_codes=CONTEXTUALIZE_NAME_CODES,
+                                protect_literals_in_context=PROTECT_LITERALS_IN_CONTEXT,
                             )
                             candidate_box.append(translated)
                             validate_translation(
