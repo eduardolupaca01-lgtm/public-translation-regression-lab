@@ -259,11 +259,11 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
             errors.append("BRIDGE_ROUTE_ORDER_OR_DIRECTION_CHANGED")
 
     elif case.id == "envelope_color_counts":
-        two_red = _near(
-            folded, r"\b(?:2|dos)\b", r"\broj\w*\b", 45
+        two_red = bool(
+            re.search(r"\b(?:2|dos)\b.{0,45}\broj\w*\b", folded)
         )
-        five_blue = _near(
-            folded, r"\b(?:5|cinco)\b", r"\bazul\w*\b", 45
+        five_blue = bool(
+            re.search(r"\b(?:5|cinco)\b.{0,45}\bazul\w*\b", folded)
         )
         if not two_red or not five_blue:
             errors.append("ENVELOPE_COLOR_COUNT_MISMATCH")
@@ -369,11 +369,13 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
             and re.search(r"\b(?:tienda|local)\b", part)
             for part in parts
         )
-        today_closed = any(
-            re.search(r"\bhoy\b", part)
-            and re.search(r"\b(?:cerrad\w*|descanso|no abre)\b", part)
-            and re.search(r"\b(?:tienda|local)\b", part)
-            for part in parts
+        today_closed = (
+            bool(re.search(r"\b(?:tienda|local)\b", folded))
+            and any(
+                re.search(r"\bhoy\b", part)
+                and re.search(r"\b(?:cerrad\w*|descanso|no abre)\b", part)
+                for part in parts
+            )
         )
         if not yesterday_open or not today_closed:
             errors.append("SHOP_DAY_STATUS_SWAPPED")
@@ -472,16 +474,21 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
             errors.append("CALL_OR_NO_REPLY_MEANING_CHANGED")
 
     elif case.id == "price_normal_vs_today":
-        normal_price = _has(
-            folded,
-            r"\bnormalmente\b.{0,55}\b(?:1000|mil)\b.{0,20}\byen\w*\b",
-            r"\b(?:1000|mil)\b.{0,20}\byen\w*.{0,40}\bnormalmente\b",
-            r"\bhabitualmente\b.{0,55}\b(?:1000|mil)\b.{0,20}\byen\w*\b",
+        price_parts = [
+            part.strip() for part in re.split(r"\bpero\b|[;.!?]+", folded)
+            if part.strip()
+        ]
+        normal_price = any(
+            _has(part, r"\b(?:normalmente|habitualmente)\b")
+            and _has(part, r"\b(?:1000|mil)\b")
+            and _has(part, r"\byen\w*\b")
+            for part in price_parts
         )
-        today_price = _has(
-            folded,
-            r"\bhoy\b.{0,55}\b(?:800|ochocientos)\b.{0,20}\byen\w*\b",
-            r"\b(?:800|ochocientos)\b.{0,20}\byen\w*.{0,40}\bhoy\b",
+        today_price = any(
+            _has(part, r"\bhoy\b")
+            and _has(part, r"\b(?:800|ochocientos)\b")
+            and _has(part, r"\byen\w*\b")
+            for part in price_parts
         )
         if not normal_price or not today_price:
             errors.append("PRICE_OR_TEMPORAL_COMPARISON_CHANGED")
