@@ -36,7 +36,7 @@ python -m unittest discover -s tests -v
 
 **No conviertas el repositorio privado existente a público ni copies los modelos o su archivo ZIP a este laboratorio.**
 
-Las acciones de este laboratorio solo comprueban el código público. No publican paquetes, ejecutables ni versiones; no conectan servicios externos y no escriben dentro del juego.
+Las acciones solo comprueban el código público. No publican paquetes, ejecutables ni versiones y no escriben en instalaciones. Los workflows neuronales independientes descargan modelos públicos temporalmente para pruebas, sin incorporarlos al repositorio.
 
 ## Publicación opcional con GitHub CLI
 
@@ -68,8 +68,8 @@ sin invocar el traductor de nuevo.
 
 **Alcance:** estas pruebas públicas validan el diseño del procesamiento de
 texto y de la caché SQLite; no implican que un motor neuronal privado esté
-corregido. La etapa de traducción neuronal real sigue pendiente y no debe
-marcarse como aprobada únicamente por superar estas pruebas con dobles.
+corregido. Las pruebas simuladas no certifican traducciones reales. La evaluación neuronal
+pública se realiza en workflows separados y conserva sus propios registros.
 
 
 ## Etapa neuronal pública (separada de las regresiones simuladas)
@@ -109,3 +109,52 @@ privada; una aprobación aquí no demuestra que aquel motor esté reparado.
 La prueba se puede abrir en la pestaña Actions, bajo
 **Public real-neural Japanese-to-Spanish acceptance**. No modifica
 instalaciones ni crea entregables de software.
+
+
+## Etapa aprobada: caché durable ante concurrencia y reinicios
+
+La ejecución pública [44735970014](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44735970014)
+aprobó en **Windows y Linux**. El workflow
+[public-cache-stress.yml](.github/workflows/public-cache-stress.yml) comprueba
+el mismo directorio SQLite desde **8 procesos independientes** para
+**36 frases sintéticas distintas**: 288 solicitudes por plataforma,
+36 llamadas al productor simulado, **0 inferencias duplicadas**.
+
+También verifica de manera independiente que:
+
+- Un proceso nuevo recupera las traducciones sin llamar al productor.
+- Una traducción obsoleta se rechaza mediante un validador de calidad
+  actualizado y se reemplaza una sola vez.
+- Un proceso terminado abruptamente mientras ejecutaba una traducción
+  libera su bloqueo; otra ejecución recupera la operación y guarda el
+  resultado completo.
+- Se conservan los códigos de control, números y saltos CRLF.
+- La validación principal y los 93 casos unitarios se ejecutan tanto en
+  Linux como en Windows.
+
+Los informes JSON de cada sistema están adjuntos como *artifacts* a esa
+ejecución. El productor es **simulado**, deliberadamente: esta prueba
+mide repetición, atomicidad operativa y recuperación, no calidad lingüística.
+
+El cambio principal está en `translation_lab/cache.py`, con bloqueos
+advisory por clave distribuidos en un máximo de 256 archivos de bloqueo,
+para coordinar procesos **en un mismo sistema de archivos**. No demuestra
+coordinación entre máquinas independientes.
+
+Como comprobación complementaria, la ejecución neuronal pública
+[NLLB 44735121295](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44735121295)
+aprobó **12/12 traducciones sintéticas** y **12/12 recuperaciones SQLite**
+usando esta implementación de caché. NLLB conserva sus condiciones de
+**investigación y uso no comercial**. Ninguna de estas aprobaciones
+certifica motores privados o calidad universal del japonés → español.
+
+### Repetir la prueba de concurrencia
+
+Con Python 3.11 y desde la raíz del repositorio:
+
+    python -m unittest discover -s tests -v
+    python -m tools.cache_stress stress --workspace /tmp/cache-stress-new --cases 36 --workers 8
+
+La carpeta `--workspace` debe ser nueva. El informe se escribe en
+`cache-stress-report.json` dentro de esa carpeta, y el comando devuelve
+un código distinto de cero ante un fallo.
