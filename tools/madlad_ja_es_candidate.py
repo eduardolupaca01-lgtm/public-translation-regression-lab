@@ -128,7 +128,7 @@ def _load_model(candidate: str):
         "trust_remote_code": False,
         "model_page": spec["model_page"],
     }
-    return MadladTranslator(tokenizer, translator, spec["target_tag"]), provenance
+    return MadladTranslator(tokenizer, translator, spec["target_tag"]), [provenance]
 
 
 def _save_json(path: Path, value: dict) -> None:
