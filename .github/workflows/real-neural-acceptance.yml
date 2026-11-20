@@ -40,7 +40,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check --prefer-binary --no-input argostranslate==1.11.0
       - name: Download ONLY official public ja-en and en-es models and run neural inference
         id: neural
-        run: python tools/neural_acceptance.py translate --workspace "$CI_WORKSPACE"
+        run: python -m tools.neural_acceptance translate --workspace "$CI_WORKSPACE"
       - name: Verify durable SQLite in a fresh process without importing models
         if: always()
-        run: python tools/neural_acceptance.py verify --workspace "$CI_WORKSPACE"
+        run: python -m tools.neural_acceptance verify --workspace "$CI_WORKSPACE"
