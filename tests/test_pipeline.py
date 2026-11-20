@@ -352,23 +352,6 @@ class TestInlineGlossaryContext(unittest.TestCase):
         validate_translation(source, result, source="ja")
 
 
-    def test_document_context_mode_keeps_multiline_context_and_exact_breaks(self):
-        source = "今日は店が休みです。\r\n明日は午前10時に開きます。"
-        seen = []
-
-        def model(fragment):
-            seen.append(fragment)
-            return "Hoy la tienda está cerrada.\r\nMañana abrirá a las diez."
-
-        result = translate_checked(
-            source, model, source="ja", protect_numbers=False,
-            split_model_sentences="document",
-        )
-        self.assertEqual(seen, [source])
-        self.assertEqual(
-            result, "Hoy la tienda está cerrada.\r\nMañana abrirá a las diez."
-        )
-
     def test_document_context_mode_sends_opaque_line_break_marker_and_restores_crlf(self):
         source = "今日は店が休みです。\r\n明日は午前10時に開きます。"
         seen = []
