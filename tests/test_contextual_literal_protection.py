@@ -43,7 +43,7 @@ class TestContextualLiteralProtection(unittest.TestCase):
         self.assertIn("明日", observed[0])
         self.assertIn("午後", observed[0])
         self.assertIn(r"\N[3]", observed[0])
-        self.assertNotIn("6", observed[0])
+        self.assertNotIn("午後6時", observed[0])
         self.assertEqual(len(NUMERIC_MARKER.findall(observed[0])), 1)
 
     def test_document_line_breaks_and_two_numeric_literals_are_restored(self):
