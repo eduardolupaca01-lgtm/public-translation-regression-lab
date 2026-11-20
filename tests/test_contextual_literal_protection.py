@@ -110,27 +110,32 @@ class TestContextualLiteralProtection(unittest.TestCase):
                 split_model_sentences="document",
             )
 
-    def test_reordered_markers_are_rejected(self):
-        source = "明日、\\N[3]は午後6時に戻ります。"
+    def test_reordered_markers_follow_spanish_grammar_and_are_restored(self):
+        # Japanese places the time before the named subject; natural Spanish
+        # places the subject before the time. Both immutable markers must survive.
+        source = "午後6時に\\N[3]は来ます。"
+        observed = []
 
         def reorder(fragment):
             markers = MARKER.findall(fragment)
+            observed.extend(markers)
             self.assertEqual(len(markers), 2)
-            return (
-                "Mañana regresará a las " + markers[1]
-                + " de la tarde " + markers[0] + "."
-            )
+            # Source order: numeric time, then name code.
+            # Spanish order: name code, then numeric time.
+            return markers[1] + " llegará a las " + markers[0] + "."
 
-        with self.assertRaises(TranslationRejected):
-            translate_checked(
-                source,
-                reorder,
-                source="ja",
-                protect_numbers=True,
-                contextualize_name_codes=False,
-                protect_literals_in_context=True,
-                split_model_sentences="document",
-            )
+        translated = translate_checked(
+            source,
+            reorder,
+            source="ja",
+            protect_numbers=True,
+            contextualize_name_codes=False,
+            protect_literals_in_context=True,
+            split_model_sentences="document",
+        )
+        self.assertEqual(translated, "\\N[3] llegará a las 6.")
+        self.assertEqual(len(observed), 2)
+        self.assertEqual(len(set(observed)), 2)
 
 
 if __name__ == "__main__":
