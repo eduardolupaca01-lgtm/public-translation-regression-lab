@@ -67,7 +67,7 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
         "先生は「静かにしてください」と言いましたが、子どもたちは笑い続けました。",
         (("profesor", "maestr", "docente"), ("silencio", "call"),
          ("niñ",), ("riendo", "riéndose", "reí", "risa"),
-         ("sigu", "continu", "segu", "no dejaron de", "no pararon de")),
+         ("sigu", "continu", "segu", "no dejaron de", "no pararon de", "reían", "reian")),
     ),
     HoldoutCase(
         "delayed_train",
@@ -254,7 +254,8 @@ def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
         if not re.search(r"\b(?:ri\w*|re[ií]\w*|risa\w*)\b", folded):
             errors.append("CHILDREN_LAUGHTER_LOST")
         if not re.search(
-            r"\b(?:sigu|continu|segu)\w*\b|no\s+dejaron\s+de|no\s+pararon\s+de",
+            r"\b(?:sigu|continu|segu)\w*\b|no\s+dejaron\s+de|"
+            r"no\s+pararon\s+de|\b(?:se\s+)?reían\b",
             folded,
         ):
             errors.append("CONTINUING_LAUGHTER_ASPECT_LOST")
