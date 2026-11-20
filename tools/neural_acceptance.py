@@ -10,6 +10,7 @@ import argparse
 from dataclasses import dataclass
 import hashlib
 import json
+import re
 from pathlib import Path
 import sys
 import time
@@ -24,6 +25,7 @@ class Case:
     japanese: str
     required_groups: tuple[tuple[str, ...], ...] = ()
     glossary: tuple[tuple[str, str], ...] = ()
+    forbidden_patterns: tuple[str, ...] = ()
 
 
 # Original, synthetic analogues of the failure patterns. No game text or model
@@ -41,9 +43,17 @@ CASES: tuple[Case, ...] = (
     Case("morning_evening", "夏の授業は午前中に終わります。夕方に図書館へ行きます。",
          (("mañana",), ("tarde", "atardecer"), ("biblioteca",))),
     Case("sports", "私はサッカー部にいます。友人は水泳部です。私たちの学校はサッカーが盛んです。水泳部には新しい先生が来ました。",
-         (("fútbol", "futbol"), ("natación",), ("escuela", "colegio"), ("nuev", "reciente"))),
+         (("fútbol", "futbol"), ("natación",), ("escuela", "colegio"), ("nuev", "reciente")),
+         forbidden_patterns=(
+             r"\bamig[oa]\s+es\s+(?:un|el)\s+club\b",
+             r"\bescuela\s+est[aá]\s+llena\s+de\s+f[uú]tbol\b",
+         )),
     Case("preparation", "早く準備しないと、友人に怒られます。",
-         (("prepar", "list", "rápido", "pronto"), ("enfad", "enoj", "molest", "furios", "ira"))),
+         (("prepar", "list", "rápido", "pronto"), ("enfad", "enoj", "molest", "furios", "ira")),
+         forbidden_patterns=(
+             r"\bestar[aá]s\s+(?:enfadad|enojad|molest)[a-záéíóú]*\s+con\s+(?:tus|mis|los)\s+amig",
+             r"\b(?:estoy|estar[eé])\s+(?:enfadad|enojad|molest)[a-záéíóú]*\s+con\s+(?:mis|los)\s+amig",
+         )),
     Case("childhood", "花子は私の幼なじみです。家が隣にあります。小学生のころから友達です。",
          (("hanako",), ("infancia", "niñ", "primaria"), ("casa", "vecin", "lado")),
          (("花子", "Hanako"),)),
@@ -61,6 +71,48 @@ def _semantic_missing(spanish: str, required: tuple[tuple[str, ...], ...]) -> li
     return [list(group) for group in required
             if not any(option.casefold() in folded for option in group)]
 
+
+
+def _semantic_errors(sample: Case, spanish: str) -> list[str]:
+    """Reviewed meaning checks; word presence alone does not prove agency."""
+    errors = []
+    groups = _semantic_missing(spanish, sample.required_groups)
+    if groups:
+        errors.append("MISSING_CONCEPTS:" + json.dumps(groups, ensure_ascii=False))
+    for pattern in sample.forbidden_patterns:
+        if re.search(pattern, spanish.casefold(), flags=re.IGNORECASE):
+            errors.append("UNFAITHFUL_RELATIONSHIP:" + pattern)
+    if sample.id == "numbers_and_code":
+        # Independently verify the time is still a time, not just separated
+        # occurrences of the numerals followed by unrelated words.
+        recognizable_time = re.search(
+            r"(?<!\d)12\s*:\s*30(?!\d)|"
+            r"(?<!\d)12\s*(?:horas?\s*(?:y\s*)?)?30\s*(?:minutos?|min\.?)(?!\d)|"
+            r"\bdoce\s+(?:horas?\s*)?(?:y\s+)?treinta\b",
+            spanish.casefold()
+        )
+        if not recognizable_time:
+            errors.append("TIME_RELATION_NOT_PRESERVED")
+    if sample.id == "preparation":
+        # Passive Japanese "友人に怒られます" means the friend scolds the
+        # speaker. Reject apparent reversal of who is angry with whom.
+        speaker_as_object = re.search(
+            r"\b(?:me|conmigo|a\s+m[ií])\b", spanish.casefold()
+        )
+        if not speaker_as_object:
+            errors.append("PASSIVE_AGENT_RELATION_NOT_DEMONSTRATED")
+    return errors
+
+
+def _model_boilerplate(value: str) -> bool:
+    """Do not accept canned language-selection notices as translations."""
+    folded = value.casefold()
+    return any(text in folded for text in (
+        "only available in japanese",
+        "not available in english",
+        "sorry, this entry",
+        "i cannot translate",
+    ))
 
 def _create_models():
     # Delayed import is crucial: the independent restart check does not import
@@ -144,24 +196,55 @@ def translate_phase(workspace: Path) -> int:
             for sample in CASES:
                 steps = []
                 def neural(fragment: str) -> str:
-                    english = engine.translate(fragment, "ja", "en")
-                    if not isinstance(english, str) or not english.strip():
-                        raise TranslationRejected("ARGOS_JA_EN_EMPTY")
-                    spanish = engine.translate(english, "en", "es")
-                    if not isinstance(spanish, str) or not spanish.strip():
-                        raise TranslationRejected("ARGOS_EN_ES_EMPTY")
-                    steps.append({"source": fragment[:180],
-                                  "pivot_en": english[:250],
-                                  "result_es": spanish[:250]})
-                    return spanish
+                    # One bounded, content-preserving retry for empty or
+                    # language-selection boilerplate on punctuation-only edits.
+                    # No hand-written translation is substituted for the model.
+                    alternatives = [fragment]
+                    stripped = fragment.rstrip("。！？!? \t")
+                    if stripped and stripped != fragment:
+                        alternatives.append(stripped)
+                    last_error = "ARGOS_JA_EN_EMPTY"
+                    for attempt, candidate in enumerate(alternatives):
+                        english = engine.translate(candidate, "ja", "en")
+                        if not isinstance(english, str) or not english.strip():
+                            steps.append({"source": fragment[:180],
+                                          "attempt": attempt,
+                                          "error": "ARGOS_JA_EN_EMPTY"})
+                            continue
+                        if _model_boilerplate(english):
+                            steps.append({"source": fragment[:180],
+                                          "attempt": attempt,
+                                          "pivot_en": english[:250],
+                                          "error": "ARGOS_CANNED_LANGUAGE_NOTICE"})
+                            last_error = "ARGOS_CANNED_LANGUAGE_NOTICE"
+                            continue
+                        spanish = engine.translate(english, "en", "es")
+                        if not isinstance(spanish, str) or not spanish.strip():
+                            steps.append({"source": fragment[:180],
+                                          "attempt": attempt,
+                                          "pivot_en": english[:250],
+                                          "error": "ARGOS_EN_ES_EMPTY"})
+                            last_error = "ARGOS_EN_ES_EMPTY"
+                            continue
+                        steps.append({"source": fragment[:180],
+                                      "attempt": attempt,
+                                      "pivot_en": english[:250],
+                                      "result_es": spanish[:250]})
+                        return spanish
+                    raise TranslationRejected(last_error)
 
                 def producer(japanese: str) -> str:
                     spanish = translate_checked(
-                        japanese, neural, source="ja", glossary=dict(sample.glossary))
-                    missing = _semantic_missing(spanish, sample.required_groups)
-                    if missing:
+                        japanese, neural, source="ja",
+                        glossary=dict(sample.glossary),
+                        # Preserve number *context* during neural inference.
+                        # Exact values still must survive validation before
+                        # a result is allowed to enter SQLite.
+                        protect_numbers=sample.id != "numbers_and_code")
+                    issues = _semantic_errors(sample, spanish)
+                    if issues:
                         raise TranslationRejected("SEMANTIC_FIDELITY_FAILED:" +
-                                                  json.dumps(missing, ensure_ascii=False))
+                                                  json.dumps(issues, ensure_ascii=False))
                     return spanish
 
                 case_record = {"case": sample.id, "source": sample.japanese,
