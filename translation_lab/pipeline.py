@@ -215,6 +215,58 @@ def _numeric_values_outside_codes(text: str) -> Counter[str]:
     return values
 
 
+_SPANISH_NUMBER_WORDS: dict[str, tuple[str, ...]] = {
+    "0": ("cero",), "2": ("dos",), "3": ("tres",),
+    "4": ("cuatro",), "5": ("cinco",), "6": ("seis",),
+    "7": ("siete",), "8": ("ocho",), "9": ("nueve",),
+    "10": ("diez",), "11": ("once",), "12": ("doce",),
+    "13": ("trece",), "14": ("catorce",), "15": ("quince",),
+    "16": ("dieciséis", "dieciseis"), "17": ("diecisiete",),
+    "18": ("dieciocho",), "19": ("diecinueve",),
+    "20": ("veinte",), "21": ("veintiuno", "veintiún"),
+    "22": ("veintidós", "veintidos"), "23": ("veintitrés", "veintitres"),
+    "24": ("veinticuatro",), "25": ("veinticinco",),
+    "26": ("veintiséis", "veintiseis"), "27": ("veintisiete",),
+    "28": ("veintiocho",), "29": ("veintinueve",),
+    "30": ("treinta",), "40": ("cuarenta",), "50": ("cincuenta",),
+    "60": ("sesenta",), "70": ("setenta",), "80": ("ochenta",),
+    "90": ("noventa",),
+}
+
+
+def _normalize_spanish_number_words(
+    translated: str, source_numbers: Counter[str]
+) -> str:
+    """Normalize only number words whose values occur in the source."""
+    result = translated
+    for value in source_numbers:
+        for word in _SPANISH_NUMBER_WORDS.get(value, ()):
+            result = re.sub(
+                r"(?<![A-Za-zÀ-ÿ])" + re.escape(word) + r"(?![A-Za-zÀ-ÿ])",
+                value,
+                result,
+                flags=re.IGNORECASE,
+            )
+    return result
+
+
+def _numeric_comparison_candidate(
+    original: str, translated: str, source_numbers: Counter[str]
+) -> str:
+    result = _normalize_spanish_number_words(translated, source_numbers)
+    # 3:00 is equivalent to Japanese 3時; added non-zero minutes are not.
+    source_has_minutes = bool(
+        re.search(r"[0-9０-９]{1,2}[:：][0-9０-９]{2}|[0-9０-９]+分", original)
+    )
+    if not source_has_minutes:
+        result = re.sub(
+            r"(?<![0-9０-９])([0-9０-９]{1,2})[:：]00(?![0-9０-９])",
+            r"\1",
+            result,
+        )
+    return result
+
+
 def _join_spanish_sentences(parts: list[tuple[str, str]]) -> str:
     """Rejoin model clauses using source sentence boundaries, not model luck.
 
@@ -263,7 +315,10 @@ def validate_translation(
     ]:
         raise TranslationRejected("ORIGINAL_CONTROL_CODES_CHANGED")
     source_numbers = _numeric_values_outside_codes(original)
-    if source_numbers and source_numbers != _numeric_values_outside_codes(translated):
+    numeric_candidate = _numeric_comparison_candidate(
+        original, translated, source_numbers
+    )
+    if source_numbers and source_numbers != _numeric_values_outside_codes(numeric_candidate):
         raise TranslationRejected("NUMERIC_LITERAL_CHANGED")
     if [x for x in _split_preserving_newlines(original)[1::2]] != [
         x for x in _split_preserving_newlines(translated)[1::2]
@@ -355,7 +410,7 @@ def translate_checked(
     contextual_name_codes: tuple[str, ...] = ()
     if contextualize_name_codes and source == "ja":
         model_source, contextual_name_codes = _contextualize_name_codes(original)
-    if split_model_sentences not in (True, False, "lines"):
+    if split_model_sentences not in (True, False, "lines", "document"):
         raise ValueError("UNKNOWN_SENTENCE_SEGMENTATION_MODE")
     protected, mapping = protect_literals(
         model_source, source=source, glossary=glossary,
@@ -370,6 +425,8 @@ def translate_checked(
         sentence_results: list[tuple[str, str]] = []
         if split_model_sentences == "lines":
             sentences = _split_preserving_newlines(fragment)
+        elif split_model_sentences == "document":
+            sentences = [fragment]
         elif split_model_sentences is True:
             sentences = split_sentences(fragment)
         else:
@@ -383,7 +440,8 @@ def translate_checked(
                 continue
             value = model_translate(sentence)
             if (not isinstance(value, str) or not value.strip()
-                    or "\n" in value or "\r" in value):
+                    or (split_model_sentences != "document"
+                        and ("\n" in value or "\r" in value))):
                 raise TranslationRejected("MODEL_RESULT_MALFORMED")
             sentence_results.append((sentence, value))
         if split_model_sentences is True:

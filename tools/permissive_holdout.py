@@ -20,7 +20,9 @@ from tools.m2m_acceptance import _load_public_m2m_model
 from tools.unseen_holdout import HOLDOUT_CASES, _require_semantic_fidelity
 from translation_lab.cache import DurableTranslationCache
 from translation_lab.review_queue import ReviewQueue
-from translation_lab.pipeline import translate_checked, validate_translation
+from translation_lab.pipeline import (
+    TranslationRejected, translate_checked, validate_translation
+)
 
 
 @dataclass(frozen=True)
@@ -82,7 +84,7 @@ def translate_phase(backend: str, workspace: Path) -> int:
             "target_language_repairs": False,
             "prepared_translations": False,
             "case_specific_retries": False,
-            "uniform_segmentation_modes": ["line_context", "sentence_context"],
+            "uniform_segmentation_modes": ["document_context", "line_context", "sentence_context"],
             "numeric_literals_sent_to_model": True,
             "contextual_name_code_aliases": True,
             "selection": "first_candidate_passing_fixed_semantic_policy",
@@ -112,6 +114,7 @@ def translate_phase(backend: str, workspace: Path) -> int:
                 def producer(source_text: str) -> str:
                     rejected_modes: list[dict[str, str]] = []
                     for mode, segmentation in (
+                        ("document_context", "document"),
                         ("line_context", "lines"),
                         ("sentence_context", True),
                     ):

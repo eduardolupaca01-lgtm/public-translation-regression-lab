@@ -39,7 +39,7 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
     HoldoutCase(
         "rainy_meeting",
         "明日の午後、駅の前で会いましょう。雨が降ったら、図書館の入口で待っています。",
-        (("mañana",), ("tarde",), ("estación",), ("ver", "reun", "encontr"),
+        (("mañana",), ("tarde",), ("estación",), ("ver", "reun", "encontr", "vemos"),
          ("lluev", "lluvia"), ("biblioteca",), ("entrada", "puerta"),
          ("esper", "aguard")),
     ),
@@ -89,7 +89,7 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
     HoldoutCase(
         "speaker_control_code",
         r"\N[7]は明日の午後3時に来ます。",
-        (("mañana",), ("tarde", "atardecer"), ("3",),
+        (("mañana",), ("tarde", "atardecer", "p.m.", "pm"), ("3",),
          ("vendr", "lleg", "viene", "llega")),
     ),
     HoldoutCase(

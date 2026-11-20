@@ -327,3 +327,35 @@ class TestInlineGlossaryContext(unittest.TestCase):
             result, r"\N[7] Vendrá mañana a las 3 de la tarde."
         )
         validate_translation(source, result, source="ja")
+
+
+    def test_document_context_mode_keeps_multiline_context_and_exact_breaks(self):
+        source = "今日は店が休みです。\r\n明日は午前10時に開きます。"
+        seen = []
+
+        def model(fragment):
+            seen.append(fragment)
+            return "Hoy la tienda está cerrada.\r\nMañana abrirá a las diez."
+
+        result = translate_checked(
+            source, model, source="ja", protect_numbers=False,
+            split_model_sentences="document",
+        )
+        self.assertEqual(seen, [source])
+        self.assertEqual(
+            result, "Hoy la tienda está cerrada.\r\nMañana abrirá a las diez."
+        )
+
+    def test_numeric_validation_accepts_spanish_number_words_for_source_digits(self):
+        validate_translation(
+            "明日は午前10時に開きます。",
+            "Mañana abrirá a las diez de la mañana.",
+            source="ja",
+        )
+
+    def test_numeric_validation_accepts_zero_minute_hour_formatting(self):
+        validate_translation(
+            "明日の午後3時に来ます。",
+            "Vendrá mañana a las 3:00 p. m.",
+            source="ja",
+        )
