@@ -170,6 +170,14 @@ def _restore_reviewed_time_terms(original: str, translated: str):
     }]
 
 
+
+def _require_semantic_fidelity(sample: Case, translated: str) -> None:
+    """Use exactly the same quality policy when storing and replaying SQLite."""
+    issues = _semantic_errors(sample, translated)
+    if issues:
+        raise TranslationRejected("SEMANTIC_FIDELITY_FAILED:" +
+                                  json.dumps(issues, ensure_ascii=False))
+
 def _model_boilerplate(value: str) -> bool:
     """Do not accept canned language-selection notices as translations."""
     folded = value.casefold()
@@ -312,10 +320,6 @@ def translate_phase(workspace: Path) -> int:
                         japanese, spanish
                     )
                     glossary_corrections.extend(approved_edits)
-                    issues = _semantic_errors(sample, spanish)
-                    if issues:
-                        raise TranslationRejected("SEMANTIC_FIDELITY_FAILED:" +
-                                                  json.dumps(issues, ensure_ascii=False))
                     return spanish
 
                 case_record = {"case": sample.id, "source": sample.japanese,
@@ -323,7 +327,9 @@ def translate_phase(workspace: Path) -> int:
                                "reviewed_term_corrections": glossary_corrections}
                 try:
                     value = cache.translate_or_get(
-                        "ja", "es", sample.japanese, producer)
+                        "ja", "es", sample.japanese, producer,
+                        quality_validator=lambda value: _require_semantic_fidelity(sample, value)
+                    )
                     case_record["status"] = "accepted"
                     case_record["translated"] = value
                     case_record["sha256"] = hashlib.sha256(
@@ -370,11 +376,17 @@ def verify_phase(workspace: Path) -> int:
             if cache.count() != len(accepted):
                 errors.append("REJECTED_TRANSLATION_WAS_CACHED_OR_VALID_ROW_LOST")
             for row in accepted:
-                value = cache.get("ja", "es", row["source"])
+                case = case_by_id.get(row["case"])
+                validate_cached = (
+                    (lambda text: _require_semantic_fidelity(case, text))
+                    if case is not None else None
+                )
+                value = cache.get(
+                    "ja", "es", row["source"], quality_validator=validate_cached
+                )
                 if value != row["translated"]:
                     errors.append("CACHE_CONTENT_CHANGED:" + row["case"])
                     continue
-                case = case_by_id.get(row["case"])
                 if case is None:
                     errors.append("CACHE_UNKNOWN_OR_REMOVED_CASE:" + row["case"])
                 else:
@@ -388,7 +400,9 @@ def verify_phase(workspace: Path) -> int:
                     raise RuntimeError("CACHE_MISS_TRIGGERED_NEURAL_INFERENCE")
                 try:
                     replay = cache.translate_or_get(
-                        "ja", "es", row["source"], forbidden_model)
+                        "ja", "es", row["source"], forbidden_model,
+                        quality_validator=validate_cached
+                    )
                     if replay != row["translated"]:
                         errors.append("REPLAY_CONTENT_MISMATCH:" + row["case"])
                 except Exception as exc:

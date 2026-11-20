@@ -127,3 +127,57 @@ class TestDurableCache(unittest.TestCase):
                         ("残った日本語", "学校")
                     )
                 self.assertIsNone(cache.get("ja", "es", "学校"))
+
+
+    def test_quality_validator_rejects_stale_row_and_replaces_it(self):
+        """A quality-rule change must invalidate an old structural-only cache hit."""
+        with tempfile.TemporaryDirectory() as folder:
+            original = "友人は水泳部です。"
+            bad = "Mi amigo es un club de natación."
+            good = "Mi amigo pertenece al club de natación."
+            with DurableTranslationCache(folder) as cache:
+                cache.put("ja", "es", original, bad)
+
+            def validate_role(value):
+                if "es un club" in value:
+                    raise TranslationRejected("PERSON_NOT_A_CLUB")
+
+            calls = []
+            def model(_source):
+                calls.append(_source)
+                return good
+
+            with DurableTranslationCache(folder) as cache:
+                self.assertIsNone(
+                    cache.get("ja", "es", original, quality_validator=validate_role)
+                )
+                self.assertEqual(cache.translate_or_get(
+                    "ja", "es", original, model,
+                    quality_validator=validate_role
+                ), good)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(cache.count(), 1)
+
+            with DurableTranslationCache(folder) as cache:
+                self.assertEqual(cache.translate_or_get(
+                    "ja", "es", original,
+                    lambda _: (_ for _ in ()).throw(
+                        AssertionError("VALID_CACHE_SHOULD_NOT_RETRANSLATE")
+                    ),
+                    quality_validator=validate_role
+                ), good)
+
+    def test_semantically_rejected_translation_never_enters_storage(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with DurableTranslationCache(folder) as cache:
+                def forbidden(_text):
+                    raise TranslationRejected("UNFAITHFUL_CHARACTER_RELATION")
+                with self.assertRaisesRegex(
+                    TranslationRejected, "UNFAITHFUL_CHARACTER_RELATION"
+                ):
+                    cache.translate_or_get(
+                        "ja", "es", "友人は水泳部です。",
+                        lambda _: "Mi amigo es un club de natación.",
+                        quality_validator=forbidden
+                    )
+                self.assertEqual(cache.count(), 0)

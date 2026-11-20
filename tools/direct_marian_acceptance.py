@@ -14,7 +14,7 @@ import sys
 import time
 
 from tools.neural_acceptance import (
-    CASES, _save_json, _semantic_errors,
+    CASES, _save_json, _require_semantic_fidelity,
     _restore_reviewed_time_terms, verify_phase,
 )
 from translation_lab.cache import DurableTranslationCache
@@ -110,11 +110,6 @@ def run(
                         japanese, output
                     )
                     glossary_corrections.extend(approved_edits)
-                    issues = _semantic_errors(sample, output)
-                    if issues:
-                        raise TranslationRejected(
-                            "SEMANTIC_FIDELITY_FAILED:" +
-                            json.dumps(issues, ensure_ascii=False))
                     return output
 
                 entry = {"case": sample.id, "source": sample.japanese,
@@ -122,7 +117,8 @@ def run(
                          "reviewed_term_corrections": glossary_corrections}
                 try:
                     value = cache.translate_or_get(
-                        "ja", "es", sample.japanese, producer
+                        "ja", "es", sample.japanese, producer,
+                        quality_validator=lambda value: _require_semantic_fidelity(sample, value)
                     )
                     entry["status"] = "accepted"
                     entry["translated"] = value
