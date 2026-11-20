@@ -254,7 +254,7 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         self.assertIn("子供の頃からの友達", rewritten)
         self.assertIn("小学校に通っていたころ", rewritten)
         self.assertIn("\r\n", rewritten)
-        self.assertEqual(len(edits), 2)
+        self.assertEqual(len(edits), 3)
 
     def test_no_source_paraphrase_when_not_needed(self):
         from tools.neural_acceptance import _source_disambiguation_variant
@@ -288,9 +288,22 @@ class TestRealNeuralHarnessContract(unittest.TestCase):
         original = ("私たちの学校はサッカーが盛んです。"
                     "家が隣にあります。")
         rewritten, edits = _source_disambiguation_variant(original)
-        self.assertIn("私たちが通う学校では", rewritten)
+        self.assertIn("私たちの学校では", rewritten)
         self.assertIn("私たちの家は隣同士です。", rewritten)
         self.assertEqual(len(edits), 3)
+
+    def test_neighboring_homes_is_valid_synonym_not_ambiguous_house(self):
+        sample = next(c for c in acceptance.CASES if c.id == "childhood")
+        valid = ("Hanako es mi amiga desde niña. "
+                 "Nuestros hogares están juntos. "
+                 "Somos amigas desde la escuela primaria.")
+        self.assertEqual(acceptance._semantic_errors(sample, valid), [])
+        wrong = ("Hanako es mi amiga desde niña. "
+                 "Nuestros hogares están lejos. "
+                 "Son amigos desde la escuela primaria.")
+        errors = acceptance._semantic_errors(sample, wrong)
+        self.assertIn("CHILDHOOD_NEIGHBORING_HOUSES_RELATION_LOST", errors)
+        self.assertIn("CHILDHOOD_FRIENDSHIP_PERSON_SHIFT", errors)
 
     def test_setup_failure_is_explicit_and_never_an_approval(self):
         with tempfile.TemporaryDirectory() as root:
