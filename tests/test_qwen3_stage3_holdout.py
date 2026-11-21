@@ -1,0 +1,64 @@
+"""Stage3 cannot be entered by partial scores or human-edited candidates."""
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from test_stage3_readiness import valid_receipts
+from tools.qwen3_stage3_holdout import translate_phase, verify_phase
+from tools.unseen_holdout import HOLDOUT_CASES
+
+
+class TestQwen8BStage3(unittest.TestCase):
+    def test_partial_development_blocks_before_workspace_and_model_loading(self):
+        report, proof = valid_receipts()
+        report["cases"] = report["cases"][:17]
+        report["accepted"] = 17
+        report["rejected"] = 3
+        report["cache_rows"] = 17
+        report["review_queue_total"] = 3
+        was_loaded = []
+
+        def forbidden_loader():
+            was_loaded.append(True)
+            raise AssertionError("MODEL_SHOULD_NOT_LOAD")
+
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            dev = base / "dev.json"
+            restart = base / "restart.json"
+            target = base / "stage3"
+            dev.write_text(json.dumps(report), encoding="utf-8")
+            restart.write_text(json.dumps(proof), encoding="utf-8")
+            result = translate_phase(
+                target, dev, restart, None, model_loader=forbidden_loader
+            )
+            self.assertEqual(result, 1)
+            self.assertFalse(target.exists())
+            self.assertFalse(was_loaded)
+
+    def test_cold_restart_requires_receipts_not_just_a_directory(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.assertEqual(verify_phase(Path(root)), 1)
+
+    def test_source_only_holdout_is_disjoint_and_nonempty(self):
+        from tools.stage3_readiness import source_only_manifest
+        from tools.independent_pivot_holdout import INDEPENDENT_CASES
+        self.assertEqual(len(HOLDOUT_CASES), 10)
+        manifest = source_only_manifest()
+        self.assertEqual(manifest["count"], 10)
+        self.assertEqual(
+            [case["source"] for case in manifest["cases"]],
+            [case.japanese for case in HOLDOUT_CASES],
+        )
+        self.assertFalse(
+            {case.japanese for case in HOLDOUT_CASES}
+            & {case.japanese for case in INDEPENDENT_CASES}
+        )
+        self.assertTrue(
+            all(set(c) == {"case", "source"} for c in manifest["cases"])
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
