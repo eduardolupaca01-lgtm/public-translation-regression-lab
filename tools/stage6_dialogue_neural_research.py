@@ -13,7 +13,8 @@ import json
 from pathlib import Path
 
 from tools.stage6_dialogue_cases import (
-    STAGE6_CASES, manifest, require_stage6_semantics, source_sets_disjoint,
+    STAGE6_CASES, manifest, require_stage6_semantics,
+    context_review_flags, source_sets_disjoint,
 )
 from tools.stage6_discourse_model import (
     GENERATION_VARIANT, PROMPT_SHA256, load_model,
@@ -54,7 +55,7 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
     report = {
         "schema": "ja-es-stage6-discourse-neural-v1",
         "kind": "EXPLORATORY_RESEARCH_NOT_LINGUISTIC_APPROVAL",
-        "semantic_rubric": "stage6_conditions_roles_rubric_v1",
+        "semantic_rubric": "stage6_conditions_roles_grammar_rubric_v2",
         "evaluation_scope": "published_synthetic_source_set_not_external_blind",
         "sources_only": True,
         "generation_variant": GENERATION_VARIANT,
@@ -139,6 +140,7 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
                     row["translated"] = output
                     row["sha256"] = hashlib.sha256(output.encode("utf-8")).hexdigest()
                     row["status"] = "rubric_accepted"
+                    row["context_review_flags"] = context_review_flags(sample, output)
                     row["human_bilingual_review_pending"] = True
                 except Exception as exc:
                     row["error"] = type(exc).__name__ + ":" + str(exc)[:500]
@@ -174,6 +176,9 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
         row.get("status") == "rubric_accepted" for row in report["cases"]
     )
     report["rejected"] = len(STAGE6_CASES) - report["rubric_accepted"]
+    report["context_review_total"] = sum(
+        len(row.get("context_review_flags", [])) for row in report["cases"]
+    )
     report["status"] = (
         "AUTOMATED_RUBRIC_PASS_BILINGUAL_REVIEW_PENDING"
         if (

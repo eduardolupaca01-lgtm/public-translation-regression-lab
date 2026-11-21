@@ -1,4 +1,4 @@
-"""Uniform Qwen3-8B thinking v2 prompt for source-complete Spanish dialogues.
+"""Uniform Qwen3-8B thinking v3 prompt for source-complete Spanish dialogues.
 
 Same pinned model, sampler and quantization as Stage5; no target-specific
 replacements, no Spanish answers from earlier runs, no case-specific prompt.
@@ -16,7 +16,7 @@ from tools.stage4_source_complete_candidate import (
 )
 
 
-GENERATION_VARIANT = "uniform_discourse_conditions_fluency_v2"
+GENERATION_VARIANT = "uniform_discourse_conditions_grammar_v3"
 DISCOURSE_GUIDANCE = """
 
 Additional uniform checks for EVERY source before returning the final Spanish:
@@ -40,7 +40,24 @@ Additional uniform checks for EVERY source before returning the final Spanish:
 
 Apply this same checklist to all inputs without any case-specific examples.
 """
-SYSTEM_PROMPT = SOURCE_COMPLETE_PROMPT + DISCOURSE_GUIDANCE
+DISCOURSE_V3_GUIDANCE = """
+
+Uniform final bilingual proofreading for ALL Japanese sources:
+- Do not equate permission to do something with a hypothetical or unrealised
+  opportunity; when Japanese permits an action in the past, express the
+  permission or ability in clear Spanish without implying it happened.
+- Check grammatical agreement of every Spanish article, adjective, and
+  direct-object pronoun with the Spanish noun (e.g. feminine and masculine
+  nouns), even after numbers and currency.
+- Preserve the original character's name consistently throughout all
+  dialogue turns. Do not alter transliteration/spelling between speakers.
+- Quantifiers such as 'everyone', 'no one', 'nobody', 'still not' and 'yet'
+  identify the actor and scope of an event. Never swap observer and object.
+- Render Japanese plurals and adjectives in idiomatic Spanish singular or
+  plural. Avoid omitting a negative condition, recipient or connective.
+This is the SAME instruction for EVERY input; return only the translation.
+"""
+SYSTEM_PROMPT = SOURCE_COMPLETE_PROMPT + DISCOURSE_GUIDANCE + DISCOURSE_V3_GUIDANCE
 PROMPT_SHA256 = hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()
 
 

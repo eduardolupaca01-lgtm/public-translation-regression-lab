@@ -190,7 +190,7 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
     "permission_changed_today": (
         (r"\bayer\b", "YESTERDAY_LOST"),
         (r"\bhoy\b", "TODAY_LOST"),
-        (r"\b(?:pod[ie]|permit|autoriz)\w*\b", "PAST_PERMISSION_LOST"),
+        (r"\b(?:pod[ie]|podr|permit|autoriz)\w*\b", "PAST_PERMISSION_LOST"),
         (r"\b(?:no|prohib|impid)\w*\b", "CURRENT_PROHIBITION_LOST"),
     ),
     "two_speakers_departure_crlf": (
@@ -217,9 +217,9 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
         (r"\b(?:derecha)\b", "NEGATED_RIGHT_DIRECTION_LOST"),
     ),
     "files_delete_only_old": (
-        (r"\b(?:viejo|vieja|antiguo|antigua)\b", "OLD_FILE_LOST"),
-        (r"\b(?:nuevo|nueva)\b", "NEW_FILE_LOST"),
-        (r"\b(?:archivo|fichero)\b", "FILE_LOST"),
+        (r"\b(?:viej[oa]s?|antigu[oa]s?)\b", "OLD_FILE_LOST"),
+        (r"\bnuev[oa]s?\b", "NEW_FILE_LOST"),
+        (r"\b(?:archivos?|ficheros?)\b", "FILE_LOST"),
         (r"\b(?:elimin|borr|suprim)\w*\b", "DELETION_ACTION_LOST"),
         (r"\b(?:no|nunca|jamas|prohibid)\w*\b", "NEW_FILE_PROHIBITION_LOST"),
     ),
@@ -274,7 +274,27 @@ def _semantic_errors(case: Stage6Case, translation: str) -> list[str]:
         if len(re.findall(r"\bsi\b|\ben\s+caso\b", value)) < 2:
             errors.append("TWO_EXPLICIT_VARIABLE_CONDITIONS_MISSING")
     if case.id == "search_not_found_roles":
-        if re.search(r"\b(?:el|ella)\s+no\s+(?:ha|habia)\s+encontrado\s+a\s+nadie\b", value):
+        # 'Todos lo buscan, pero aún no lo han encontrado' expresses that
+        # none of the searchers found him: it is not a role inversion.
+        # Permit this general Spanish collective paraphrase only when
+        # the searching collective AND the object pronoun are explicit.
+        collective = re.search(
+            r"\b(?:todos|todas|todo\s+el\s+mundo|toda\s+la\s+gente)\b", value
+        )
+        collective_not_found = re.search(
+            r"\bno\s+(?:lo|le)\s+han\s+"
+            r"(?:encontrado|hallado|localizado)\b", value
+        )
+        if collective and collective_not_found:
+            errors = [e for e in errors if e not in (
+                "NO_ONE_MISSING", "SEARCHERS_MISSING"
+            )]
+        if re.search(
+            r"\b(?:el|ella)\s+no\s+(?:ha|habia|habia\s+logrado)\s+"
+            r"encontrar?\w*\s+a\s+nadie\b", value
+        ) or re.search(
+            r"\b(?:el|ella)\s+no\s+ha\s+encontrado\s+a\s+nadie\b", value
+        ):
             errors.append("FOUND_PERSON_ROLE_REVERSED")
     if case.id == "sword_companion_return":
         if re.search(r"\b(?:devuelvelo|devolvelo|devuelvalo|regresalo)\b", value):
@@ -285,7 +305,38 @@ def _semantic_errors(case: Stage6Case, translation: str) -> list[str]:
     if case.id == "green_appearance_apple":
         if re.search(r"\b(?:no\s+es\s+verde|nunca\s+verde)\b", value):
             errors.append("EXPLICIT_GREEN_APPEARANCE_NEGATED")
+    # These checks apply to every game-text translation, not just an
+    # individual input. Passing keywords is insufficient for Spanish grammar.
+    if re.search(r"\b(?:el|un)\s+espada\b", value):
+        errors.append("SPANISH_SWORD_ARTICLE_GENDER_MISMATCH")
+    if "サラ" in case.japanese and (
+        re.search(r"\bsara\b", value)
+        and re.search(r"\bsarah\b", value)
+    ):
+        errors.append("INCONSISTENT_SARA_NAME_SPELLING")
     return errors
+
+
+def context_review_flags(case: Stage6Case, translation: str) -> list[str]:
+    """Potential nuance/fluency uncertainty, never a professional approval."""
+    value = _fold(translation)
+    result: list[str] = []
+    if case.id == "permission_changed_today" and re.search(
+        r"\bay(er)?\b.{0,80}\bpodria(?:s|mos|n)?\s+haber\s+entrado\b",
+        value,
+    ):
+        result.append("PAST_PERMISSION_VS_COUNTERFACTUAL_POSSIBILITY_REVIEW")
+    if case.id == "search_not_found_roles" and (
+        re.search(r"\btodo\s+el\s+mundo\b", value)
+        and re.search(r"\bno\s+lo\s+han\s+encontrado\b", value)
+    ):
+        result.append("COLLECTIVE_SUBJECT_AGREEMENT_REVIEW")
+    if case.id == "green_appearance_apple" and (
+        re.search(r"\bmanzana\s+azul\b", value)
+        and re.search(r"\bverde\b", value)
+    ):
+        result.append("AOI_APPLE_LITERAL_COLOR_CONTEXT_REVIEW")
+    return result
 
 
 def require_stage6_semantics(case: Stage6Case, translation: str) -> None:

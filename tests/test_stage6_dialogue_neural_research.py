@@ -8,10 +8,11 @@ import unittest
 from unittest.mock import patch
 
 from tools.stage6_dialogue_cases import (
-    STAGE6_CASES, _semantic_errors, manifest, source_sets_disjoint,
+    STAGE6_CASES, _semantic_errors, context_review_flags,
+    manifest, source_sets_disjoint,
 )
 from tools.stage6_discourse_model import (
-    GENERATION_VARIANT, PROMPT_SHA256, DISCOURSE_GUIDANCE,
+    GENERATION_VARIANT, PROMPT_SHA256, DISCOURSE_GUIDANCE, DISCOURSE_V3_GUIDANCE,
     DiscourseThinkingTranslator, load_model,
 )
 from tools.stage4_source_complete_candidate import SourceCompleteThinkingTranslator
@@ -56,6 +57,50 @@ class TestStage6DiscourseResearch(unittest.TestCase):
                 "La espada es de ella. Primero métela en la funda y devuélvelo."),
         )
 
+
+    def test_rejected_samples_are_semantically_faithful_not_false_failures(self):
+        by_id = {x.id: x for x in STAGE6_CASES}
+        collective = "Todos están buscándolo, pero aún no lo han encontrado."
+        self.assertEqual(_semantic_errors(
+            by_id["search_not_found_roles"], collective
+        ), [])
+        self.assertIn("FOUND_PERSON_ROLE_REVERSED", _semantic_errors(
+            by_id["search_not_found_roles"],
+            "Todos lo buscan, pero él no ha encontrado a nadie.",
+        ))
+        self.assertEqual(_semantic_errors(
+            by_id["files_delete_only_old"],
+            "Puedes eliminar los archivos antiguos, pero no borres los archivos nuevos.",
+        ), [])
+        self.assertEqual(_semantic_errors(
+            by_id["permission_changed_today"],
+            "Ayer podría haber entrado, pero hoy no se debe entrar.",
+        ), [])
+        self.assertIn(
+            "PAST_PERMISSION_VS_COUNTERFACTUAL_POSSIBILITY_REVIEW",
+            context_review_flags(
+                by_id["permission_changed_today"],
+                "Ayer podría haber entrado, pero hoy no se debe entrar.",
+            )
+        )
+
+    def test_generic_spanish_agreement_and_name_inconsistency_are_not_accepted(self):
+        by_id = {x.id: x for x in STAGE6_CASES}
+        sword_bad = "El espada cuesta 1500 yenes y el escudo 900 yenes. Los dos 2400 yenes."
+        self.assertIn("SPANISH_SWORD_ARTICLE_GENDER_MISMATCH",
+            _semantic_errors(by_id["two_item_cost_total"], sword_bad))
+        sword_good = "La espada cuesta 1500 yenes y el escudo 900 yenes. Juntos son 2400 yenes."
+        self.assertNotIn("SPANISH_SWORD_ARTICLE_GENDER_MISMATCH",
+            _semantic_errors(by_id["two_item_cost_total"], sword_good))
+        changed = (r"\N[5] Sara tiene la llave."
+                   "\r\n" + r"\N[3] Preguntemos a Sarah y no a Tom.")
+        self.assertIn("INCONSISTENT_SARA_NAME_SPELLING",
+            _semantic_errors(by_id["two_speakers_ask_sara"], changed))
+        consistent = (r"\N[5] Sara tiene la llave."
+                      "\r\n" + r"\N[3] Preguntemos a Sara y no a Tom.")
+        self.assertNotIn("INCONSISTENT_SARA_NAME_SPELLING",
+            _semantic_errors(by_id["two_speakers_ask_sara"], consistent))
+
     def test_uniform_prompt_and_sampler_differ_only_by_system_instructions(self):
         for japanese in [
             "彼は鍵を持っています。",
@@ -71,7 +116,8 @@ class TestStage6DiscourseResearch(unittest.TestCase):
         self.assertIn("conditional", DISCOURSE_GUIDANCE.lower())
         self.assertIn("grammatical gender", DISCOURSE_GUIDANCE.lower())
         self.assertEqual(len(PROMPT_SHA256), 64)
-        self.assertEqual(GENERATION_VARIANT, "uniform_discourse_conditions_fluency_v2")
+        self.assertIn("every Spanish article", DISCOURSE_V3_GUIDANCE)
+        self.assertEqual(GENERATION_VARIANT, "uniform_discourse_conditions_grammar_v3")
 
     def test_loader_preserves_raw_output_payload_and_timeout(self):
         calls = []
