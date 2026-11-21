@@ -246,7 +246,8 @@ def _semantic_errors(sample: Stage7Case, translation: str) -> list[str]:
     ):
         errors.append("SARA_SARAH_INCONSISTENT_TRANSCRIPTION")
     if sample.id == "sara_tom_unread_letter" and re.search(
-        r"\bsara\s+(?:no\s+)?(?:ha|habia)\s+leido\b", v
+        r"\bsara\s+(?:no\s+)?(?:(?:la|lo)\s+)?(?:ha|habia)\s+leido\b|"
+        r"\bsara\s+no\s+(?:(?:la|lo)\s+)?(?:ha|habia)\s+leido\b", v
     ):
         errors.append("WRONG_PERSON_READ_THE_LETTER")
     if sample.id == "nobody_saw_mika_depart" and re.search(

@@ -1,0 +1,100 @@
+name: Stage7 twelve-dialogue Japanese RPG role consistency research
+
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - ".github/workflows/stage7-dialogue-neural-research.yml"
+      - "tools/stage7_dialogue_neural_research.py"
+      - "tests/test_stage7_dialogue_neural_research.py"
+      - "tools/stage7_dialogue_cases.py"
+      - "tools/stage6_discourse_model.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stage7-dialogue-neural-research-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    name: NPC dialogues, role consistency and variable-code stress research
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HF_HOME: /tmp/qwen8b-stage7-dialogue-hf
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DOWNLOAD_TIMEOUT: "120"
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      STAGE7_DIALOGUE_WORKSPACE: /tmp/qwen8b-stage7-dialogue-research
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Guard publication and run independent offline tests
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q translation_lab tests tools
+          python -m unittest discover -s tests -v
+
+      - name: Freeze distinct twelve-case Japanese source-only research corpus
+        run: |
+          python -m tools.stage7_dialogue_cases \
+            --out "$RUNNER_TEMP/stage7-source-manifest.json"
+
+      - name: Download pinned llama.cpp CPU server
+        run: |
+          mkdir -p "$RUNNER_TEMP/llama"
+          curl --fail --location --retry 3 --retry-all-errors \
+            "https://github.com/ggml-org/llama.cpp/releases/download/b12584/llama-b12584-bin-ubuntu-x64.tar.gz" \
+            --output "$RUNNER_TEMP/llama-b12584.tar.gz"
+          tar -xzf "$RUNNER_TEMP/llama-b12584.tar.gz" -C "$RUNNER_TEMP/llama"
+          LLAMA_SERVER="$(find "$RUNNER_TEMP/llama" -type f -name llama-server -print -quit)"
+          test -n "$LLAMA_SERVER"
+          chmod +x "$LLAMA_SERVER"
+          echo "LLAMA_SERVER=$LLAMA_SERVER" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(dirname "$LLAMA_SERVER"):$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          "$LLAMA_SERVER" --version
+
+      - name: Install pinned Hugging Face download client
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            huggingface_hub==0.36.0
+
+      - name: Translate twelve separate Japanese sources with uniform pinned model
+        run: |
+          python -m tools.stage7_dialogue_neural_research translate \
+            --llama-server "$LLAMA_SERVER" \
+            --workspace "$STAGE7_DIALOGUE_WORKSPACE"
+
+      - name: Verify semantic rubric and SQLite persistence after cold-process restart
+        if: always()
+        run: |
+          if [ -f "$STAGE7_DIALOGUE_WORKSPACE/stage7-neural-report.json" ]; then
+            python -m tools.stage7_dialogue_neural_research verify \
+              --workspace "$STAGE7_DIALOGUE_WORKSPACE"
+          else
+            echo "dialogue_NEURAL_REPORT_MISSING"
+          fi
+
+      - name: Preserve raw Japanese and Spanish, review and restart evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage7-dialogue-twelve-research-receipts
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            /tmp/qwen8b-stage7-dialogue-research/stage7-neural-report.json
+            /tmp/qwen8b-stage7-dialogue-research/stage7-source-manifest.json
+            /tmp/qwen8b-stage7-dialogue-research/stage7-cold-restart-proof.json
+            /tmp/qwen8b-stage7-dialogue-research/stage7-review-queue.json
+            /tmp/qwen8b-stage7-dialogue-research/llama-server.log
+            /tmp/qwen8b-stage7-dialogue-research/cache/translation-cache.sqlite3
