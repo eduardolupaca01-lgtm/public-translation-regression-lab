@@ -6,6 +6,7 @@ from tools.independent_pivot_holdout import (
     EN_ES_MODEL_ID,
     INDEPENDENT_CASES,
     JA_EN_MODEL_ID,
+    SEMANTIC_POLICY_VERSION,
     _semantic_errors,
 )
 from tools.neural_acceptance import CASES as DEVELOPMENT_CASES
@@ -103,6 +104,37 @@ ADVERSARIAL_TRANSLATIONS = {
 }
 
 
+VALID_VARIANT_TRANSLATIONS = {
+    "meeting_time_contrast":
+        "La reunión no comienza a las dos de la tarde, sino a las cuatro.",
+    "email_before_meeting":
+        "Por favor, envíe un correo antes de venir a la sala de conferencias.",
+    "ordered_books_arrived":
+        "Los libros que pedí no fueron tres, sino dos. Llegaron.",
+    "colder_today_weaker_wind":
+        "Hoy hace más frío que ayer, pero el viento es suave.",
+    "cooked_and_washed_dishes":
+        "Él no solo preparó la comida, sino que también lavó los platos.",
+    "check_document_before_signing":
+        "Antes de firmar este documento, hay que verificar su contenido.",
+    "miss_train_take_taxi":
+        "Si no logro coger el tren, iré en taxi.",
+}
+
+INVALID_VARIANT_TRANSLATIONS = {
+    "blue_umbrella_owner":
+        "El paraguas azul no es mío, es de mi hermana.",
+    "email_before_meeting":
+        "Por favor, envíenos un correo antes de venir a la sala de conferencias.",
+    "ordered_books_arrived":
+        "Los libros que pedí no fueron tres, sino dos. No llegaron.",
+    "check_document_before_signing":
+        "Antes de firmar este documento, debo verificar su contenido.",
+    "miss_train_take_taxi":
+        "Si no logro coger el tren, no iré en taxi.",
+}
+
+
 class TestIndependentHoldoutContracts(unittest.TestCase):
     def test_twenty_unique_cases_are_disjoint_from_prior_corpora(self):
         self.assertEqual(len(INDEPENDENT_CASES), 20)
@@ -113,6 +145,26 @@ class TestIndependentHoldoutContracts(unittest.TestCase):
         development_sources = {case.japanese for case in DEVELOPMENT_CASES}
         self.assertFalse(new_sources & prior_sources)
         self.assertFalse(new_sources & development_sources)
+
+    def test_semantic_policy_is_versioned_and_case_sources_remain_fixed(self):
+        self.assertEqual(
+            SEMANTIC_POLICY_VERSION,
+            "independent_holdout_v2_semantic_calibration",
+        )
+        self.assertEqual(len(INDEPENDENT_CASES), 20)
+        self.assertEqual(len({case.japanese for case in INDEPENDENT_CASES}), 20)
+
+    def test_faithful_spanish_variants_are_not_false_rejected(self):
+        by_id = {case.id: case for case in INDEPENDENT_CASES}
+        for case_id, translated in VALID_VARIANT_TRANSLATIONS.items():
+            with self.subTest(case=case_id):
+                self.assertEqual(_semantic_errors(by_id[case_id], translated), [])
+
+    def test_omissions_invented_recipients_and_inverted_events_are_rejected(self):
+        by_id = {case.id: case for case in INDEPENDENT_CASES}
+        for case_id, translated in INVALID_VARIANT_TRANSLATIONS.items():
+            with self.subTest(case=case_id):
+                self.assertTrue(_semantic_errors(by_id[case_id], translated))
 
     def test_public_model_provenance_is_fixed(self):
         self.assertEqual(JA_EN_MODEL_ID, "Helsinki-NLP/opus-mt-ja-en")
