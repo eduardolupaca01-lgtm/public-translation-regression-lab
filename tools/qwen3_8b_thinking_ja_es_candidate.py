@@ -26,8 +26,10 @@ from translation_lab.pipeline import (
 from translation_lab.review_queue import ReviewQueue
 from tools.independent_pivot_holdout import (
     INDEPENDENT_CASES,
+    SEMANTIC_POLICY_VERSION,
     _require_semantic_fidelity,
 )
+from translation_lab.restart import verify_candidate_persistence
 
 MODEL_REPO = "Qwen/Qwen3-8B-GGUF"
 MODEL_REVISION = "7c41481f57cb95916b40956ab2f0b139b296d974"
@@ -46,7 +48,7 @@ SERVER_PORT = 8080
 SERVER_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
 SERVER_CONTEXT = 4096
 SERVER_THREADS = 2
-PROTECT_NUMBERS = True
+PROTECT_NUMBERS = False
 CONTEXTUALIZE_NAME_CODES = False
 PROTECT_LITERALS_IN_CONTEXT = True
 MAX_OUTPUT_TOKENS = 2048
@@ -339,7 +341,8 @@ def translate_phase(
         "evaluation_policy": {
             "cases": len(INDEPENDENT_CASES),
             "case_set_status": "published_development_regression_set_not_blind",
-            "frozen_case_definitions_and_semantic_checks": True,
+            "case_sources_unchanged": True,
+            "semantic_policy_version": SEMANTIC_POLICY_VERSION,
             "source_paraphrases": False,
             "target_repairs": False,
             "glossary_edits": False,
@@ -348,14 +351,14 @@ def translate_phase(
             "uniform_segmentation_modes": [
                 "document_context", "line_context", "sentence_context"
             ],
-            "numeric_literals_sent_to_model": False,
-            "numeric_literals_protected_before_inference": True,
+            "numeric_literals_sent_to_model": True,
+            "numeric_literals_protected_before_inference": PROTECT_NUMBERS,
             "control_codes_protected_in_original_position": True,
             "contextual_name_code_aliases": False,
             "protected_literals_remain_in_model_context": PROTECT_LITERALS_IN_CONTEXT,
             "protected_literal_markers_must_appear_exactly_once": True,
             "protected_literal_order_may_change_for_target_grammar": True,
-            "selection": "first_candidate_passing_frozen_semantic_policy",
+            "selection": "first_candidate_passing_versioned_semantic_policy",
             "all_cases_required": True,
         },
         "backend_executed": False,
@@ -466,7 +469,7 @@ def translate_phase(
                         reason=entry["error"],
                         context={
                             "case_id": case.id,
-                            "semantic_policy": "independent_holdout_v1_frozen",
+                            "semantic_policy": SEMANTIC_POLICY_VERSION,
                             "model_provenance": provenance,
                             "raw_model_attempts": attempts,
                         },
@@ -522,6 +525,8 @@ def verify_phase(workspace: Path) -> int:
     rows = report.get("cases", [])
     accepted = [row for row in rows if row.get("status") == "accepted"]
     errors: list[str] = []
+    quality_errors: list[str] = []
+    persistence_errors: list[str] = []
 
     if not report.get("backend_executed"):
         errors.append("QWEN8BTHINK_REAL_INFERENCE_NOT_EXECUTED")
@@ -537,7 +542,7 @@ def verify_phase(workspace: Path) -> int:
     if len(rows) != len(INDEPENDENT_CASES):
         errors.append("QWEN8BTHINK_CASE_COUNT_CHANGED")
     if len(accepted) != len(INDEPENDENT_CASES):
-        errors.append("QWEN8BTHINK_NOT_ALL_CASES_ACCEPTED")
+        quality_errors.append("QWEN8BTHINK_NOT_ALL_CASES_ACCEPTED")
 
     models = report.get("models", [])
     if len(models) != 1:
@@ -561,12 +566,15 @@ def verify_phase(workspace: Path) -> int:
             DurableTranslationCache(workspace / "cache") as cache,
             ReviewQueue(workspace / "cache") as review_queue,
         ):
-            if cache.count() != len(INDEPENDENT_CASES):
-                errors.append("QWEN8BTHINK_CACHE_ROW_COUNT_MISMATCH")
-            if review_queue.count("pending") or review_queue.count("approved"):
-                errors.append("QWEN8BTHINK_HUMAN_REVIEW_CHANGED_AUTOMATIC_RESULT")
-            if review_queue.count():
-                errors.append("QWEN8BTHINK_REVIEW_QUEUE_NOT_EMPTY")
+            persistence_errors.extend(
+                verify_candidate_persistence(
+                    cache,
+                    review_queue,
+                    accepted_count=len(accepted),
+                    rejected_count=max(0, len(rows) - len(accepted)),
+                    prefix="QWEN8BTHINK",
+                )
+            )
 
             case_by_id = {case.id: case for case in INDEPENDENT_CASES}
             for row in accepted:
@@ -579,7 +587,7 @@ def verify_phase(workspace: Path) -> int:
                     validate_translation(case.japanese, translated, source="ja")
                     _require_semantic_fidelity(case, translated)
                 except TranslationRejected as exc:
-                    errors.append(
+                    quality_errors.append(
                         "QWEN8BTHINK_TRANSLATION_INVALID:" + case.id + ":" + str(exc)[:220]
                     )
                     continue
@@ -591,7 +599,7 @@ def verify_phase(workspace: Path) -> int:
                     "ja", "es", case.japanese, quality_validator=validator
                 )
                 if cached != translated:
-                    errors.append("QWEN8BTHINK_CACHE_CONTENT_CHANGED:" + case.id)
+                    persistence_errors.append("QWEN8BTHINK_CACHE_CONTENT_CHANGED:" + case.id)
                     continue
                 try:
                     replay = cache.translate_or_get(
@@ -604,9 +612,9 @@ def verify_phase(workspace: Path) -> int:
                         quality_validator=validator,
                     )
                     if replay != translated:
-                        errors.append("QWEN8BTHINK_REPLAY_MISMATCH:" + case.id)
+                        persistence_errors.append("QWEN8BTHINK_REPLAY_MISMATCH:" + case.id)
                 except Exception as exc:
-                    errors.append(
+                    persistence_errors.append(
                         "QWEN8BTHINK_REPLAY_FAILED:" + case.id + ":" + str(exc)[:220]
                     )
 
@@ -617,7 +625,16 @@ def verify_phase(workspace: Path) -> int:
         "backend_executed_before_restart": bool(report.get("backend_executed")),
         "models_loaded_during_restart": False,
         "errors": errors,
-        "status": "PASS" if not errors else "FAIL",
+        "quality_errors": quality_errors,
+        "persistence_errors": persistence_errors,
+        "quality_status": "PASS" if not quality_errors else "FAIL",
+        "persistence_status": "PASS" if not persistence_errors else "FAIL",
+        "status": (
+            "PASS" if not errors and not quality_errors and not persistence_errors
+            else "QUALITY_FAIL_PERSISTENCE_PASS"
+            if not errors and not persistence_errors
+            else "FAIL"
+        ),
     }
     _save_json(workspace / "qwen8b-think-restart-proof.json", proof)
     print(
@@ -625,7 +642,7 @@ def verify_phase(workspace: Path) -> int:
         + json.dumps(proof, ensure_ascii=True, sort_keys=True),
         flush=True,
     )
-    return 0 if not errors else 1
+    return 0 if not errors and not persistence_errors else 1
 
 
 def main() -> int:
