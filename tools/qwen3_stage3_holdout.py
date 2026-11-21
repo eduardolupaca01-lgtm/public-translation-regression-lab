@@ -13,6 +13,7 @@ from pathlib import Path
 
 from tools import qwen3_8b_careful_ja_es_candidate as careful
 from tools import qwen3_8b_thinking_ja_es_candidate as thinking
+from tools import qwen3_8b_two_pass_ja_es_candidate as two_pass
 from tools.stage3_readiness import promotion_errors, source_only_manifest
 from tools.unseen_holdout import HOLDOUT_CASES, _require_semantic_fidelity
 from translation_lab.cache import DurableTranslationCache
@@ -31,6 +32,7 @@ SEGMENTATION_MODES = (
 )
 CAREFUL_SCHEMA = "public-qwen3-8b-careful-ja-es-candidate-v1"
 THINKING_SCHEMA = "public-qwen3-8b-thinking-ja-es-candidate-v1"
+TWO_PASS_SCHEMA = "public-qwen3-8b-two-pass-ja-es-candidate-v1"
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -47,6 +49,8 @@ def _load_pinned_model(
         return careful._load_careful_model(llama_server, workspace)
     if schema == THINKING_SCHEMA:
         return thinking._load_model(llama_server, workspace)
+    if schema == TWO_PASS_SCHEMA:
+        return two_pass._load_two_pass_model(llama_server, workspace)
     raise RuntimeError("STAGE3_UNSUPPORTED_CANDIDATE_VARIANT")
 
 

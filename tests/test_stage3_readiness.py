@@ -76,6 +76,35 @@ class TestStage3Readiness(unittest.TestCase):
             promotion_errors(report, restart),
         )
 
+    def test_two_pass_promotion_requires_full_neural_review_provenance(self):
+        report, restart = valid_receipts()
+        report["schema"] = "public-qwen3-8b-two-pass-ja-es-candidate-v1"
+        report["evaluation_policy"].update({
+            "generation_variant": "uniform_neural_two_pass_revision",
+            "two_neural_passes_for_every_request": True,
+            "scripted_target_repairs": False,
+        })
+        report["generation_parameters"] = {
+            "draft": {"temperature": 0.25, "top_p": 0.93, "seed": 512},
+            "review": {"temperature": 0.0, "top_p": 1.0, "seed": 513},
+            "same_pinned_model_for_both": True,
+        }
+        report["neural_review_history"] = [
+            {"source": "fixture", "draft": "draft", "reviewed": "reviewed"}
+        ]
+        self.assertEqual(promotion_errors(report, restart), [])
+        del report["neural_review_history"]
+        self.assertIn(
+            "TWO_PASS_RAW_REVIEW_EVIDENCE_MISSING",
+            promotion_errors(report, restart),
+        )
+        report["neural_review_history"] = [{"source": "fixture"}]
+        report["generation_parameters"]["review"]["seed"] = 42
+        self.assertIn(
+            "TWO_PASS_GENERATION_PROVENANCE_CHANGED",
+            promotion_errors(report, restart),
+        )
+
     def test_partial_sixteen_of_twenty_does_not_promote(self):
         report, restart = valid_receipts()
         report["cases"] = report["cases"][:16]

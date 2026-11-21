@@ -31,6 +31,7 @@ def promotion_errors(report: dict, restart: dict) -> list[str]:
     allowed_schemas = {
         "public-qwen3-8b-thinking-ja-es-candidate-v1",
         "public-qwen3-8b-careful-ja-es-candidate-v1",
+        "public-qwen3-8b-two-pass-ja-es-candidate-v1",
     }
     schema = report.get("schema")
     if schema not in allowed_schemas:
@@ -47,6 +48,25 @@ def promotion_errors(report: dict, restart: dict) -> list[str]:
             or generation.get("source_only_prompt") is not True
         ):
             errors.append("CAREFUL_GENERATION_PROVENANCE_CHANGED")
+    if schema == "public-qwen3-8b-two-pass-ja-es-candidate-v1":
+        generation = report.get("generation_parameters") or {}
+        policy = report.get("evaluation_policy") or {}
+        if (
+            policy.get("generation_variant")
+            != "uniform_neural_two_pass_revision"
+            or policy.get("two_neural_passes_for_every_request") is not True
+            or policy.get("scripted_target_repairs") is not False
+            or generation.get("draft") != {
+                "temperature": 0.25, "top_p": 0.93, "seed": 512
+            }
+            or generation.get("review") != {
+                "temperature": 0.0, "top_p": 1.0, "seed": 513
+            }
+            or generation.get("same_pinned_model_for_both") is not True
+        ):
+            errors.append("TWO_PASS_GENERATION_PROVENANCE_CHANGED")
+        if not report.get("neural_review_history"):
+            errors.append("TWO_PASS_RAW_REVIEW_EVIDENCE_MISSING")
     if report.get("status") != "PASS" or not report.get("backend_executed"):
         errors.append("NEURAL_DEVELOPMENT_NOT_PASSED")
     if (
