@@ -21,6 +21,7 @@ from tools.stage6_discourse_model import (
     DiscourseThinkingTranslator,
     load_model as load_discourse_model,
 )
+from tools.stage8_katakana_readings import phonetic_sidecar, source_katakana_readings
 
 # One uniform, source-only instruction for all Stage8 inputs; no case-specific
 # names, Spanish reference answers, or target-side corrections are supplied.
@@ -33,9 +34,16 @@ Keep the subject who witnessed an action distinct from the person witnessed.
 Preserve the observed action and its past/ongoing temporal perspective.
 Express inclusive numeric bounds (up to and including, from and including)
 with natural Spanish while preserving what each threshold permits or forbids.
+Read Japanese katakana proper names as precise phonetic sequences; never
+expand them to familiar full names or add syllables. When one person witnesses
+another person's action, name the witnessed person clearly in Spanish to
+avoid ambiguous pronouns and preserve which witness did NOT see the action.
+For numerical conditions, write complete grammatical Spanish clauses and
+keep permission or prohibition associated with the correct inclusive bound.
+Do not use elliptical broken introductions, and retain each RPG control code.
 This identical instruction applies to EVERY Japanese source. Output only Spanish.
 """
-GENERATION_VARIANT = "stage8_uniform_name_and_role_fidelity_v5"
+GENERATION_VARIANT = "stage8_uniform_name_phonetics_and_permissions_v6"
 STAGE8_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + STAGE8_NAME_FIDELITY_GUIDANCE
 PROMPT_SHA256 = hashlib.sha256(STAGE8_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
 
@@ -45,6 +53,9 @@ class Stage8NameFidelityTranslator(DiscourseThinkingTranslator):
     def build_payload(text: str) -> dict:
         payload = DiscourseThinkingTranslator.build_payload(text)
         payload["messages"][0]["content"] = STAGE8_SYSTEM_PROMPT
+        # Uniform source-derived pronunciations: never a Spanish reference
+        # sentence or a post-inference replacement.
+        payload["messages"][1]["content"] += phonetic_sidecar(text)
         return payload
 
 
@@ -60,6 +71,8 @@ def load_model(llama_server: Path, workspace: Path):
         "generation_variant": GENERATION_VARIANT,
         "translation_system_prompt_sha256": PROMPT_SHA256,
         "case_specific_prompts": False,
+        "uniform_source_katakana_phonetics": True,
+        "prepared_translation_hints": False,
     })
     return updated, provenance
 from translation_lab.cache import DurableTranslationCache
@@ -98,13 +111,14 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
     report = {
         "schema": "ja-es-stage8-new-source-neural-v1",
         "kind": "EXPLORATORY_RESEARCH_NOT_LINGUISTIC_APPROVAL",
-        "semantic_rubric": "stage8_new_source_dialogue_semantic_rubric_v2",
+        "semantic_rubric": "stage8_new_source_dialogue_semantic_rubric_v3",
         "evaluation_scope": "published_synthetic_source_set_not_external_blind",
         "sources_only": True,
         "generation_variant": GENERATION_VARIANT,
         "translation_system_prompt_sha256": PROMPT_SHA256,
         "target_repairs": False,
         "case_specific_prompts": False,
+        "source_katakana_phonetics": True,
         "reference_spanish_provided_to_model": False,
         "human_approvals": False,
         "model_executed": False,
@@ -136,6 +150,7 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
                     "risk": sample.risk,
                     "status": "rejected",
                     "raw_model_attempts": [],
+                    "source_katakana_readings": source_katakana_readings(sample.japanese),
                     "rejected_modes": [],
                 }
                 proposals: list[str] = []

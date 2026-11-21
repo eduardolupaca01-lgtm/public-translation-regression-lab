@@ -222,7 +222,8 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
          "UPPER_INCLUSIVE_BOUND_MISSING"),
         (r"\b(?:puerta|porton|entrada)\b", "DOOR_MISSING"),
         (r"\b(?:no|prohibid)\w*\b", "LOWER_FORBIDS_OPENING_MISSING"),
-        (r"\b(?:permit|puede|podr)\w*\b|\besta\s+bien\s+abrir\w*\b", "UPPER_PERMITS_OPENING_MISSING"),
+        (r"\b(?:permit|puede|podr)\w*\b|\besta\s+bien\s+(?:abrir\w*|que\s+(?:(?:la|lo)\s+)?abr\w*)\b",
+         "UPPER_PERMITS_OPENING_MISSING"),
     ),
     "reserve_wednesday_friday": (
         (r"\bmiercoles\b", "WEDNESDAY_MISSING"),
@@ -265,7 +266,12 @@ def _semantic_errors(sample: Stage8Case, spanish: str) -> list[str]:
                 if re.search(r"\b(?:se\s+puede|puede|permit\w*|esta\s+bien)\b.{0,25}\babr\w*\b", clause) and not re.search(r"\bno\b.{0,20}\b(?:puede|permit\w*|abr\w*)\b", clause):
                     faults.append("LOWER_BOUND_WRONGLY_PERMITS_OPENING")
             if re.search(r"\b(?:5|cinco)\b", clause):
-                if re.search(r"\bno\s+(?:abra|abrir|abran|abrirla|se\s+puede\s+abrir)\b", clause):
+                if re.search(
+                    r"\bno\s+(?:(?:se\s+)?(?:puede|debe)\s+abrir\w*|"
+                    r"(?:esta\s+bien|esta\s+permitido)\s+(?:que\s+)?"
+                    r"(?:(?:la|lo)\s+)?abr\w*|abr\w*)\b",
+                    clause,
+                ):
                     faults.append("UPPER_BOUND_WRONGLY_FORBIDS_OPENING")
     if sample.id == "two_speakers_aria_sara":
         if re.search(r"\b(?:pregunt|consult)\w*\s+a\s+sara\b", v):

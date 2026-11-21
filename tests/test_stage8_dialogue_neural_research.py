@@ -9,7 +9,13 @@ import unittest
 from tools.stage8_dialogue_cases import (
     STAGE8_CASES, REQUIRED, _semantic_errors, manifest, source_sets_disjoint,
 )
-from tools.stage8_dialogue_neural_research import translate_phase, verify_phase
+from tools.stage8_dialogue_neural_research import (
+    translate_phase, verify_phase, Stage8NameFidelityTranslator,
+    GENERATION_VARIANT, PROMPT_SHA256, STAGE8_SYSTEM_PROMPT,
+)
+from tools.stage8_katakana_readings import (
+    katakana_romanization, source_katakana_readings, phonetic_sidecar,
+)
 
 
 class TestStage8SourceOnlyResearch(unittest.TestCase):
@@ -62,6 +68,39 @@ class TestStage8SourceOnlyResearch(unittest.TestCase):
         err=_semantic_errors(by["variable_boundary_two_cases"],reversed_bounds)
         self.assertIn("LOWER_BOUND_WRONGLY_PERMITS_OPENING",err)
         self.assertIn("UPPER_BOUND_WRONGLY_FORBIDS_OPENING",err)
+
+    def test_source_derived_phonetics_are_not_spanish_reference_answers(self):
+        import hashlib
+        self.assertEqual(GENERATION_VARIANT, "stage8_uniform_name_phonetics_and_permissions_v6")
+        self.assertEqual(PROMPT_SHA256, hashlib.sha256(
+            STAGE8_SYSTEM_PROMPT.encode("utf-8")).hexdigest())
+        by = {c.id:c for c in STAGE8_CASES}
+        case = by["taro_hana_mika_witness"]
+        readings = dict(source_katakana_readings(case.japanese))
+        self.assertEqual(readings["ハナ"], "Hana")
+        self.assertEqual(readings["ミカ"], "Mika")
+        self.assertEqual(katakana_romanization("アリア"), "Aria")
+        self.assertEqual(katakana_romanization("サラ"), "Sara")
+        payload = Stage8NameFidelityTranslator.build_payload(case.japanese)
+        self.assertEqual(payload["messages"][0]["content"], STAGE8_SYSTEM_PROMPT)
+        prompt = payload["messages"][1]["content"]
+        self.assertIn(case.japanese, prompt)
+        self.assertIn("ハナ = Hana", prompt)
+        self.assertIn("ミカ = Mika", prompt)
+        self.assertNotIn("Hanako", prompt)
+        self.assertNotIn("Taro vio a Hana", prompt)
+        self.assertEqual(phonetic_sidecar("薬を三つ買いました。"), "")
+
+    def test_permission_faithful_subjunctive_vs_negated_inversion(self):
+        sample = {c.id:c for c in STAGE8_CASES}["variable_boundary_two_cases"]
+        good = r"Si \\V[5] es 4 o menos, no abra esta puerta. Si es 5 o más, está bien que la abra."
+        self.assertEqual(_semantic_errors(sample, good), [])
+        allowed = r"Si \\V[5] es 4 o menos, no abra esta puerta. Si es 5 o más, está permitido abrirla."
+        self.assertEqual(_semantic_errors(sample, allowed), [])
+        wrong = r"Si \\V[5] es 4 o menos, no abra esta puerta. Si es 5 o más, no está bien que la abra."
+        self.assertIn("UPPER_BOUND_WRONGLY_FORBIDS_OPENING", _semantic_errors(sample, wrong))
+        wrong2 = r"Si \\V[5] es 4 o menos, no abra esta puerta. Si es 5 o más, no se puede abrirla."
+        self.assertIn("UPPER_BOUND_WRONGLY_FORBIDS_OPENING", _semantic_errors(sample, wrong2))
 
     def test_japanese_name_must_not_be_extended_or_shortened(self):
         by={c.id:c for c in STAGE8_CASES}
