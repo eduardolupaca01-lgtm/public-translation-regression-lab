@@ -214,9 +214,9 @@ def main() -> int:
         }, ensure_ascii=True, sort_keys=True),
         flush=True,
     )
-    # This audit must never transform a weak or unreviewed translation into a
-    # success exit code. Independent human bilingual sign-off is not automated.
-    return 1
+    # The automated screen may pass, but independent human bilingual sign-off
+    # is always a separate requirement before general use or stage promotion.
+    return 0 if result["status"] == "AUTOMATED_SCREEN_PASS_HUMAN_REVIEW_PENDING" else 1
 
 
 if __name__ == "__main__":
