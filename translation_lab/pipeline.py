@@ -24,7 +24,70 @@ NUMERIC = r"(?<![0-9０-９])[0-9０-９]+(?![0-9０-９])"
 JAPANESE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 SENTENCE_END = re.compile(r"[。!?！？]+(?:[」』】）》]*)")
 LINE_END = re.compile(r"(\r\n|\r|\n)$")
-INTERNAL_MARKER = re.compile(r"\\V\[9876[5-9]\d+\]|ZXQTX760(?:NUM|TERM)\d+QXZ")
+
+
+def _target_sentences(text: str) -> list[str]:
+    """Split Spanish/English sentences without breaking a. m. or p. m."""
+    stripped = text.strip(" \t\u3000")
+    if not stripped:
+        return []
+    return [
+        part.strip(" \t\u3000")
+        for part in re.split(
+            r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÑ¿¡])",
+            stripped,
+        )
+        if part.strip(" \t\u3000")
+    ]
+
+
+def _restore_document_line_breaks(source: str, translated: str) -> str:
+    """Reapply source line boundaries when target sentence counts align."""
+    source_parts = _split_preserving_newlines(source)
+    source_lines = source_parts[::2]
+    source_breaks = source_parts[1::2]
+    if not source_breaks:
+        return translated
+
+    source_sentence_counts = [
+        len([part for part in split_sentences(line) if part.strip(" \t\u3000")])
+        for line in source_lines
+    ]
+    if any(count == 0 for count in source_sentence_counts):
+        raise TranslationRejected("DOCUMENT_LAYOUT_ALIGNMENT_FAILED")
+
+    target_parts = _split_preserving_newlines(translated)
+    target_lines = target_parts[::2]
+    target_sentence_counts = [len(_target_sentences(line)) for line in target_lines]
+
+    if (
+        len(target_lines) == len(source_lines)
+        and target_sentence_counts == source_sentence_counts
+    ):
+        return "".join(
+            target_lines[index]
+            + (source_breaks[index] if index < len(source_breaks) else "")
+            for index in range(len(source_lines))
+        )
+
+    flattened = " ".join(line.strip(" \t\u3000") for line in target_lines if line.strip(" \t\u3000"))
+    target_sentences = _target_sentences(flattened)
+    if len(target_sentences) != sum(source_sentence_counts):
+        raise TranslationRejected("DOCUMENT_LAYOUT_ALIGNMENT_FAILED")
+
+    rebuilt = []
+    cursor = 0
+    for index, count in enumerate(source_sentence_counts):
+        rebuilt.append(" ".join(target_sentences[cursor:cursor + count]))
+        cursor += count
+        if index < len(source_breaks):
+            rebuilt.append(source_breaks[index])
+    return "".join(rebuilt)
+INTERNAL_MARKER = re.compile(
+    r"\\V\[(?:9876[5-9]\d|987[7-9]\d{2}|98[89]\d{3}|99\d{4})\]"
+    r"|ZXQTX760(?:NUM|TERM)\d+QXZ|ZXQPLB[A-Z]+QXZ"
+)
+DOCUMENT_LAYOUT_MARKER = re.compile(r"ZXQPLB[A-Z]+QXZ")
 
 
 class TranslationRejected(ValueError):
@@ -182,6 +245,54 @@ def restore_literals(translated: str, mapping: Mapping[str, str]) -> str:
     return _normalize_prose_punctuation(restored)
 
 
+
+
+def _translate_with_contextual_literals(
+    protected: str,
+    model_translate: Callable[[str], str],
+    split_model_sentences: bool | str,
+) -> str:
+    """Translate complete context while leaving opaque sentinels in-band."""
+    if split_model_sentences == "lines":
+        sentences = _split_preserving_newlines(protected)
+    elif split_model_sentences == "document":
+        sentences = [protected]
+    elif split_model_sentences is True:
+        sentences = split_sentences(protected)
+    else:
+        sentences = [protected]
+
+    sentence_results: list[tuple[str, str]] = []
+    for sentence in sentences:
+        if not sentence or sentence in ("\r\n", "\r", "\n"):
+            sentence_results.append((sentence, sentence))
+            continue
+        without_markers = "".join(
+            fragment for is_code, fragment in code_parts(sentence)
+            if not is_code
+        )
+        if not (
+            JAPANESE.search(without_markers)
+            or re.search(r"[A-Za-z]", without_markers)
+        ):
+            sentence_results.append((sentence, sentence))
+            continue
+        value = model_translate(sentence)
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or (
+                split_model_sentences != "document"
+                and ("\n" in value or "\r" in value)
+            )
+        ):
+            raise TranslationRejected("MODEL_RESULT_MALFORMED")
+        sentence_results.append((sentence, value))
+
+    if split_model_sentences is True:
+        return _join_spanish_sentences(sentence_results)
+    return "".join(value for _, value in sentence_results)
+
 def _split_preserving_newlines(text: str) -> list[str]:
     return re.split(r"(\r\n|\r|\n)", text)
 
@@ -250,10 +361,74 @@ def _normalize_spanish_number_words(
     return result
 
 
+def _normalize_explicit_pm_clock_equivalents(original: str, translated: str) -> str:
+    """Normalize clock notation only for structurally equivalent PM hours.
+
+    This is a *comparison* copy; the translated text is never rewritten. A
+    24-hour time is eligible only if the source explicitly states the matching
+    PM clock time, with unchanged minutes. A dot separator requires an explicit
+    'hora(s)' suffix to distinguish clock values from decimal prices.
+    """
+    source_prose = "".join(
+        part for protected, part in code_parts(original) if not protected
+    )
+    afternoon_clocks: set[tuple[int, int | None]] = set()
+
+    for match in re.finditer(
+        r"(?<!\w)(?P<hour>0?[1-9]|1[0-2])"
+        r"(?:[:：](?P<minute>[0-5]\d))?\s*p\s*\.?\s*m\s*\.?(?!\w)",
+        source_prose, flags=re.IGNORECASE,
+    ):
+        afternoon_clocks.add((
+            int(match.group("hour")),
+            int(match.group("minute")) if match.group("minute") else None,
+        ))
+    for match in re.finditer(
+        r"午後\s*(?P<hour>0?[1-9]|1[0-2])\s*時"
+        r"(?:\s*(?P<minute>[0-5]?\d)\s*分)?",
+        source_prose,
+    ):
+        afternoon_clocks.add((
+            int(match.group("hour")),
+            int(match.group("minute")) if match.group("minute") else None,
+        ))
+    if not afternoon_clocks:
+        return translated
+
+    def to_12h_if_equal(match: re.Match[str]) -> str:
+        hour = int(match.group("hour"))
+        minutes = int(match.group("minute"))
+        if match.group("separator") == "." and not re.match(
+            r"\s*(?:hora(?:s)?\b|h\b)", translated[match.end():],
+            flags=re.IGNORECASE,
+        ):
+            return match.group(0)
+        for source_hour, source_minutes in afternoon_clocks:
+            if (
+                hour == source_hour + 12
+                and (
+                    (source_minutes is None and minutes == 0)
+                    or (source_minutes is not None and minutes == source_minutes)
+                )
+            ):
+                return str(source_hour) + (
+                    f":{match.group('minute')}" if source_minutes is not None
+                    else ""
+                )
+        return match.group(0)
+
+    return re.sub(
+        r"(?<!\d)(?P<hour>1[3-9]|2[0-3])"
+        r"(?P<separator>[:.])(?P<minute>[0-5]\d)(?!\d)",
+        to_12h_if_equal, translated,
+    )
+
+
 def _numeric_comparison_candidate(
     original: str, translated: str, source_numbers: Counter[str]
 ) -> str:
     result = _normalize_spanish_number_words(translated, source_numbers)
+    result = _normalize_explicit_pm_clock_equivalents(original, result)
     # 3:00 is equivalent to Japanese 3時; added non-zero minutes are not.
     source_has_minutes = bool(
         re.search(r"[0-9０-９]{1,2}[:：][0-9０-９]{2}|[0-9０-９]+分", original)
@@ -400,11 +575,17 @@ def translate_checked(
     inline_glossary: bool = False,
     split_model_sentences: bool | str = True,
     contextualize_name_codes: bool = False,
+    protect_literals_in_context: bool = False,
 ) -> str:
     """Route only prose to a supplied model, then validate before caching.
 
     This harness deliberately provides NO neural model. The caller must supply
     an appropriately licensed translator; public CI uses deterministic fakes.
+
+    When protect_literals_in_context is true, original control codes and the
+    pipeline's native RPG-style numeric/glossary sentinels remain inside the
+    model's sentence. Every synthetic sentinel must be returned exactly once;
+    native codes are checked verbatim. Target-language word order may differ.
     """
     model_source = original
     contextual_name_codes: tuple[str, ...] = ()
@@ -417,43 +598,58 @@ def translate_checked(
         protect_numbers=protect_numbers,
         inline_glossary=inline_glossary,
     )
-    translated_chunks = []
-    for protected_code, fragment in code_parts(protected):
-        if protected_code or not fragment or not fragment.strip():
-            translated_chunks.append(fragment)
-            continue
-        sentence_results: list[tuple[str, str]] = []
-        if split_model_sentences == "lines":
-            sentences = _split_preserving_newlines(fragment)
-        elif split_model_sentences == "document":
-            sentences = [fragment]
-        elif split_model_sentences is True:
-            sentences = split_sentences(fragment)
-        else:
-            sentences = [fragment]
-        for sentence in sentences:
-            if not sentence or sentence in ("\r\n", "\r", "\n"):
-                sentence_results.append((sentence, sentence))
+    if protect_literals_in_context:
+        # Keep native RPG codes and the pipeline's collision-safe \\V[987650]
+        # sentinels inside the sentence so the model sees their semantic context.
+        # restore_literals rejects missing/duplicated numeric or glossary markers.
+        intermediate = _translate_with_contextual_literals(
+            protected, model_translate, split_model_sentences
+        )
+        restored_prose = restore_literals(intermediate, mapping)
+    else:
+        translated_chunks = []
+        for protected_code, fragment in code_parts(protected):
+            if protected_code or not fragment or not fragment.strip():
+                translated_chunks.append(fragment)
                 continue
-            if not (JAPANESE.search(sentence) or re.search(r"[A-Za-z]", sentence)):
-                sentence_results.append((sentence, sentence))
-                continue
-            value = model_translate(sentence)
-            if (not isinstance(value, str) or not value.strip()
-                    or (split_model_sentences != "document"
-                        and ("\n" in value or "\r" in value))):
-                raise TranslationRejected("MODEL_RESULT_MALFORMED")
-            sentence_results.append((sentence, value))
-        if split_model_sentences is True:
-            translated_chunks.append(_join_spanish_sentences(sentence_results))
-        else:
-            translated_chunks.append("".join(value for _, value in sentence_results))
-    intermediate = "".join(translated_chunks)
+            sentence_results: list[tuple[str, str]] = []
+            if split_model_sentences == "lines":
+                sentences = _split_preserving_newlines(fragment)
+            elif split_model_sentences == "document":
+                sentences = [fragment]
+            elif split_model_sentences is True:
+                sentences = split_sentences(fragment)
+            else:
+                sentences = [fragment]
+            for sentence in sentences:
+                if not sentence or sentence in ("\r\n", "\r", "\n"):
+                    sentence_results.append((sentence, sentence))
+                    continue
+                if not (JAPANESE.search(sentence) or re.search(r"[A-Za-z]", sentence)):
+                    sentence_results.append((sentence, sentence))
+                    continue
+                value = model_translate(sentence)
+                if (
+                    not isinstance(value, str)
+                    or not value.strip()
+                    or (
+                        split_model_sentences != "document"
+                        and ("\n" in value or "\r" in value)
+                    )
+                ):
+                    raise TranslationRejected("MODEL_RESULT_MALFORMED")
+                sentence_results.append((sentence, value))
+            if split_model_sentences is True:
+                translated_chunks.append(_join_spanish_sentences(sentence_results))
+            else:
+                translated_chunks.append("".join(value for _, value in sentence_results))
+        intermediate = "".join(translated_chunks)
+        restored_prose = restore_literals(intermediate, mapping)
+    if split_model_sentences == "document":
+        restored_prose = _restore_document_line_breaks(original, restored_prose)
     restored = restore_layout(
         original,
-        restore_contextual_name_codes(
-            restore_literals(intermediate, mapping), contextual_name_codes
-        ),
+        restore_contextual_name_codes(restored_prose, contextual_name_codes),
     )
     validate_translation(original, restored, source=source, required_terms=required_terms)
     return restored
