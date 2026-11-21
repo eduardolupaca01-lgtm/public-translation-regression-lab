@@ -361,10 +361,74 @@ def _normalize_spanish_number_words(
     return result
 
 
+def _normalize_explicit_pm_clock_equivalents(original: str, translated: str) -> str:
+    """Normalize clock notation only for structurally equivalent PM hours.
+
+    This is a *comparison* copy; the translated text is never rewritten. A
+    24-hour time is eligible only if the source explicitly states the matching
+    PM clock time, with unchanged minutes. A dot separator requires an explicit
+    'hora(s)' suffix to distinguish clock values from decimal prices.
+    """
+    source_prose = "".join(
+        part for protected, part in code_parts(original) if not protected
+    )
+    afternoon_clocks: set[tuple[int, int | None]] = set()
+
+    for match in re.finditer(
+        r"(?<!\w)(?P<hour>0?[1-9]|1[0-2])"
+        r"(?:[:：](?P<minute>[0-5]\d))?\s*p\s*\.?\s*m\s*\.?(?!\w)",
+        source_prose, flags=re.IGNORECASE,
+    ):
+        afternoon_clocks.add((
+            int(match.group("hour")),
+            int(match.group("minute")) if match.group("minute") else None,
+        ))
+    for match in re.finditer(
+        r"午後\s*(?P<hour>0?[1-9]|1[0-2])\s*時"
+        r"(?:\s*(?P<minute>[0-5]?\d)\s*分)?",
+        source_prose,
+    ):
+        afternoon_clocks.add((
+            int(match.group("hour")),
+            int(match.group("minute")) if match.group("minute") else None,
+        ))
+    if not afternoon_clocks:
+        return translated
+
+    def to_12h_if_equal(match: re.Match[str]) -> str:
+        hour = int(match.group("hour"))
+        minutes = int(match.group("minute"))
+        if match.group("separator") == "." and not re.match(
+            r"\s*(?:hora(?:s)?\b|h\b)", translated[match.end():],
+            flags=re.IGNORECASE,
+        ):
+            return match.group(0)
+        for source_hour, source_minutes in afternoon_clocks:
+            if (
+                hour == source_hour + 12
+                and (
+                    (source_minutes is None and minutes == 0)
+                    or (source_minutes is not None and minutes == source_minutes)
+                )
+            ):
+                return str(source_hour) + (
+                    f":{match.group('minute')}" if source_minutes is not None
+                    else ""
+                )
+        return match.group(0)
+
+    return re.sub(
+        r"(?<!\d)(?P<hour>1[3-9]|2[0-3])"
+        r"(?P<separator>[:.])(?P<minute>[0-5]\d)(?!\d)",
+        to_12h_if_equal, translated,
+    )
+
+
 def _numeric_comparison_candidate(
     original: str, translated: str, source_numbers: Counter[str]
 ) -> str:
     result = _normalize_spanish_number_words(translated, source_numbers)
+    result = _normalize_explicit_pm_clock_equivalents(original, result)
     # 3:00 is equivalent to Japanese 3時; added non-zero minutes are not.
     source_has_minutes = bool(
         re.search(r"[0-9０-９]{1,2}[:：][0-9０-９]{2}|[0-9０-９]+分", original)

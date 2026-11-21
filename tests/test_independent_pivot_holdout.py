@@ -137,6 +137,10 @@ INVALID_VARIANT_TRANSLATIONS = {
 
 
 EXTRA_VALID_PARAPHRASES = (
+    ("blue_umbrella_owner",
+     "La sombrilla azul no es mía, sino de mi hermana menor."),
+    ("miss_train_take_taxi",
+     "Si no alcanzo el tren, tomaré un taxi."),
     ("meeting_time_contrast",
      "La reunión comienza a las cuatro de la tarde, en lugar de a las dos."),
     ("miss_train_take_taxi",
@@ -146,6 +150,14 @@ EXTRA_VALID_PARAPHRASES = (
 )
 
 EXTRA_ADVERSARIAL_PARAPHRASES = (
+    ("blue_umbrella_owner",
+     "La sombrilla azul es mía, no de mi hermana menor."),
+    ("blue_umbrella_owner",
+     "La sombrilla azul no es mía, es de mi hermana mayor."),
+    ("ordered_books_arrived",
+     "Los libros que pedí no fueron tres, sino dos."),
+    ("miss_train_take_taxi",
+     "Si alcanzo el tren, tomaré un taxi."),
     ("meeting_time_contrast",
      "No, la reunión comienza a las dos de la tarde, no a las cuatro."),
     ("meeting_time_contrast",
@@ -189,7 +201,7 @@ class TestIndependentHoldoutContracts(unittest.TestCase):
     def test_semantic_policy_is_versioned_and_case_sources_remain_fixed(self):
         self.assertEqual(
             SEMANTIC_POLICY_VERSION,
-            "independent_holdout_v2_semantic_calibration",
+            "independent_holdout_v3_false_rejection_controls",
         )
         self.assertEqual(len(INDEPENDENT_CASES), 20)
         self.assertEqual(len({case.japanese for case in INDEPENDENT_CASES}), 20)

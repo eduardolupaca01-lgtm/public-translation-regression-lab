@@ -416,6 +416,33 @@ class TestInlineGlossaryContext(unittest.TestCase):
             source="ja",
         )
 
+
+    def test_numeric_validation_accepts_explicit_pm_to_24h_clock(self):
+        validate_translation(
+            "The meeting begins not at 2 p. m. but at 4 p. m.",
+            "La reunión no comienza a las 14.00 horas, sino a las 16.00 horas.",
+            source="en",
+        )
+        validate_translation(
+            "明日の午後3時に来ます。",
+            "Mañana vendrá a las 15:00.",
+            source="ja",
+        )
+
+    def test_numeric_validation_rejects_wrong_24h_meridiem_minutes_and_price(self):
+        cases = (
+            ("The meeting begins at 2 p.m.", "La reunión comienza a las 15.00 horas."),
+            ("The meeting begins at 2 p.m.", "La reunión comienza a las 14.30 horas."),
+            ("The meeting begins at 2 p.m.", "La reunión comienza a las 14.00 yenes."),
+            ("The price is 2 yen.", "El precio es 14.00 horas."),
+            ("The meeting begins at 2 p.m. and costs 800 yen.",
+             "La reunión comienza a las 14.00 horas y cuesta 900 yenes."),
+        )
+        for source, translated in cases:
+            with self.subTest(source=source, translated=translated):
+                with self.assertRaises(TranslationRejected):
+                    validate_translation(source, translated, source="en")
+
     def test_numeric_validation_accepts_zero_minute_hour_formatting(self):
         validate_translation(
             "明日の午後3時に来ます。",

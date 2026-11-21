@@ -43,7 +43,7 @@ class IndependentCase:
 
 # Authored independently for stage two. Do not copy cases from the first
 # holdout or expose target-language references to the inference process.
-SEMANTIC_POLICY_VERSION = "independent_holdout_v2_semantic_calibration"
+SEMANTIC_POLICY_VERSION = "independent_holdout_v3_false_rejection_controls"
 
 
 INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
@@ -105,7 +105,8 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "blue_umbrella_owner",
         "青い傘は私のものではなく、妹のものです。",
-        (("paraguas",), ("azul",), ("mío", "pertenece"), ("hermana",),
+        (("paraguas", "sombrilla"), ("azul",), ("mío", "mía", "pertenece"),
+         ("hermana",),
          ("menor", "pequeña", "hermanita")),
     ),
     IndependentCase(
@@ -142,7 +143,7 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "miss_train_take_taxi",
         "もし電車に間に合わなければ、タクシーで行きます。",
-        (("tren",), ("taxi",), ("si",), ("pierde", "pierd", "perd", "lleg", "logr", "no llega",
+        (("tren",), ("taxi",), ("si",), ("pierde", "pierd", "perd", "lleg", "logr", "alcanz", "no llega",
                                         "no alcanza")),
     ),
     IndependentCase(
@@ -388,11 +389,11 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
 
     elif case.id == "blue_umbrella_owner":
         blue_umbrella = _has(
-            folded, r"\bparaguas\b.{0,20}\bazul\b",
-            r"\bazul\b.{0,20}\bparaguas\b",
+            folded, r"\b(?:paraguas|sombrilla)\b.{0,20}\bazul\b",
+            r"\bazul\b.{0,20}\b(?:paraguas|sombrilla)\b",
         )
         not_mine = _has(
-            folded, r"\bno es mio\b", r"\bno me pertenece\b",
+            folded, r"\bno es mi[oa]\b", r"\bno me pertenece\b",
             r"\bno es de mi propiedad\b",
         )
         sister_owns = _has(
