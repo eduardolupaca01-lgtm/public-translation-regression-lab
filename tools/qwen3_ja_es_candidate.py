@@ -71,6 +71,10 @@ Accuracy rules:
   indirect-object pronoun such as "nos", "me", or "le" without a stated recipient.
 - Preserve event type. 届く and 届きました mean arrive or be delivered, not publish;
   冊 counts physical books, not publication volumes.
+- Keep every Arabic digit sequence visible and exactly as written; do not hide it
+  behind placeholders, add thousands separators, or spell it out. Preserve each
+  number's unit and temporal qualifier. When Japanese uses number words, preserve
+  their numeric meaning. Repeat currency units or meridiem when needed for clarity.
 - Use clear, neutral Latin American Spanish. Preserve the source's level of
   politeness where Spanish grammar permits.
 - Keep every line and sentence's meaning. Do not merge or reorder independent lines.
