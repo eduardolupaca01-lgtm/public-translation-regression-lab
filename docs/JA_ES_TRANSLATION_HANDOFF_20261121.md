@@ -52,3 +52,15 @@ Estos hallazgos **no alteran** los resultados originales de tests de ingeniería
 `tools/qwen3_8b_thinking_ja_es_candidate.py`, `tools/stage4_source_complete_candidate.py`, `tools/stage5_dialogue_cases.py`, `tools/stage5_dialogue_neural_research.py`, `tools/stage4_bilingual_audit.py`, `tools/stage4_rpg_semantic_audit.py`, `tests/test_stage5_dialogue_neural_research.py`, `.github/workflows/stage5-dialogue-neural-research.yml`. Los commits y comentarios previos de PR #4 conservan el historial de decisiones.
 
 **Handoff:** una futura IA debe comenzar por ESTE documento, comprobar que los links todavía resuelven, confirmar el HEAD actual de la rama experimental y del PR y seguir solo a partir de datos comprobados. Los resultados publicados son investigación y no certificación.
+
+## Actualización posterior al punto de corte: etapa 6 en ejecución
+
+Se iniciaron **16 casos sintéticos japoneses totalmente nuevos**, distintos de los 20+10+12+16 anteriores, y una variante **uniforme v2** del mismo modelo fijado. El prompt general añade controles sobre condiciones `なら/たら/ば`, variables numéricas, género gramatical, papeles de agente/objeto y fechas relativas, **sin** suministrar respuestas españolas ni sustituir salidas. La rúbrica semántica v1 de la etapa 6 exige, entre otras cosas, condiciones explícitas al contrastar dos valores de variables, pronombres y objetos correctos, cronología, negaciones, precios y códigos RPG.
+
+- Commit que lanzó la ejecución: `7b03df385ed33bee07bc284691103ff25e3c5eb6`.
+- Ejecución de inferencia real: [44916744155](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44916744155).
+- Archivos: `tools/stage6_dialogue_cases.py`, `tools/stage6_discourse_model.py`, `tools/stage6_dialogue_neural_research.py`, `tests/test_stage6_dialogue_neural_research.py`, `.github/workflows/stage6-dialogue-neural-research.yml`.
+- Pruebas de regresión: [44916744061](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44916744061) y [44916750509](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44916750509), ejecución final a comprobar por quien retome.
+- Al escribir esta entrada, la etapa 6 **estaba en curso**. No afirmar `16/16` ni `PASS` hasta verificar los registros finales, el `stage6-neural-report.json`, las salidas originales y el `stage6-cold-restart-proof.json`. Si fallan casos, preservar su `review_queue` y sus salidas sin editarlas. El resultado más reciente probado sigue siendo 16/16 de la etapa 5, pero solo bajo su rúbrica automática.
+
+**Regla de integración:** el respaldo de etapa 5 y este documento ya permiten continuidad sin chat. NO hay aprobación profesional ni autorización técnica segura para fusionar el candidato completo a `main` mientras persistan errores semánticos comprobados. Integrar **solo después** de evidencia lingüística más rigurosa y revisión humana.
