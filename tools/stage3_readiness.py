@@ -28,8 +28,25 @@ def promotion_errors(report: dict, restart: dict) -> list[str]:
     errors: list[str] = []
     by_id = {case.id: case for case in INDEPENDENT_CASES}
     rows = report.get("cases") or []
-    if report.get("schema") != "public-qwen3-8b-thinking-ja-es-candidate-v1":
+    allowed_schemas = {
+        "public-qwen3-8b-thinking-ja-es-candidate-v1",
+        "public-qwen3-8b-careful-ja-es-candidate-v1",
+    }
+    schema = report.get("schema")
+    if schema not in allowed_schemas:
         errors.append("UNEXPECTED_CANDIDATE_REPORT_SCHEMA")
+    if schema == "public-qwen3-8b-careful-ja-es-candidate-v1":
+        generation = report.get("generation_parameters") or {}
+        policy = report.get("evaluation_policy") or {}
+        if (
+            policy.get("generation_variant")
+            != "uniform_source_only_careful_prompt"
+            or generation.get("temperature") != 0.25
+            or generation.get("top_p") != 0.93
+            or generation.get("seed") != 512
+            or generation.get("source_only_prompt") is not True
+        ):
+            errors.append("CAREFUL_GENERATION_PROVENANCE_CHANGED")
     if report.get("status") != "PASS" or not report.get("backend_executed"):
         errors.append("NEURAL_DEVELOPMENT_NOT_PASSED")
     if (

@@ -59,6 +59,23 @@ class TestStage3Readiness(unittest.TestCase):
         report, restart = valid_receipts()
         self.assertEqual(promotion_errors(report, restart), [])
 
+    def test_complete_careful_candidate_requires_pinned_generation_metadata(self):
+        report, restart = valid_receipts()
+        report["schema"] = "public-qwen3-8b-careful-ja-es-candidate-v1"
+        report["evaluation_policy"]["generation_variant"] = (
+            "uniform_source_only_careful_prompt"
+        )
+        report["generation_parameters"] = {
+            "temperature": 0.25, "top_p": 0.93,
+            "seed": 512, "source_only_prompt": True,
+        }
+        self.assertEqual(promotion_errors(report, restart), [])
+        report["generation_parameters"]["top_p"] = 1
+        self.assertIn(
+            "CAREFUL_GENERATION_PROVENANCE_CHANGED",
+            promotion_errors(report, restart),
+        )
+
     def test_partial_sixteen_of_twenty_does_not_promote(self):
         report, restart = valid_receipts()
         report["cases"] = report["cases"][:16]
