@@ -505,8 +505,11 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         )
         taxi_not_negated = not _has(
             folded,
-            r"\bno\b.{0,20}\b(?:iremos|ire|vamos|voy|tomare|tomaremos)"
-            r"\b.{0,20}\btaxi\b",
+            # Negation belongs to the taxi action, not to the train
+            # condition in a previous clause ("si no alcanzo el tren").
+            r"\bno\s+(?:(?:me|nos)\s+)?"
+            r"(?:iremos|ire|vamos|voy|tomare|tomaremos)"
+            r"\b.{0,25}\btaxi\b",
         )
         if (
             not miss_train_condition or loss_is_negated
