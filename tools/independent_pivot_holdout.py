@@ -300,8 +300,8 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         )
         come_to_room = _has(
             folded,
-            r"\b(?:venga|acuda|dirijase|pase)\w*.{0,55}\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b",
-            r"\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b.{0,35}\b(?:venga|acuda|dirijase|pase)\w*\b",
+            r"\b(?:venga|acuda|dirijase|pase|venir)\w*.{0,55}\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b",
+            r"\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b.{0,35}\b(?:venga|acuda|dirijase|pase|venir)\w*\b",
         )
         invented_recipient = _has(
             folded,
@@ -329,7 +329,21 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         two_is_not_negated = affirmative_two_contrast or not _has(
             folded, r"\bno\b.{0,22}\b(?:2|dos)\b"
         )
-        if not three_excluded or not two_arrived or not two_is_not_negated:
+        arrival_denied_after_two = _has(
+            folded,
+            r"\b(?:2|dos)\b.{0,35}[.!?]\s*no\b.{0,18}\b(?:lleg|recib)\w*\b",
+            r"\bsino(?:\s+que)?\s+(?:solo\s+)?(?:2|dos)\b.{0,35}[.!?]\s*no\b.{0,18}\b(?:lleg|recib)\w*\b",
+        )
+        arrival_negated_before_two = _has(
+            folded, r"\bno\b.{0,18}\b(?:lleg|recib)\w*\b"
+        )
+        arrival_not_negated = (
+            not arrival_negated_before_two or affirmative_two_contrast
+        ) and not arrival_denied_after_two
+        if (
+            not three_excluded or not two_arrived or not two_is_not_negated
+            or not arrival_not_negated
+        ):
             errors.append("DELIVERED_BOOK_QUANTITY_CHANGED")
 
     elif case.id == "colder_today_weaker_wind":
