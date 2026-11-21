@@ -42,11 +42,14 @@ class IndependentCase:
 
 # Authored independently for stage two. Do not copy cases from the first
 # holdout or expose target-language references to the inference process.
+SEMANTIC_POLICY_VERSION = "independent_holdout_v2_semantic_calibration"
+
+
 INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "meeting_time_contrast",
         "会議は午後二時ではなく、午後四時に始まります。",
-        (("reunión", "junta"), ("empez", "comenz", "inici"),
+        (("reunión", "junta"), ("empez", "empiez", "comenz", "comienz", "inici"),
          ("4", "cuatro", "16:00"), ("2", "dos", "14:00"),
          ("tarde", "p.m.", "pm")),
     ),
@@ -77,8 +80,8 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "email_before_meeting",
         "先にメールを送ってから、会議室に来てください。",
-        (("correo", "email"), ("reunión",), ("sala de reuniones",
-                                             "sala de reunión"),
+        (("correo", "email"), ("reunión", "conferencia"), ("sala de reuniones",
+                                             "sala de reunión", "sala de conferencias"),
          ("env", "mand"), ("primero", "antes", "después", "luego")),
     ),
     IndependentCase(
@@ -90,7 +93,7 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "colder_today_weaker_wind",
         "今日は昨日より寒いですが、風は弱いです。",
-        (("hoy",), ("ayer",), ("frío",), ("viento",), ("débil",)),
+        (("hoy",), ("ayer",), ("frío",), ("viento",), ("débil", "suave", "flojo")),
     ),
     IndependentCase(
         "children_permission_and_prohibition",
@@ -101,7 +104,8 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "blue_umbrella_owner",
         "青い傘は私のものではなく、妹のものです。",
-        (("paraguas",), ("azul",), ("mío", "pertenece"), ("hermana",)),
+        (("paraguas",), ("azul",), ("mío", "pertenece"), ("hermana",),
+         ("menor", "pequeña", "hermanita")),
     ),
     IndependentCase(
         "shop_yesterday_today",
@@ -124,7 +128,7 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "cooked_and_washed_dishes",
         "彼は料理だけでなく、皿洗いもしました。",
-        (("cocin",), ("lav",), ("plato",), ("también", "además",
+        (("cocin", "prepar"), ("lav",), ("plato",), ("también", "además",
                                             "no solo", "sino también")),
     ),
     IndependentCase(
@@ -132,12 +136,12 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
         "この書類に署名する前に、内容を確認しなければなりません。",
         (("documento", "formulario"), ("firm",), ("contenido",),
          ("revis", "verific", "comprob"), ("debe", "tiene que",
-                                           "es necesario")),
+                                           "es necesario", "hay que", "se debe")),
     ),
     IndependentCase(
         "miss_train_take_taxi",
         "もし電車に間に合わなければ、タクシーで行きます。",
-        (("tren",), ("taxi",), ("si",), ("pierde", "perd", "no llega",
+        (("tren",), ("taxi",), ("si",), ("pierde", "perd", "lleg", "logr", "no llega",
                                         "no alcanza")),
     ),
     IndependentCase(
@@ -203,17 +207,22 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
             folded,
             r"\bno\b.{0,45}\b(?:2|dos|14:00)\b",
             r"\b(?:2|dos|14:00)\b.{0,30}\bno\b",
+            r"\b(?:en lugar de|en vez de)\b.{0,35}\b(?:2|dos|14:00)\b",
+            r"\b(?:2|dos|14:00)\b.{0,30}\b(?:en lugar de|en vez de)\b",
         )
         four_starts_meeting = _has(
             folded,
-            r"\b(?:reunion|junta)\b.{0,70}\b(?:empez|comenz|inici)\w*\b"
-            r".{0,60}\b(?:4|cuatro|16:00)\b",
-            r"\b(?:4|cuatro|16:00)\b.{0,45}\b(?:empez|comenz|inici)\w*\b",
+            r"\b(?:reunion|junta)\b.{0,70}\b(?:empez|empiez|comenz|comienz|inici)\w*\b.{0,60}\b(?:4|cuatro|16:00)\b",
+            r"\b(?:4|cuatro|16:00)\b.{0,45}\b(?:empez|empiez|comenz|comienz|inici)\w*\b",
         )
         four_is_afternoon = _has(
             folded,
             r"\b(?:4|cuatro|16:00)\b.{0,30}\b(?:tarde|pm)\b",
             r"\b(?:4|cuatro)\s*pm\b",
+        ) or _has(
+            folded,
+            r"\b(?:2|dos|14:00)\b.{0,25}\b(?:tarde|pm)\b.{0,45}\b(?:sino|en lugar de|en vez de|no)\b.{0,30}\b(?:4|cuatro|16:00)\b",
+            r"\b(?:4|cuatro|16:00)\b.{0,35}\b(?:sino|en lugar de|en vez de|no)\b.{0,30}\b(?:2|dos|14:00)\b.{0,25}\b(?:tarde|pm)\b",
         )
         if not rejects_two or not four_starts_meeting or not four_is_afternoon:
             errors.append("MEETING_TIME_CONTRAST_OR_POLARITY_CHANGED")
@@ -284,19 +293,25 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
     elif case.id == "email_before_meeting":
         email_first = _has(
             folded,
-            r"\b(?:envie|mande)\w*.{0,25}\bprimero\b.{0,30}\bcorreo\b"
-            r".{0,65}\b(?:despues|luego)\b",
-            r"\b(?:primero)\b.{0,25}\b(?:envie|mande)\w*.{0,25}\bcorreo\b"
-            r".{0,65}\b(?:despues|luego)\b",
+            r"\b(?:envie|mande)\w*.{0,25}\bprimero\b.{0,30}\bcorreo\b.{0,65}\b(?:despues|luego)\b",
+            r"\bprimero\b.{0,25}\b(?:envie|mande)\w*.{0,25}\bcorreo\b.{0,65}\b(?:despues|luego)\b",
             r"\bdespues de (?:enviar|mandar) (?:el )?correo\b",
+            r"\bcorreo\b.{0,45}\bantes de venir\b",
         )
         come_to_room = _has(
             folded,
-            r"\b(?:venga|acuda|dirijase|pase)\w*.{0,55}\bsala de reuniones\b",
-            r"\bsala de reuniones\b.{0,35}\b(?:venga|acuda|dirijase|pase)\w*\b",
+            r"\b(?:venga|acuda|dirijase|pase)\w*.{0,55}\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b",
+            r"\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b.{0,35}\b(?:venga|acuda|dirijase|pase)\w*\b",
+        )
+        invented_recipient = _has(
+            folded,
+            r"\b(?:envie|envia|mande|manda)(?:nos|me|le|les)\b",
+            r"\b(?:envie|envia|mande|manda)\b.{0,25}\b(?:a nosotros|a nosotras|para nosotros|para nosotras|para mi)\b",
         )
         if not email_first or not come_to_room:
             errors.append("EMAIL_AND_MEETING_SEQUENCE_CHANGED")
+        if invented_recipient:
+            errors.append("EMAIL_RECIPIENT_INVENTED")
 
     elif case.id == "ordered_books_arrived":
         three_excluded = _has(
@@ -307,7 +322,11 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         two_arrived = _near(
             folded, r"\b(?:2|dos)\b", r"\b(?:lleg|recib)\w*\b", 80
         )
-        two_is_not_negated = not _has(
+        affirmative_two_contrast = _has(
+            folded,
+            r"\bno\b.{0,35}\b(?:3|tres)\b.{0,25}\bsino(?:\s+que)?\b.{0,18}\b(?:2|dos)\b",
+        )
+        two_is_not_negated = affirmative_two_contrast or not _has(
             folded, r"\bno\b.{0,22}\b(?:2|dos)\b"
         )
         if not three_excluded or not two_arrived or not two_is_not_negated:
@@ -321,8 +340,8 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         )
         weak_wind = _has(
             folded,
-            r"\bviento\b.{0,25}\bdebil\b",
-            r"\bdebil\b.{0,25}\bviento\b",
+            r"\bviento\b.{0,25}\b(?:debil|suave|flojo)\b",
+            r"\b(?:debil|suave|flojo)\b.{0,25}\bviento\b",
         )
         if not colder_than_yesterday or not weak_wind:
             errors.append("WEATHER_COMPARISON_CHANGED")
@@ -353,10 +372,14 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         )
         sister_owns = _has(
             folded, r"\bmi hermana menor\b", r"\bde mi hermana\b",
-            r"\bpertenece a mi hermana\b",
+            r"\bpertenece a mi hermana\b", r"\bde mi hermanita\b",
         )
-        if not blue_umbrella or not not_mine or not sister_owns:
-            errors.append("UMBRELLA_OWNER_CHANGED")
+        younger_sister = _has(
+            folded, r"\bhermana menor\b", r"\bhermana pequena\b",
+            r"\bhermanita\b",
+        )
+        if not blue_umbrella or not not_mine or not sister_owns or not younger_sister:
+            errors.append("UMBRELLA_OWNER_OR_SIBLING_AGE_CHANGED")
 
     elif case.id == "shop_yesterday_today":
         parts = [
@@ -408,25 +431,29 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
             folded,
             r"\bcocin\w*\b.{0,80}\blav\w*\b.{0,25}\bplatos\b",
             r"\blav\w*\b.{0,25}\bplatos\b.{0,80}\bcocin\w*\b",
+            r"\bprepar\w*\b.{0,25}\bcomida\b.{0,80}\blav\w*\b.{0,25}\bplatos\b",
+            r"\blav\w*\b.{0,25}\bplatos\b.{0,80}\bprepar\w*\b.{0,25}\bcomida\b",
         )
         additive = _has(
-            folded, r"\bno solo\b.{0,100}\bsino que tambien\b",
-            r"\btambien\b.{0,55}\bcocin\w*\b",
-            r"\bcocin\w*.{0,55}\by tambien\b",
+            folded,
+            r"\bno solo\b.{0,100}\bsino que tambien\b",
+            r"\bno solamente\b.{0,100}\bsino que tambien\b",
+            r"\bcocin\w*\b.{0,55}\by tambien\b",
+            r"\bprepar\w*\b.{0,35}\bcomida\b.{0,55}\by tambien\b",
         )
         if not both_actions or not additive:
             errors.append("COOKING_OR_DISHWASHING_ADDITIVE_MEANING_LOST")
 
     elif case.id == "check_document_before_signing":
         before_signing = _has(
-            folded, r"\bantes de firmar\b", r"\bprevio a firmar\b"
+            folded,
+            r"\bantes de firm\w*\b",
+            r"\bprevio a firm\w*\b",
         )
         must_check = _has(
             folded,
-            r"\b(?:debe|deben|tiene que|es necesario)\b.{0,45}"
-            r"\b(?:revis|verific|comprob)\w*\b.{0,35}\bcontenido\b",
-            r"\b(?:revis|verific|comprob)\w*\b.{0,35}\bcontenido\b"
-            r".{0,35}\b(?:debe|tiene que|es necesario)\b",
+            r"\b(?:debe|deben|tiene que|es necesario|hay que|se debe)\b.{0,45}\b(?:revis|verific|comprob)\w*\b.{0,35}\bcontenido\b",
+            r"\b(?:revis|verific|comprob)\w*\b.{0,35}\bcontenido\b.{0,35}\b(?:debe|deben|tiene que|es necesario|hay que|se debe)\b",
         )
         if not before_signing or not must_check:
             errors.append("DOCUMENT_REVIEW_OBLIGATION_OR_ORDER_CHANGED")
@@ -435,14 +462,18 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         miss_train_condition = _has(
             folded,
             r"\bsi\b.{0,55}\bno\s+(?:alcanz|lleg|logr)\w*.{0,25}\btren\b",
-            r"\bsi\b.{0,45}\b(?:pierde|perdemos|perdes|pierdo)\b.{0,20}\btren\b",
+            r"\bsi\b.{0,45}\b(?:pierde|perdemos|perdes|pierdo|logro|logramos|llego|llegamos)\b.{0,35}\btren\b",
         )
         taxi_consequence = _has(
             folded,
-            r"\b(?:iremos|ire|vamos|tomaremos|tomar)\b.{0,25}\btaxi\b",
-            r"\btaxi\b.{0,25}\b(?:iremos|ire|vamos|tomaremos|tomar)\b",
+            r"\b(?:iremos|ire|vamos|voy|tomare|tomaremos)\b.{0,25}\btaxi\b",
+            r"\btaxi\b.{0,25}\b(?:iremos|ire|vamos|voy|tomare|tomaremos)\b",
         )
-        if not miss_train_condition or not taxi_consequence:
+        taxi_not_negated = not _has(
+            folded,
+            r"\bno\b.{0,20}\b(?:iremos|ire|vamos|voy|tomare|tomaremos)\b.{0,20}\btaxi\b",
+        )
+        if not miss_train_condition or not taxi_consequence or not taxi_not_negated:
             errors.append("MISSED_TRAIN_CONDITION_OR_TAXI_CONSEQUENCE_CHANGED")
 
     elif case.id == "luggage_reception_or_room":
