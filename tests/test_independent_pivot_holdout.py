@@ -137,6 +137,10 @@ INVALID_VARIANT_TRANSLATIONS = {
 
 
 EXTRA_VALID_PARAPHRASES = (
+    ("email_before_meeting",
+     "Envíe primero el correo electrónico y luego venga al salón de reuniones."),
+    ("email_before_meeting",
+     "Envíe primero el correo y luego pase a la sala de juntas."),
     ("blue_umbrella_owner",
      "La sombrilla azul no es mía, sino de mi hermana menor."),
     ("miss_train_take_taxi",
@@ -150,6 +154,10 @@ EXTRA_VALID_PARAPHRASES = (
 )
 
 EXTRA_ADVERSARIAL_PARAPHRASES = (
+    ("email_before_meeting",
+     "Envíe primero el correo y luego venga al salón de clases."),
+    ("email_before_meeting",
+     "Venga primero al salón de reuniones y luego envíe el correo."),
     ("blue_umbrella_owner",
      "La sombrilla azul es mía, no de mi hermana menor."),
     ("blue_umbrella_owner",
