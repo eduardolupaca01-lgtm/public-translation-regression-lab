@@ -45,7 +45,7 @@ class FakeCTranslate2:
 
 class TestMadladCandidateContracts(unittest.TestCase):
     def test_native_rpg_placeholders_stay_in_model_context_without_fragmentation(self):
-        self.assertTrue(PROTECT_NUMBERS)
+        self.assertFalse(PROTECT_NUMBERS)
         self.assertFalse(CONTEXTUALIZE_NAME_CODES)
         self.assertTrue(PROTECT_LITERALS_IN_CONTEXT)
 
@@ -79,12 +79,15 @@ class TestMadladCandidateContracts(unittest.TestCase):
                     engine,
                     MODEL_SPECS[candidate]["target_tag"],
                 )
-                output = adapter.translate("日本語の原文です。")
+                source = "通常1000円ですが、今日は800円で買えます。"
+                output = adapter.translate(source)
                 self.assertEqual(output, "Salida original del modelo.")
                 self.assertEqual(
                     tokenizer.last_prompt,
-                    MODEL_SPECS[candidate]["target_tag"] + " 日本語の原文です。",
+                    MODEL_SPECS[candidate]["target_tag"] + " " + source,
                 )
+                self.assertIn("1000", tokenizer.last_prompt)
+                self.assertIn("800", tokenizer.last_prompt)
                 self.assertEqual(engine.kwargs["beam_size"], 4)
                 self.assertEqual(engine.kwargs["max_decoding_length"], 256)
                 self.assertEqual(engine.kwargs["no_repeat_ngram_size"], 3)
