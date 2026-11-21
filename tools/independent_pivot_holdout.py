@@ -81,8 +81,10 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "email_before_meeting",
         "先にメールを送ってから、会議室に来てください。",
-        (("correo", "email"), ("reunión", "conferencia"), ("sala de reuniones",
-                                             "sala de reunión", "sala de conferencias"),
+        (("correo", "email"), ("reunión", "conferencia", "juntas"),
+         ("sala de reuniones", "sala de reunión", "sala de conferencias",
+          "salón de reuniones", "salón de conferencias",
+          "sala de juntas", "salón de juntas"),
          ("env", "mand"), ("primero", "antes", "después", "luego")),
     ),
     IndependentCase(
@@ -312,8 +314,8 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         )
         come_to_room = _has(
             folded,
-            r"\b(?:venga|acuda|dirijase|pase|venir)\w*.{0,55}\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b",
-            r"\b(?:sala de reuniones|sala de reunion|sala de conferencias)\b.{0,35}\b(?:venga|acuda|dirijase|pase|venir)\w*\b",
+            r"\b(?:venga|acuda|dirijase|pase|venir)\w*.{0,55}\b(?:sala de reuniones|sala de reunion|sala de conferencias|salon de reuniones|salon de conferencias|sala de juntas|salon de juntas)\b",
+            r"\b(?:sala de reuniones|sala de reunion|sala de conferencias|salon de reuniones|salon de conferencias|sala de juntas|salon de juntas)\b.{0,35}\b(?:venga|acuda|dirijase|pase|venir)\w*\b",
         )
         invented_recipient = _has(
             folded,
