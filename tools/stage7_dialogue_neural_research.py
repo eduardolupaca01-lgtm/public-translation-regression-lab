@@ -17,8 +17,54 @@ from tools.stage7_dialogue_cases import (
     source_sets_disjoint,
 )
 from tools.stage6_discourse_model import (
-    GENERATION_VARIANT, PROMPT_SHA256, load_model,
+    SYSTEM_PROMPT as BASE_SYSTEM_PROMPT,
+    DiscourseThinkingTranslator,
+    load_model as load_discourse_model,
 )
+
+# Uniform source-to-target logic check, never derived from a target answer.
+# It applies identically to every Stage7 Japanese source.
+STAGE7_DIRECTION_GUIDANCE = """
+Independently review the truth conditions of EVERY Japanese clause before
+returning the final Spanish. For each conditional expression, identify
+(1) the condition or prerequisite and (2) the permitted or prohibited action.
+An instruction to do an action ONLY when a condition is true never means
+that the condition becomes true ONLY when the action is performed.
+Preserve the direction of logical dependency, including alternative branches,
+negations and strict versus inclusive inequalities. Do not turn a condition
+into the consequence or assert the prerequisite as the consequence of an act.
+Retain pronoun referents, person names, speaker codes, and the grammatical
+agreement of the resulting Spanish. Use natural Latin American Spanish.
+Apply these same instructions to ALL Japanese sources without exceptions,
+examples, or translation templates. Output ONLY the translated text.
+"""
+GENERATION_VARIANT = "stage7_uniform_condition_direction_v5"
+STAGE7_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + STAGE7_DIRECTION_GUIDANCE
+PROMPT_SHA256 = hashlib.sha256(STAGE7_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+
+
+class Stage7DirectionTranslator(DiscourseThinkingTranslator):
+    @staticmethod
+    def build_payload(text: str) -> dict:
+        payload = DiscourseThinkingTranslator.build_payload(text)
+        payload["messages"][0]["content"] = STAGE7_SYSTEM_PROMPT
+        return payload
+
+
+def load_model(llama_server: Path, workspace: Path):
+    original, provenance = load_discourse_model(llama_server, workspace)
+    enhanced = Stage7DirectionTranslator(
+        endpoint=original.endpoint,
+        process=original.process,
+        log_handle=original.log_handle,
+        request_json=original.request_json,
+    )
+    provenance[0].update({
+        "generation_variant": GENERATION_VARIANT,
+        "translation_system_prompt_sha256": PROMPT_SHA256,
+        "case_specific_prompts": False,
+    })
+    return enhanced, provenance
 from translation_lab.cache import DurableTranslationCache
 from translation_lab.pipeline import TranslationRejected, translate_checked, validate_translation
 from translation_lab.review_queue import ReviewQueue
@@ -55,7 +101,7 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
     report = {
         "schema": "ja-es-stage7-rpg-relations-neural-v1",
         "kind": "EXPLORATORY_RESEARCH_NOT_LINGUISTIC_APPROVAL",
-        "semantic_rubric": "stage7_game_dialogue_relations_rubric_v1",
+        "semantic_rubric": "stage7_game_dialogue_relations_rubric_v2",
         "evaluation_scope": "published_synthetic_source_set_not_external_blind",
         "sources_only": True,
         "generation_variant": GENERATION_VARIANT,

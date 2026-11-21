@@ -9,7 +9,10 @@ import unittest
 from tools.stage7_dialogue_cases import (
     STAGE7_CASES, REQUIRED, _semantic_errors, manifest, source_sets_disjoint
 )
-from tools.stage7_dialogue_neural_research import translate_phase, verify_phase
+from tools.stage7_dialogue_neural_research import (
+    translate_phase, verify_phase, GENERATION_VARIANT, STAGE7_SYSTEM_PROMPT,
+    PROMPT_SHA256, Stage7DirectionTranslator,
+)
 
 
 class TestStage7(unittest.TestCase):
@@ -77,6 +80,17 @@ class TestStage7(unittest.TestCase):
         self.assertEqual(_semantic_errors(source,valid_condition_first),[])
         valid_action_first=r"Utilice una medicina solo si \V[2] es mayor que 1. De lo contrario, no la use."
         self.assertEqual(_semantic_errors(source,valid_action_first),[])
+
+    def test_uniform_direction_prompt_is_source_only_and_pinned(self):
+        import hashlib
+        self.assertEqual(GENERATION_VARIANT, "stage7_uniform_condition_direction_v5")
+        self.assertEqual(PROMPT_SHA256,
+                         hashlib.sha256(STAGE7_SYSTEM_PROMPT.encode("utf-8")).hexdigest())
+        payload=Stage7DirectionTranslator.build_payload("条件と行動。")
+        self.assertEqual(payload["messages"][0]["content"], STAGE7_SYSTEM_PROMPT)
+        self.assertIn("logical dependency", STAGE7_SYSTEM_PROMPT)
+        self.assertNotIn("\\\\V[2]", STAGE7_SYSTEM_PROMPT)
+        self.assertNotIn("medicine_variable_strict_gt", STAGE7_SYSTEM_PROMPT)
 
     def test_empty_mock_outputs_are_quarantined_and_durable(self):
         class Bad:
