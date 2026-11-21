@@ -1,0 +1,76 @@
+name: Stage9 bilingual packet and Stage10 fail-closed quality gate
+
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - "tools/stage9_bilingual_review.py"
+      - "tools/stage10_release_gate.py"
+      - "tests/test_stage9_stage10_release_gate.py"
+      - ".github/workflows/stage9-stage10-quality-gate.yml"
+  workflow_dispatch:
+    inputs:
+      stage6_run:
+        description: Stage6 completed neural run ID
+        required: true
+        default: "44931094612"
+      stage7_run:
+        description: Stage7 completed neural run ID
+        required: true
+        default: "44931094546"
+      stage8_run:
+        description: Stage8 completed neural run ID
+        required: true
+        default: "44931420612"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  review-and-gate:
+    name: Review packet and strict no-merge integration check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STAGE6_RUN: ${{ inputs.stage6_run || '44931094612' }}
+      STAGE7_RUN: ${{ inputs.stage7_run || '44931094546' }}
+      STAGE8_RUN: ${{ inputs.stage8_run || '44931420612' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify public safety and run comprehensive offline regression tests
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q tools tests translation_lab
+          python -m unittest discover -s tests -v
+      - name: Obtain immutable original neural receipts
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence/stage6" "$RUNNER_TEMP/evidence/stage7" "$RUNNER_TEMP/evidence/stage8" "$RUNNER_TEMP/gates"
+          gh run download "$STAGE6_RUN" -n stage6-dialogue-sixteen-research-receipts -D "$RUNNER_TEMP/evidence/stage6"
+          gh run download "$STAGE7_RUN" -n stage7-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage7"
+          gh run download "$STAGE8_RUN" -n stage8-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage8"
+      - name: Stage9 prepare forty source-and-translation review dossiers
+        run: |
+          python -m tools.stage9_bilingual_review --receipts "$RUNNER_TEMP/evidence" \
+            --output "$RUNNER_TEMP/gates/stage9-bilingual-review-packet.json"
+      - name: Stage10 strict validation: HOLD if translations or human signoff missing
+        run: |
+          python -m tools.stage10_release_gate --receipts "$RUNNER_TEMP/evidence" \
+            --stage9-packet "$RUNNER_TEMP/gates/stage9-bilingual-review-packet.json" \
+            --output "$RUNNER_TEMP/gates/stage10-final-readiness.json" \
+            --require-ready
+      - name: Preserve review and readiness receipts even on failed gate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage9-stage10-review-gate-evidence
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/gates/stage9-bilingual-review-packet.json
+            ${{ runner.temp }}/gates/stage10-final-readiness.json
