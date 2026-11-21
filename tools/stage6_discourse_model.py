@@ -1,4 +1,4 @@
-"""Uniform Qwen3-8B thinking v3 prompt for source-complete Spanish dialogues.
+"""Uniform Qwen3-8B thinking v4 prompt for source-complete Spanish dialogues.
 
 Same pinned model, sampler and quantization as Stage5; no target-specific
 replacements, no Spanish answers from earlier runs, no case-specific prompt.
@@ -16,7 +16,7 @@ from tools.stage4_source_complete_candidate import (
 )
 
 
-GENERATION_VARIANT = "uniform_discourse_conditions_grammar_v3"
+GENERATION_VARIANT = "uniform_dialogue_roles_condition_direction_v4"
 DISCOURSE_GUIDANCE = """
 
 Additional uniform checks for EVERY source before returning the final Spanish:
@@ -57,7 +57,25 @@ Uniform final bilingual proofreading for ALL Japanese sources:
   plural. Avoid omitting a negative condition, recipient or connective.
 This is the SAME instruction for EVERY input; return only the translation.
 """
-SYSTEM_PROMPT = SOURCE_COMPLETE_PROMPT + DISCOURSE_GUIDANCE + DISCOURSE_V3_GUIDANCE
+DISCOURSE_V4_GUIDANCE = """
+
+Uniform direction-of-meaning checks for every line and dialogue:
+- Distinguish asking another person a question or seeking information
+  from requesting that they hand over an object. Do not silently replace
+  one kind of speech act with the other because an item appears nearby.
+- A Japanese conditional expresses a premise and its consequence: when
+  an item may be used IF a condition holds, the condition must not
+  mistakenly become true ONLY IF the item is used. Verify both the
+  forward implication and the negative alternative, without reversals.
+- Preserve the specific physical item rather than changing its type
+  (a portable light is not automatically a candle). Check Spanish
+  articles, object pronouns, number and verb agreement across clauses.
+- Negative subjects like nobody already negate the action in Spanish.
+  Preserve exactly who observed whom without inserting extra negation.
+- Preserve proper names consistently through all speaker turns.
+Apply these same checks to every Japanese source before output.
+"""
+SYSTEM_PROMPT = SOURCE_COMPLETE_PROMPT + DISCOURSE_GUIDANCE + DISCOURSE_V3_GUIDANCE + DISCOURSE_V4_GUIDANCE
 PROMPT_SHA256 = hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()
 
 

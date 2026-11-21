@@ -181,7 +181,7 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
         (r"\b(?:despues|tras|luego)\b", "AFTER_CROSSING_MISSING"),
         (r"\b(?:antorcha|tea|linterna)\b", "TORCH_MISSING"),
         (r"\b(?:apag|exting)\w*\b", "EXTINGUISH_MISSING"),
-        (r"\b(?:encend|prend)\w*\b", "RELIGHT_MISSING"),
+        (r"\b(?:encend|enciend|prend)\w*\b", "RELIGHT_MISSING"),
     ),
     "nobody_saw_mika_depart": (
         (r"\bmika\b", "MIKA_MISSING"),
@@ -189,7 +189,7 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
         (r"\b(?:nadie|ninguna\s+persona)\b", "NO_ONE_MISSING"),
         (r"\b(?:visto|vio|observo|presencio)\b", "SEEING_EVENT_MISSING"),
         (r"\b(?:sal|part|march)\w*\b", "DEPARTURE_EVENT_MISSING"),
-        (r"\b(?:no|sin)\b", "NO_WITNESS_NEGATION_MISSING"),
+        (r"\b(?:no|sin|nadie|ninguna\s+persona)\b", "NO_WITNESS_NEGATION_MISSING"),
     ),
     "younger_sister_joint_trip": (
         (r"\b(?:hermana\s+menor|hermanita)\b", "YOUNGER_SISTER_MISSING"),
@@ -254,10 +254,23 @@ def _semantic_errors(sample: Stage7Case, translation: str) -> list[str]:
         r"\b(?:ella|mika)\s+no\s+(?:ha|habia)\s+visto\s+a\s+nadie\b", v
     ):
         errors.append("MIKA_WITNESS_ROLE_REVERSED")
-    if sample.id == "medicine_variable_strict_gt" and re.search(
-        r"\b(?:igual\s+a|mayor\s+o\s+igual)\b", v
-    ):
-        errors.append("STRICT_INEQUALITY_CHANGED_TO_INCLUSIVE")
+    if sample.id == "torch_bridge_order" and re.search(
+        r"\b(?:la|una)\s+antorcha\b", v
+    ) and re.search(r"\blo\s+(?:encend|enciend|prend)\w*\b", v):
+        errors.append("TORCH_FEMININE_OBJECT_MASCULINE_PRONOUN")
+    if sample.id == "medicine_variable_strict_gt":
+        if re.search(r"\b(?:igual\s+a|mayor\s+o\s+igual)\b", v):
+            errors.append("STRICT_INEQUALITY_CHANGED_TO_INCLUSIVE")
+        # Detect inversion of conditional direction: 'X>1 only if USE'
+        # is not equivalent to 'USE only if X>1'. This is the same
+        # general implication check for every translation of this source.
+        if re.search(
+            r"\b(?:mayor\s+que|mas\s+de|superior\s+a)\s+(?:1|uno)\b"
+            r".{0,30}\b(?:solo|solamente|unicamente)\s+si\b"
+            r".{0,35}\b(?:use|usar|utilic\w*|tome|tomar|emple\w*)\b",
+            v,
+        ):
+            errors.append("MEDICINE_PREMISE_AND_CONSEQUENCE_REVERSED")
     if sample.id == "torch_bridge_order" and re.search(
         r"\bantes\b.{0,60}\b(?:encender|prender)\b", v
     ):

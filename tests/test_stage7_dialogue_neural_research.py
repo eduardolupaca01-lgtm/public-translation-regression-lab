@@ -46,6 +46,35 @@ class TestStage7(unittest.TestCase):
             "Antes de cruzar el puente, encender la antorcha. Después, apagarla."
         ))
 
+
+    def test_real_neural_rejections_are_not_permitted_as_false_positive_successes(self):
+        by={c.id:c for c in STAGE7_CASES}
+        mika_good="Según se dice, Mika salió del pueblo, pero nadie la vio salir."
+        self.assertEqual(_semantic_errors(by["nobody_saw_mika_depart"],mika_good),[])
+        mika_bad="Parece que Mika salió del pueblo, pero ella no ha visto a nadie."
+        self.assertIn("MIKA_WITNESS_ROLE_REVERSED",
+                      _semantic_errors(by["nobody_saw_mika_depart"],mika_bad))
+        torch_gender="Por favor, apague la antorcha antes de cruzar el puente. Después de cruzar, no hay problema si lo enciende nuevamente."
+        bad=_semantic_errors(by["torch_bridge_order"],torch_gender)
+        self.assertNotIn("RELIGHT_MISSING",bad)
+        self.assertIn("TORCH_FEMININE_OBJECT_MASCULINE_PRONOUN",bad)
+        torch_good="Apague la antorcha antes de cruzar el puente. Después de cruzar puede encenderla de nuevo."
+        self.assertEqual(_semantic_errors(by["torch_bridge_order"],torch_good),[])
+        torch_substitution="Apague la vela antes de cruzar el puente. Después de cruzar puede encenderla de nuevo."
+        self.assertIn("TORCH_MISSING",
+                      _semantic_errors(by["torch_bridge_order"],torch_substitution))
+
+    def test_model_can_not_reverse_medicine_if_then_logic_and_still_pass(self):
+        by={c.id:c for c in STAGE7_CASES}
+        source=by["medicine_variable_strict_gt"]
+        inverted=r"\V[2] es mayor que 1 solo si utilice un medicamento. De lo contrario, no lo utilice."
+        self.assertIn("MEDICINE_PREMISE_AND_CONSEQUENCE_REVERSED",
+                      _semantic_errors(source,inverted))
+        valid_condition_first=r"Solo si \V[2] es mayor que 1, utilice una medicina; de lo contrario no la use."
+        self.assertEqual(_semantic_errors(source,valid_condition_first),[])
+        valid_action_first=r"Utilice una medicina solo si \V[2] es mayor que 1. De lo contrario, no la use."
+        self.assertEqual(_semantic_errors(source,valid_action_first),[])
+
     def test_empty_mock_outputs_are_quarantined_and_durable(self):
         class Bad:
             def translate(self,text): return ""

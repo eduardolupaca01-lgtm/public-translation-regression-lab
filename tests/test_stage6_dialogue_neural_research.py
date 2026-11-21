@@ -12,7 +12,7 @@ from tools.stage6_dialogue_cases import (
     manifest, source_sets_disjoint,
 )
 from tools.stage6_discourse_model import (
-    GENERATION_VARIANT, PROMPT_SHA256, DISCOURSE_GUIDANCE, DISCOURSE_V3_GUIDANCE,
+    GENERATION_VARIANT, PROMPT_SHA256, DISCOURSE_GUIDANCE, DISCOURSE_V3_GUIDANCE, DISCOURSE_V4_GUIDANCE,
     DiscourseThinkingTranslator, load_model,
 )
 from tools.stage4_source_complete_candidate import SourceCompleteThinkingTranslator
@@ -117,7 +117,9 @@ class TestStage6DiscourseResearch(unittest.TestCase):
         self.assertIn("grammatical gender", DISCOURSE_GUIDANCE.lower())
         self.assertEqual(len(PROMPT_SHA256), 64)
         self.assertIn("every Spanish article", DISCOURSE_V3_GUIDANCE)
-        self.assertEqual(GENERATION_VARIANT, "uniform_discourse_conditions_grammar_v3")
+        self.assertIn("forward implication", DISCOURSE_V4_GUIDANCE)
+        self.assertIn("speech act", DISCOURSE_V4_GUIDANCE)
+        self.assertEqual(GENERATION_VARIANT, "uniform_dialogue_roles_condition_direction_v4")
 
     def test_loader_preserves_raw_output_payload_and_timeout(self):
         calls = []
