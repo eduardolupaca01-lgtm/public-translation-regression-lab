@@ -1,0 +1,80 @@
+"""Stage8 locked Japanese-only semantic evaluation: no target-side repairs."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from tools.stage8_dialogue_cases import (
+    STAGE8_CASES, REQUIRED, _semantic_errors, manifest, source_sets_disjoint,
+)
+from tools.stage8_dialogue_neural_research import translate_phase, verify_phase
+
+
+class TestStage8SourceOnlyResearch(unittest.TestCase):
+    def test_sources_new_and_frozen_without_spanish_reference_answers(self):
+        frozen=manifest()
+        self.assertTrue(source_sets_disjoint())
+        self.assertEqual(frozen["count"],12)
+        self.assertEqual(len({c.japanese for c in STAGE8_CASES}),12)
+        self.assertEqual(len({c.id for c in STAGE8_CASES}),12)
+        self.assertEqual({c.id for c in STAGE8_CASES},set(REQUIRED))
+        self.assertTrue(frozen["source_only"])
+        self.assertFalse(frozen["reference_spanish_provided_to_model"])
+        self.assertFalse(frozen["model_inference_executed"])
+        self.assertFalse(frozen["human_review_complete"])
+        self.assertFalse(frozen["professional_quality_approved"])
+        self.assertTrue(any("\\N[" in c.japanese for c in STAGE8_CASES))
+        self.assertTrue(any("\\V[" in c.japanese for c in STAGE8_CASES))
+        self.assertTrue(any("\r\n" in c.japanese for c in STAGE8_CASES))
+        self.assertTrue(all(set(x)=={"case","source","risk"} for x in frozen["cases"]))
+
+    def test_nonnegated_shield_sale_vs_prohibition_are_not_confused(self):
+        cases={c.id:c for c in STAGE8_CASES}
+        source=cases["variable_sword_sell_not_shield"]
+        good=r"\N[3] Si \V[8] es mayor que 2, venda la espada. No venda el escudo."
+        errors=_semantic_errors(source,good)
+        self.assertEqual(errors,[])
+        wrong=r"\N[3] Si \V[8] es mayor que 2, no venda la espada. Venda el escudo."
+        self.assertIn("SELLS_SHIELD_INSTEAD_OF_SWORD",_semantic_errors(source,wrong))
+
+    def test_taro_mika_and_aria_sara_roles_are_checked(self):
+        cases={c.id:c for c in STAGE8_CASES}
+        self.assertIn("MIKA_WRONGLY_SEES_HANA",_semantic_errors(
+            cases["taro_hana_mika_witness"],
+            "Taro vio a Hana salir de la estación y Mika también la vio.",
+        ))
+        self.assertIn("ASKS_SARA_INSTEAD_OF_ARIA",_semantic_errors(
+            cases["two_speakers_aria_sara"],
+            "Aria tiene la llave. Mejor pregunte a Sara en lugar de Aria.",
+        ))
+
+    def test_empty_model_cannot_reuse_a_successful_cache_or_claim_quality(self):
+        class NullModel:
+            def translate(self,text): return ""
+            def close(self): pass
+        with tempfile.TemporaryDirectory() as tmp:
+            space=Path(tmp)/"stage8"
+            rc=translate_phase(
+                space,None,model_loader=lambda:(NullModel(),[{"repo_id":"synthetic"}])
+            )
+            self.assertEqual(rc,1)
+            report=json.loads(
+                (space/"stage8-neural-report.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(report["rubric_accepted"],0)
+            self.assertEqual(report["rejected"],12)
+            self.assertEqual(report["review_queue_pending"],12)
+            self.assertFalse(report["professional_quality_approved"])
+            self.assertEqual(verify_phase(space),0)
+            proof=json.loads(
+                (space/"stage8-cold-restart-proof.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(proof["rubric_status"],"FAIL")
+            self.assertEqual(proof["persistence_status"],"PASS")
+            self.assertFalse(proof["models_loaded_during_restart"])
+
+
+if __name__ == "__main__":
+    unittest.main()

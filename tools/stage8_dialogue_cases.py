@@ -250,8 +250,12 @@ def _semantic_errors(sample: Stage8Case, spanish: str) -> list[str]:
         if re.search(r"\bmika\s+(?:si|tambien)\s+(?:la\s+)?(?:vio|ha\s+visto)\b", v):
             faults.append("MIKA_WRONGLY_SEES_HANA")
     if sample.id == "variable_sword_sell_not_shield":
-        if re.search(r"\b(?:venda|vender|vende)\s+el\s+escudo\b", v):
-            faults.append("SELLS_SHIELD_INSTEAD_OF_SWORD")
+        # A negated command "no venda el escudo" is the RIGHT meaning;
+        # flag only an affirmative instruction to sell the shield.
+        for match in re.finditer(r"\b(?:venda|vender|vende)\s+el\s+escudo\b", v):
+            preceding = v[max(0, match.start() - 35):match.start()]
+            if not re.search(r"\b(?:no|nunca|jamas)\s+$", preceding):
+                faults.append("SELLS_SHIELD_INSTEAD_OF_SWORD")
     if sample.id == "two_speakers_aria_sara":
         if re.search(r"\b(?:pregunt|consult)\w*\s+a\s+sara\b", v):
             faults.append("ASKS_SARA_INSTEAD_OF_ARIA")
