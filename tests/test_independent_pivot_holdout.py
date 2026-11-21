@@ -135,6 +135,30 @@ INVALID_VARIANT_TRANSLATIONS = {
 }
 
 
+
+EXTRA_VALID_PARAPHRASES = (
+    ("meeting_time_contrast",
+     "La reunión comienza a las cuatro de la tarde, en lugar de a las dos."),
+    ("miss_train_take_taxi",
+     "Si no llego a tiempo al tren, tomaré un taxi."),
+    ("miss_train_take_taxi",
+     "Si perdemos el tren, tomaremos un taxi."),
+)
+
+EXTRA_ADVERSARIAL_PARAPHRASES = (
+    ("meeting_time_contrast",
+     "No, la reunión comienza a las dos de la tarde, no a las cuatro."),
+    ("meeting_time_contrast",
+     "La reunión comienza a las cuatro de la mañana, en lugar de a las dos de la tarde."),
+    ("miss_train_take_taxi",
+     "Si logro coger el tren, iré en taxi."),
+    ("miss_train_take_taxi",
+     "Si no pierdo el tren, iré en taxi."),
+    ("miss_train_take_taxi",
+     "Si no llego a tiempo al tren, no tomaré un taxi."),
+)
+
+
 class TestIndependentHoldoutContracts(unittest.TestCase):
     def test_twenty_unique_cases_are_disjoint_from_prior_corpora(self):
         self.assertEqual(len(INDEPENDENT_CASES), 20)
@@ -145,6 +169,22 @@ class TestIndependentHoldoutContracts(unittest.TestCase):
         development_sources = {case.japanese for case in DEVELOPMENT_CASES}
         self.assertFalse(new_sources & prior_sources)
         self.assertFalse(new_sources & development_sources)
+
+
+    def test_additional_faithful_paraphrases(self):
+        by_id = {case.id: case for case in INDEPENDENT_CASES}
+        for case_id, translated in EXTRA_VALID_PARAPHRASES:
+            with self.subTest(case=case_id, translation=translated):
+                self.assertEqual(_semantic_errors(by_id[case_id], translated), [])
+
+    def test_additional_polarity_and_clock_inversions_are_rejected(self):
+        by_id = {case.id: case for case in INDEPENDENT_CASES}
+        for case_id, translated in EXTRA_ADVERSARIAL_PARAPHRASES:
+            with self.subTest(case=case_id, translation=translated):
+                self.assertTrue(
+                    _semantic_errors(by_id[case_id], translated),
+                    f"Wrong polarity/clock accepted: {case_id}",
+                )
 
     def test_semantic_policy_is_versioned_and_case_sources_remain_fixed(self):
         self.assertEqual(
