@@ -45,8 +45,8 @@ class TestQwen8BRecommendedCandidateContracts(unittest.TestCase):
         self.assertEqual(MIN_P, 0.0)
         self.assertEqual(PRESENCE_PENALTY, 1.5)
 
-    def test_native_rpg_placeholders_stay_in_model_context(self):
-        self.assertTrue(PROTECT_NUMBERS)
+    def test_numeric_literals_remain_visible_and_native_codes_stay_in_context(self):
+        self.assertFalse(PROTECT_NUMBERS)
         self.assertFalse(CONTEXTUALIZE_NAME_CODES)
         self.assertTrue(PROTECT_LITERALS_IN_CONTEXT)
 
@@ -61,10 +61,14 @@ class TestQwen8BRecommendedCandidateContracts(unittest.TestCase):
             "younger or older",
             "do not invent a recipient",
             "return only the translation",
-            "v[987650]",
+            "妹 means",
+            "hermana menor",
+            "arabic digit sequence visible",
+            "indirect-object pronoun",
+            "arrive or be delivered",
+            "not publish",
             "n[3]",
             "exactly once",
-            "grammatically correct spanish position",
             "singular person",
         ):
             with self.subTest(phrase=phrase):
@@ -76,7 +80,8 @@ class TestQwen8BRecommendedCandidateContracts(unittest.TestCase):
         self.assertEqual(len({case.japanese for case in INDEPENDENT_CASES}), 20)
 
     def test_payload_uses_deterministic_non_streaming_chat_completion(self):
-        payload = Qwen8BRecommendedTranslator.build_payload("明日は雨です。")
+        source = "通常1000円ですが、今日は800円で買えます。"
+        payload = Qwen8BRecommendedTranslator.build_payload(source)
         self.assertEqual(payload["temperature"], 0.7)
         self.assertEqual(payload["top_p"], 0.8)
         self.assertEqual(payload["top_k"], 20)
@@ -87,7 +92,10 @@ class TestQwen8BRecommendedCandidateContracts(unittest.TestCase):
         self.assertFalse(payload["stream"])
         self.assertEqual(payload["messages"][0]["role"], "system")
         self.assertEqual(payload["messages"][0]["content"], SYSTEM_PROMPT)
-        self.assertIn("明日は雨です。", payload["messages"][1]["content"])
+        self.assertIn(source, payload["messages"][1]["content"])
+        self.assertIn("1000", payload["messages"][1]["content"])
+        self.assertIn("800", payload["messages"][1]["content"])
+        self.assertNotIn(r"\V[987650]", payload["messages"][1]["content"])
         self.assertIn("/no_think", payload["messages"][1]["content"])
 
     def test_adapter_returns_model_text_without_target_side_repair(self):
