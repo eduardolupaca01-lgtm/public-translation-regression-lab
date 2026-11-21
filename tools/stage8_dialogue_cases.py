@@ -244,7 +244,9 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
 def _semantic_errors(sample: Stage8Case, spanish: str) -> list[str]:
     if sample.id not in REQUIRED:
         return ["UNKNOWN_CASE"]
-    v = _fold(spanish)
+    # Numeric control-code indices are NOT prose thresholds. Preserve codes
+    # for structural validation, but exclude them from semantic number scans.
+    v = re.sub(r"\\[nv]\[\d+\]", "", _fold(spanish))
     faults = [code for regex, code in REQUIRED[sample.id] if not re.search(regex, v)]
     if sample.id == "taro_hana_mika_witness":
         if re.search(r"\bmika\s+(?:si|tambien)\s+(?:la\s+)?(?:vio|ha\s+visto)\b", v):

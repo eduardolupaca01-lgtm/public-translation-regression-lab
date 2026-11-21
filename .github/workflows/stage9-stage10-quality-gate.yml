@@ -58,7 +58,7 @@ jobs:
         run: |
           python -m tools.stage9_bilingual_review --receipts "$RUNNER_TEMP/evidence" \
             --output "$RUNNER_TEMP/gates/stage9-bilingual-review-packet.json"
-      - name: Stage10 strict validation: HOLD if translations or human signoff missing
+      - name: Stage10 strict validation - HOLD unless translations and human signoff pass
         run: |
           python -m tools.stage10_release_gate --receipts "$RUNNER_TEMP/evidence" \
             --stage9-packet "$RUNNER_TEMP/gates/stage9-bilingual-review-packet.json" \
