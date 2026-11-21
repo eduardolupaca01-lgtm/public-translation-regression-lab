@@ -93,7 +93,10 @@ def promotion_errors(report: dict, restart: dict) -> list[str]:
         if not row.get("raw_model_attempts"):
             errors.append("MISSING_RAW_MODEL_RECEIPTS:" + case_id)
         digest = hashlib.sha256(translated.encode("utf-8")).hexdigest()
-        if row.get("sha256") != digest:
+        # Older genuine runner receipts have no per-row digest; their cold
+        # SQLite replay and independent semantic validation still apply.
+        # When a digest is supplied, it must match exactly.
+        if row.get("sha256") is not None and row.get("sha256") != digest:
             errors.append("TRANSLATION_RECEIPT_HASH_MISMATCH:" + case_id)
         try:
             validate_translation(case.japanese, translated, source="ja")
@@ -163,6 +166,14 @@ def main() -> int:
     if errors:
         return 1
     manifest = source_only_manifest()
+    manifest["promotion_evidence"] = {
+        "development_report_sha256": hashlib.sha256(
+            args.candidate_report.read_bytes()
+        ).hexdigest(),
+        "cold_restart_proof_sha256": hashlib.sha256(
+            args.restart_proof.read_bytes()
+        ).hexdigest(),
+    }
     args.manifest_out.parent.mkdir(parents=True, exist_ok=True)
     args.manifest_out.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

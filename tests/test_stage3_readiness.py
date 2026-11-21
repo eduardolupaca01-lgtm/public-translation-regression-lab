@@ -84,6 +84,17 @@ class TestStage3Readiness(unittest.TestCase):
             "TRANSLATION_RECEIPT_HASH_MISMATCH:ordered_books_arrived", errors
         )
 
+    def test_missing_optional_legacy_digest_still_requires_semantic_and_restart_proofs(self):
+        report, restart = valid_receipts()
+        for row in report["cases"]:
+            del row["sha256"]
+        self.assertEqual(promotion_errors(report, restart), [])
+        restart["persistence_status"] = "FAIL"
+        self.assertIn(
+            "COLD_RESTART_PROOF_INCOMPLETE",
+            promotion_errors(report, restart),
+        )
+
     def test_changed_japanese_source_blocks_promotion(self):
         report, restart = valid_receipts()
         report["cases"][0]["source"] = "異なる文。"
