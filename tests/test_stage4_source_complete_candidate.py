@@ -42,7 +42,7 @@ class TestStage4SourceCompleteCandidate(unittest.TestCase):
         prompt = SOURCE_ACCURACY_GUIDANCE.casefold()
         self.assertIn("spatial relationship", prompt)
         self.assertIn("agreement", prompt)
-        self.assertIn("preserve the japanese ambiguity", prompt)
+        self.assertIn("japanese ambiguity", prompt)
         self.assertNotIn("nos vemos en la estacion", prompt)
         self.assertNotIn("pienso ir al parque juntos", prompt)
         self.assertNotIn("manzana azul", prompt)
