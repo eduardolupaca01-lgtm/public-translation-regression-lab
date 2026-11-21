@@ -73,8 +73,6 @@ Accuracy rules:
   冊 counts physical books, not publication volumes.
 - Translate Japanese contrast, additive, conditional, and obligation constructions
   without dropping either side or changing their logical relationship.
-- Preserve the exact action and event type: ordering, receiving, publishing,
-  sending, arriving, checking, and signing are not interchangeable.
 - Keep every Arabic digit sequence visible and exactly as written; do not hide it
   behind placeholders, add thousands separators, or spell it out. Preserve each
   number's unit and temporal qualifier. When Japanese uses number words, preserve
