@@ -2,7 +2,7 @@
 from __future__ import annotations
 import hashlib
 import unittest
-from tools.stage9_bilingual_review import EXPECTED, build_packet, screen_case
+from tools.stage9_bilingual_review import EXPECTED, build_packet, screen_case, review_flags
 from tools.stage10_release_gate import assess
 
 class TestStage9Stage10(unittest.TestCase):
@@ -26,6 +26,14 @@ class TestStage9Stage10(unittest.TestCase):
         self.assertEqual(gate["status"], "HOLD")
         self.assertFalse(gate["automatic_merge_or_publication_permitted"])
         self.assertIn("STAGE9_INDEPENDENT_HUMAN_REVIEW_PENDING", gate["blockers"])
+
+    def test_historical_rubric_rejects_are_flagged_for_review(self):
+        self.assertIn("HISTORICAL_RUBRIC_REJECTION",
+                      review_flags(8, "taro_hana_mika_witness", "", "rejected"))
+        self.assertIn("VOLITIVE_AS_IMPERATIVE_REVIEW",
+                      review_flags(8, "two_speakers_aria_sara", "", "rejected"))
+        self.assertNotIn("HISTORICAL_RUBRIC_REJECTION",
+                         review_flags(6, "sibling_map_chain", "Fiel", "rubric_accepted"))
 
     def test_medication_inversion_and_name_change_are_detected(self):
         wrong = r"\V[2] es mayor que 1 solo si se usa una medicina. De lo contrario, no se debe usar."

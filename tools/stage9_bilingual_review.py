@@ -11,10 +11,21 @@ EXPECTED = {6: 16, 7: 12, 8: 12}
 LOOKUP = {7: {x.id: x for x in STAGE7_CASES},
           8: {x.id: x for x in STAGE8_CASES}}
 STAGE6_WATCH = {
+    "two_item_cost_total": "PLURAL_AGREEMENT_IN_COST",
+    "two_speakers_ask_sara": "VOLITIVE_AS_IMPERATIVE_REVIEW",
     "search_not_found_roles": "SPANISH_NATURALNESS_REVIEW",
     "rebook_saturday_not_thursday": "ARTICLE_CONTRACTION_REVIEW",
     "permission_changed_today": "PAST_PERMISSION_NUANCE_REVIEW",
     "green_appearance_apple": "BLUE_GREEN_APPLE_CONTEXT_REVIEW",
+}
+
+STAGE7_WATCH = {
+    "npc_gate_two_variables": "SPANISH_ENTRANCE_NATURALNESS",
+    "shop_discount_only_today": "FUTURE_SELLER_OR_OBJECT_AMBIGUITY",
+    "rpg_two_speakers_sibling": "SPANISH_TENSE_AGREEMENT",
+}
+STAGE8_WATCH = {
+    "two_speakers_aria_sara": "VOLITIVE_AS_IMPERATIVE_REVIEW",
 }
 
 def read_receipts(root: Path):
@@ -45,6 +56,17 @@ def screen_case(stage: int, case_id: str, translated: str) -> list[str]:
             flags.extend((s7_errors if stage == 7 else s8_errors)(case, translated))
     return sorted(set(flags))
 
+def review_flags(stage: int, case_id: str, translated: str, status: str) -> list[str]:
+    # These are triage notes for a human, NOT new machine approval criteria.
+    flags = screen_case(stage, case_id, translated)
+    if stage == 7 and case_id in STAGE7_WATCH:
+        flags.append(STAGE7_WATCH[case_id])
+    if stage == 8 and case_id in STAGE8_WATCH:
+        flags.append(STAGE8_WATCH[case_id])
+    if status != "rubric_accepted":
+        flags.append("HISTORICAL_RUBRIC_REJECTION")
+    return sorted(set(flags))
+
 def build_packet(reports: dict, proofs: dict, hashes: dict) -> dict:
     rows = []
     for stage in EXPECTED:
@@ -57,7 +79,7 @@ def build_packet(reports: dict, proofs: dict, hashes: dict) -> dict:
                 "candidate_es_419": translated or None,
                 "raw_model_attempts": case.get("raw_model_attempts", []),
                 "historical_rubric": case.get("status"),
-                "posthoc_screen_flags": screen_case(stage, case["case"], translated),
+                "posthoc_screen_flags": review_flags(stage, case["case"], translated, case.get("status", "unknown")),
                 "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
                 "reviewer": None, "human_fidelity": "pending",
                 "human_grammar": "pending", "human_naturalness_es_419": "pending",
