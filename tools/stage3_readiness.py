@@ -65,8 +65,32 @@ def promotion_errors(report: dict, restart: dict) -> list[str]:
             or generation.get("same_pinned_model_for_both") is not True
         ):
             errors.append("TWO_PASS_GENERATION_PROVENANCE_CHANGED")
-        if not report.get("neural_review_history"):
+        history = report.get("neural_review_history") or []
+        if not isinstance(history, list) or len(history) < len(rows):
             errors.append("TWO_PASS_RAW_REVIEW_EVIDENCE_MISSING")
+        else:
+            for row in rows:
+                if not isinstance(row, dict) or row.get("status") != "accepted":
+                    continue
+                raw_attempts = row.get("raw_model_attempts") or []
+                if not raw_attempts or not any(
+                    isinstance(a, dict)
+                    and isinstance(a.get("source_fragment"), str)
+                    and isinstance(a.get("raw_output"), str)
+                    and any(
+                        isinstance(h, dict)
+                        and isinstance(h.get("source"), str)
+                        and h["source"].startswith(a["source_fragment"])
+                        and h.get("reviewed") == a["raw_output"]
+                        and isinstance(h.get("draft"), str)
+                        for h in history
+                    )
+                    for a in raw_attempts
+                ):
+                    errors.append(
+                        "TWO_PASS_REVIEW_UNLINKED_FROM_RAW_OUTPUT:"
+                        + str(row.get("case"))
+                    )
     if report.get("status") != "PASS" or not report.get("backend_executed"):
         errors.append("NEURAL_DEVELOPMENT_NOT_PASSED")
     if (
