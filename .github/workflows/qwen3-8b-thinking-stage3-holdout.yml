@@ -6,6 +6,8 @@ on:
       - experiment/qwen3-ja-es-candidate-20261120
     paths:
       - ".github/workflows/qwen3-8b-thinking-stage3-holdout.yml"
+      - "tools/qwen3_stage3_holdout.py"
+      - "tests/test_qwen3_stage3_holdout.py"
   workflow_dispatch:
 
 permissions:

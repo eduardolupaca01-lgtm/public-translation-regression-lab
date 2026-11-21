@@ -32,6 +32,9 @@ SEGMENTATION_MODES = (
 )
 CAREFUL_SCHEMA = "public-qwen3-8b-careful-ja-es-candidate-v1"
 THINKING_SCHEMA = "public-qwen3-8b-thinking-ja-es-candidate-v1"
+# Uniform per-call budget on CPU: 2048 output tokens at ~4 tok/s need
+# substantially more than the previous 180-second HTTP cutoff.
+THINKING_REQUEST_TIMEOUT_SECONDS = 720
 TWO_PASS_SCHEMA = "public-qwen3-8b-two-pass-ja-es-candidate-v1"
 
 
@@ -48,7 +51,21 @@ def _load_pinned_model(
     if schema == CAREFUL_SCHEMA:
         return careful._load_careful_model(llama_server, workspace)
     if schema == THINKING_SCHEMA:
-        return thinking._load_model(llama_server, workspace)
+        model, provenance = thinking._load_model(llama_server, workspace)
+        original_request = model.request_json
+
+        def extended_timeout_request(url: str, payload: dict, timeout: int):
+            # The identical prompt, seed, sampling and generated text are used;
+            # only the HTTP deadline changes, for every source without exception.
+            return original_request(
+                url, payload, max(timeout, THINKING_REQUEST_TIMEOUT_SECONDS)
+            )
+
+        model.request_json = extended_timeout_request
+        provenance[0]["http_request_timeout_seconds"] = (
+            THINKING_REQUEST_TIMEOUT_SECONDS
+        )
+        return model, provenance
     if schema == TWO_PASS_SCHEMA:
         return two_pass._load_two_pass_model(llama_server, workspace)
     raise RuntimeError("STAGE3_UNSUPPORTED_CANDIDATE_VARIANT")
@@ -127,6 +144,7 @@ def translate_phase(
             raise RuntimeError("QWEN8B_STAGE3_MODEL_PROVENANCE_MISMATCH")
 
         report["backend_executed"] = True
+        report["inference_runtime_provenance"] = provenance
         with (
             DurableTranslationCache(workspace / "cache") as cache,
             ReviewQueue(workspace / "cache") as reviews,
@@ -176,6 +194,11 @@ def translate_phase(
                                 "reason": type(exc).__name__ + ":" + str(exc)[:450],
                             })
                     entry["rejected_modes"] = failures
+                    if failures and all(
+                        "TimeoutError" in failure["reason"]
+                        for failure in failures
+                    ):
+                        raise TranslationRejected("STAGE3_ALL_MODES_TIMED_OUT")
                     raise TranslationRejected("STAGE3_ALL_MODES_REJECTED")
 
                 try:

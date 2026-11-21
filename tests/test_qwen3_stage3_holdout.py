@@ -3,13 +3,55 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from test_stage3_readiness import valid_receipts
-from tools.qwen3_stage3_holdout import translate_phase, verify_phase
+from tools.qwen3_stage3_holdout import (
+    THINKING_REQUEST_TIMEOUT_SECONDS,
+    THINKING_SCHEMA,
+    _load_pinned_model,
+    translate_phase,
+    verify_phase,
+)
 from tools.unseen_holdout import HOLDOUT_CASES
 
 
 class TestQwen8BStage3(unittest.TestCase):
+    def test_thinking_timeout_is_uniform_and_preserves_request_payload(self):
+        calls = []
+
+        class FakeModel:
+            def __init__(self):
+                self.request_json = self.send
+
+            def send(self, url, payload, timeout):
+                calls.append((url, payload, timeout))
+                return {"choices": []}
+
+        model = FakeModel()
+        provenance = [{"repo_id": "Qwen/Qwen3-8B-GGUF"}]
+        with patch(
+            "tools.qwen3_stage3_holdout.thinking._load_model",
+            return_value=(model, provenance),
+        ):
+            loaded, metadata = _load_pinned_model(
+                THINKING_SCHEMA, Path("/tmp/pinned-server"), Path("/tmp/research")
+            )
+
+        self.assertIs(model, loaded)
+        self.assertEqual(THINKING_REQUEST_TIMEOUT_SECONDS, 720)
+        self.assertEqual(metadata[0]["http_request_timeout_seconds"], 720)
+        payload = {
+            "model": "Qwen3-8B-GGUF",
+            "seed": 42,
+            "messages": [{"role": "user", "content": "明日の午後、駅で会いましょう。"}],
+        }
+        loaded.request_json("http://localhost/test", payload, 180)
+        loaded.request_json("http://localhost/test", payload, 900)
+        self.assertEqual(calls[0], ("http://localhost/test", payload, 720))
+        self.assertEqual(calls[1], ("http://localhost/test", payload, 900))
+        self.assertIs(calls[0][1], payload)
+
     def test_partial_development_blocks_before_workspace_and_model_loading(self):
         report, proof = valid_receipts()
         report["cases"] = report["cases"][:17]
