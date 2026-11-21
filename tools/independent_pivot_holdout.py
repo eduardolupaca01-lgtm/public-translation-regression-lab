@@ -142,7 +142,7 @@ INDEPENDENT_CASES: tuple[IndependentCase, ...] = (
     IndependentCase(
         "miss_train_take_taxi",
         "もし電車に間に合わなければ、タクシーで行きます。",
-        (("tren",), ("taxi",), ("si",), ("pierde", "perd", "lleg", "logr", "no llega",
+        (("tren",), ("taxi",), ("si",), ("pierde", "pierd", "perd", "lleg", "logr", "no llega",
                                         "no alcanza")),
     ),
     IndependentCase(
@@ -207,9 +207,7 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
         rejects_two = _has(
             folded,
             r"\bno\b.{0,45}\b(?:2|dos|14:00)\b",
-            r"\b(?:2|dos|14:00)\b.{0,30}\bno\b",
             r"\b(?:en lugar de|en vez de)\b.{0,35}\b(?:2|dos|14:00)\b",
-            r"\b(?:2|dos|14:00)\b.{0,30}\b(?:en lugar de|en vez de)\b",
         )
         four_starts_meeting = _has(
             folded,
@@ -225,7 +223,19 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
             r"\b(?:2|dos|14:00)\b.{0,25}\b(?:tarde|pm)\b.{0,45}\b(?:sino|en lugar de|en vez de|no)\b.{0,30}\b(?:4|cuatro|16:00)\b",
             r"\b(?:4|cuatro|16:00)\b.{0,35}\b(?:sino|en lugar de|en vez de|no)\b.{0,30}\b(?:2|dos|14:00)\b.{0,25}\b(?:tarde|pm)\b",
         )
-        if not rejects_two or not four_starts_meeting or not four_is_afternoon:
+        # The second time must be affirmative. Do not accept "dos..., no a
+        # las cuatro" merely because the same tokens appear in the sentence.
+        four_denied = _has(
+            folded,
+            r"\b(?:no|ni)\s+(?:a\s+las\s+)?(?:4|cuatro|16:00)\b",
+            r"\bno\s+(?:empiez|empez|comienz|comenz|inici)\w*"
+            r".{0,30}\b(?:4|cuatro|16:00)\b",
+            r"\b(?:4|cuatro|16:00)\b.{0,18}\b(?:de la manana|am)\b",
+        )
+        if (
+            not rejects_two or not four_starts_meeting
+            or not four_is_afternoon or four_denied
+        ):
             errors.append("MEETING_TIME_CONTRAST_OR_POLARITY_CHANGED")
 
     elif case.id == "key_ownership":
@@ -474,21 +484,33 @@ def _semantic_errors(case: IndependentCase, spanish: str) -> list[str]:
             errors.append("DOCUMENT_REVIEW_OBLIGATION_OR_ORDER_CHANGED")
 
     elif case.id == "miss_train_take_taxi":
+        # A successful train connection is NOT the same condition as missing
+        # the train. In particular, positive "si logro/llego" must be rejected.
         miss_train_condition = _has(
             folded,
-            r"\bsi\b.{0,55}\bno\s+(?:alcanz|lleg|logr)\w*.{0,25}\btren\b",
-            r"\bsi\b.{0,45}\b(?:pierde|perdemos|perdes|pierdo|logro|logramos|llego|llegamos)\b.{0,35}\btren\b",
+            r"\bsi\b.{0,55}\bno\s+(?:alcanz|lleg|logr)\w*"
+            r".{0,35}\btren\b",
+            r"\bsi\b.{0,55}\b(?:pierd|perd)\w*.{0,35}\btren\b",
+        )
+        loss_is_negated = _has(
+            folded,
+            r"\bsi\b.{0,55}\bno\s+(?:pierd|perd)\w*.{0,35}\btren\b",
         )
         taxi_consequence = _has(
             folded,
-            r"\b(?:iremos|ire|vamos|voy|tomare|tomaremos)\b.{0,25}\btaxi\b",
+            r"\b(?:iremos|ire|vamos|voy|tomare|tomaremos)"
+            r"\b.{0,25}\btaxi\b",
             r"\btaxi\b.{0,25}\b(?:iremos|ire|vamos|voy|tomare|tomaremos)\b",
         )
         taxi_not_negated = not _has(
             folded,
-            r"\bno\b.{0,20}\b(?:iremos|ire|vamos|voy|tomare|tomaremos)\b.{0,20}\btaxi\b",
+            r"\bno\b.{0,20}\b(?:iremos|ire|vamos|voy|tomare|tomaremos)"
+            r"\b.{0,20}\btaxi\b",
         )
-        if not miss_train_condition or not taxi_consequence or not taxi_not_negated:
+        if (
+            not miss_train_condition or loss_is_negated
+            or not taxi_consequence or not taxi_not_negated
+        ):
             errors.append("MISSED_TRAIN_CONDITION_OR_TAXI_CONSEQUENCE_CHANGED")
 
     elif case.id == "luggage_reception_or_room":
