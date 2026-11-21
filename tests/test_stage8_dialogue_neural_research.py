@@ -50,6 +50,26 @@ class TestStage8SourceOnlyResearch(unittest.TestCase):
             "Aria tiene la llave. Mejor pregunte a Sara en lugar de Aria.",
         ))
 
+    def test_sunday_plural_and_inclusive_bound_equivalences(self):
+        by={c.id:c for c in STAGE8_CASES}
+        good_shop="La tienda abre a las 10 de la mañana y cierra a las 6 de la tarde. No abre los domingos."
+        self.assertEqual(_semantic_errors(by["shop_hours_sunday"],good_shop),[])
+        bad_shop="La tienda abre a las 10 de la mañana y cierra a las 6 de la tarde. Abre los domingos."
+        self.assertIn("SUNDAY_CLOSED_MISSING",_semantic_errors(by["shop_hours_sunday"],bad_shop))
+        bounds=r"\V[5] es 4 o menos, no abra esta puerta. Si es 5 o más, se puede abrir."
+        self.assertEqual(_semantic_errors(by["variable_boundary_two_cases"],bounds),[])
+        reversed_bounds=r"Si \V[5] es 4 o menos, puede abrir la puerta. Si es 5 o más, no abra la puerta."
+        err=_semantic_errors(by["variable_boundary_two_cases"],reversed_bounds)
+        self.assertIn("LOWER_BOUND_WRONGLY_PERMITS_OPENING",err)
+        self.assertIn("UPPER_BOUND_WRONGLY_FORBIDS_OPENING",err)
+
+    def test_japanese_name_must_not_be_extended_or_shortened(self):
+        by={c.id:c for c in STAGE8_CASES}
+        for altered in ("Han","Hanako"):
+            with self.subTest(altered=altered):
+                value=f"Taro vio a {altered} salir de la estación, pero Mika no la vio salir."
+                self.assertIn("HANA_MISSING",_semantic_errors(by["taro_hana_mika_witness"],value))
+
     def test_empty_model_cannot_reuse_a_successful_cache_or_claim_quality(self):
         class NullModel:
             def translate(self,text): return ""

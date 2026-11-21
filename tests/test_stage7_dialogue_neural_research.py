@@ -70,6 +70,9 @@ class TestStage7(unittest.TestCase):
         inverted=r"\V[2] es mayor que 1 solo si utilice un medicamento. De lo contrario, no lo utilice."
         self.assertIn("MEDICINE_PREMISE_AND_CONSEQUENCE_REVERSED",
                       _semantic_errors(source,inverted))
+        actual_neural_failure=r"\V[2] es mayor que 1 solo si se usa una medicina. De lo contrario, no se debe usar."
+        self.assertIn("MEDICINE_PREMISE_AND_CONSEQUENCE_REVERSED",
+                      _semantic_errors(source,actual_neural_failure))
         valid_condition_first=r"Solo si \V[2] es mayor que 1, utilice una medicina; de lo contrario no la use."
         self.assertEqual(_semantic_errors(source,valid_condition_first),[])
         valid_action_first=r"Utilice una medicina solo si \V[2] es mayor que 1. De lo contrario, no la use."

@@ -17,8 +17,51 @@ from tools.stage8_dialogue_cases import (
     source_sets_disjoint,
 )
 from tools.stage6_discourse_model import (
-    GENERATION_VARIANT, PROMPT_SHA256, load_model,
+    SYSTEM_PROMPT as BASE_SYSTEM_PROMPT,
+    DiscourseThinkingTranslator,
+    load_model as load_discourse_model,
 )
+
+# One uniform, source-only instruction for all Stage8 inputs; no case-specific
+# names, Spanish reference answers, or target-side corrections are supplied.
+STAGE8_NAME_FIDELITY_GUIDANCE = """
+Before finalizing every translated sentence, independently recheck each
+Japanese proper name against its original kana/kanji. Keep its exact identity:
+do not expand a short name to a longer, familiar name, truncate a name,
+replace a name with a similar name, or insert new character identities.
+Keep the subject who witnessed an action distinct from the person witnessed.
+Preserve the observed action and its past/ongoing temporal perspective.
+Express inclusive numeric bounds (up to and including, from and including)
+with natural Spanish while preserving what each threshold permits or forbids.
+This identical instruction applies to EVERY Japanese source. Output only Spanish.
+"""
+GENERATION_VARIANT = "stage8_uniform_name_and_role_fidelity_v5"
+STAGE8_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + STAGE8_NAME_FIDELITY_GUIDANCE
+PROMPT_SHA256 = hashlib.sha256(STAGE8_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+
+
+class Stage8NameFidelityTranslator(DiscourseThinkingTranslator):
+    @staticmethod
+    def build_payload(text: str) -> dict:
+        payload = DiscourseThinkingTranslator.build_payload(text)
+        payload["messages"][0]["content"] = STAGE8_SYSTEM_PROMPT
+        return payload
+
+
+def load_model(llama_server: Path, workspace: Path):
+    previous, provenance = load_discourse_model(llama_server, workspace)
+    updated = Stage8NameFidelityTranslator(
+        endpoint=previous.endpoint,
+        process=previous.process,
+        log_handle=previous.log_handle,
+        request_json=previous.request_json,
+    )
+    provenance[0].update({
+        "generation_variant": GENERATION_VARIANT,
+        "translation_system_prompt_sha256": PROMPT_SHA256,
+        "case_specific_prompts": False,
+    })
+    return updated, provenance
 from translation_lab.cache import DurableTranslationCache
 from translation_lab.pipeline import TranslationRejected, translate_checked, validate_translation
 from translation_lab.review_queue import ReviewQueue
@@ -55,7 +98,7 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
     report = {
         "schema": "ja-es-stage8-new-source-neural-v1",
         "kind": "EXPLORATORY_RESEARCH_NOT_LINGUISTIC_APPROVAL",
-        "semantic_rubric": "stage8_new_source_dialogue_semantic_rubric_v1",
+        "semantic_rubric": "stage8_new_source_dialogue_semantic_rubric_v2",
         "evaluation_scope": "published_synthetic_source_set_not_external_blind",
         "sources_only": True,
         "generation_variant": GENERATION_VARIANT,

@@ -170,7 +170,7 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
         (r"\b(?:tienda|negocio|comercio|local)\b", "SHOP_MISSING"),
         (r"\b(?:10|diez)\b", "TEN_AM_MISSING"),
         (r"\b(?:6|seis)\b", "SIX_PM_MISSING"),
-        (r"\bdomingo\b", "SUNDAY_MISSING"),
+        (r"\bdomingos?\b", "SUNDAY_MISSING"),
         (r"\b(?:no|cerrad)\w*\b", "SUNDAY_CLOSED_MISSING"),
     ),
     "taro_hana_mika_witness": (
@@ -216,13 +216,13 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
     "variable_boundary_two_cases": (
         (r"\b(?:4|cuatro)\b", "LOWER_THRESHOLD_MISSING"),
         (r"\b(?:5|cinco)\b", "UPPER_THRESHOLD_MISSING"),
-        (r"\b(?:menor\s+o\s+igual|como\s+maximo|no\s+supera|hasta)\b",
+        (r"\b(?:menor\s+o\s+igual|como\s+maximo|no\s+supera|hasta|(?:4|cuatro)\s+o\s+menos)\b",
          "LOWER_INCLUSIVE_BOUND_MISSING"),
-        (r"\b(?:mayor\s+o\s+igual|al\s+menos|como\s+minimo|desde)\b",
+        (r"\b(?:mayor\s+o\s+igual|al\s+menos|como\s+minimo|desde|(?:5|cinco)\s+o\s+mas)\b",
          "UPPER_INCLUSIVE_BOUND_MISSING"),
         (r"\b(?:puerta|porton|entrada)\b", "DOOR_MISSING"),
         (r"\b(?:no|prohibid)\w*\b", "LOWER_FORBIDS_OPENING_MISSING"),
-        (r"\b(?:permit|puede|podr)\w*\b", "UPPER_PERMITS_OPENING_MISSING"),
+        (r"\b(?:permit|puede|podr)\w*\b|\besta\s+bien\s+abrir\w*\b", "UPPER_PERMITS_OPENING_MISSING"),
     ),
     "reserve_wednesday_friday": (
         (r"\bmiercoles\b", "WEDNESDAY_MISSING"),
@@ -256,6 +256,15 @@ def _semantic_errors(sample: Stage8Case, spanish: str) -> list[str]:
             preceding = v[max(0, match.start() - 35):match.start()]
             if not re.search(r"\b(?:no|nunca|jamas)\s+$", preceding):
                 faults.append("SELLS_SHIELD_INSTEAD_OF_SWORD")
+    if sample.id == "variable_boundary_two_cases":
+        # Check which inclusive bound governs which permission, not only tokens.
+        for clause in re.split(r"[.;!?]+", v):
+            if re.search(r"\b(?:4|cuatro)\b", clause):
+                if re.search(r"\b(?:se\s+puede|puede|permit\w*|esta\s+bien)\b.{0,25}\babr\w*\b", clause) and not re.search(r"\bno\b.{0,20}\b(?:puede|permit\w*|abr\w*)\b", clause):
+                    faults.append("LOWER_BOUND_WRONGLY_PERMITS_OPENING")
+            if re.search(r"\b(?:5|cinco)\b", clause):
+                if re.search(r"\bno\s+(?:abra|abrir|abran|abrirla|se\s+puede\s+abrir)\b", clause):
+                    faults.append("UPPER_BOUND_WRONGLY_FORBIDS_OPENING")
     if sample.id == "two_speakers_aria_sara":
         if re.search(r"\b(?:pregunt|consult)\w*\s+a\s+sara\b", v):
             faults.append("ASKS_SARA_INSTEAD_OF_ARIA")

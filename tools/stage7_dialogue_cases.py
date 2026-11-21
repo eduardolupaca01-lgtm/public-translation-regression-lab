@@ -267,7 +267,7 @@ def _semantic_errors(sample: Stage7Case, translation: str) -> list[str]:
         if re.search(
             r"\b(?:mayor\s+que|mas\s+de|superior\s+a)\s+(?:1|uno)\b"
             r".{0,30}\b(?:solo|solamente|unicamente)\s+si\b"
-            r".{0,35}\b(?:use|usar|utilic\w*|tome|tomar|emple\w*)\b",
+            r".{0,60}\b(?:(?:se|debe|puede)\s+)?(?:us[aeo]\w*|usar|utilic\w*|tom\w*|emple\w*)\b",
             v,
         ):
             errors.append("MEDICINE_PREMISE_AND_CONSEQUENCE_REVERSED")
