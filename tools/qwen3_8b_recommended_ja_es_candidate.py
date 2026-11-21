@@ -78,6 +78,12 @@ Accuracy rules:
   冊 counts physical books, not publication volumes.
 - Translate Japanese contrast, additive, conditional, and obligation constructions
   without dropping either side or changing their logical relationship.
+- Preserve each finite predicate and its completion state. Describing an object
+  or its quantity never substitutes for saying what happened to that object.
+- When a Japanese duty has no specified subject, write an impersonal duty in
+  Spanish ("hay que" or "se debe"). Do not assign a new first-person subject.
+- Prefer natural Spanish grammar and object pronouns over literal word-order
+  calques; never introduce details not present in the source.
 - Keep every Arabic digit sequence visible and exactly as written; do not hide it
   behind placeholders, add thousands separators, or spell it out. Preserve each
   number's unit and temporal qualifier. When Japanese uses number words, preserve
