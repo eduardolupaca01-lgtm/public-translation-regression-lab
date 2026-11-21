@@ -12,6 +12,7 @@ from tools.stage8_dialogue_cases import (
 from tools.stage8_dialogue_neural_research import (
     translate_phase, verify_phase, Stage8NameFidelityTranslator,
     GENERATION_VARIANT, PROMPT_SHA256, STAGE8_SYSTEM_PROMPT,
+    STAGE8_SEMANTIC_RUBRIC,
 )
 from tools.stage8_katakana_readings import (
     katakana_romanization, source_katakana_readings, phonetic_sidecar,
@@ -44,6 +45,33 @@ class TestStage8SourceOnlyResearch(unittest.TestCase):
         self.assertEqual(errors,[])
         wrong=r"\N[3] Si \V[8] es mayor que 2, no venda la espada. Venda el escudo."
         self.assertIn("SELLS_SHIELD_INSTEAD_OF_SWORD",_semantic_errors(source,wrong))
+
+    def test_npc_null_subject_first_person_and_speaker_roles_are_validated(self):
+        sample = {c.id:c for c in STAGE8_CASES}["npc_first_second_speakers"]
+        self.assertEqual(STAGE8_SEMANTIC_RUBRIC,
+                         "stage8_new_source_dialogue_semantic_rubric_v4")
+
+        # Correct Spanish commonly omits "yo" because verb inflection marks
+        # the first person. Preserve the original speaker codes and CRLF.
+        document = r"\N[1]「No iré primero.」" + "\r\n" + r"\N[2]「Entiendo. Iré primero.」"
+        self.assertEqual([], _semantic_errors(sample, document))
+        line_context = r"\N[1] “No voy a ir primero.”" + "\r\n" + r"\N[2] «Entendido. Voy primero.»"
+        self.assertEqual([], _semantic_errors(sample, line_context))
+        explicit = r"\N[1] Yo no iré primero." + "\r\n" + r"\N[2] Yo entiendo. Yo iré primero."
+        self.assertEqual([], _semantic_errors(sample, explicit))
+
+        # Third-person morphology must not be mistaken for the speaker's "I".
+        third_person = r"\N[1] Él no irá primero." + "\r\n" + r"\N[2] Entiendo. Él irá primero."
+        errors = _semantic_errors(sample, third_person)
+        self.assertIn("FIRST_PERSON_MISSING", errors)
+        self.assertIn("FIRST_SPEAKER_FIRST_PERSON_MISSING", errors)
+        self.assertIn("SECOND_SPEAKER_FIRST_PERSON_MISSING", errors)
+
+        # The roles may not be swapped: speaker 1 refuses; speaker 2 volunteers.
+        swapped = r"\N[1] Iré primero." + "\r\n" + r"\N[2] Entiendo. No iré primero."
+        errors = _semantic_errors(sample, swapped)
+        self.assertIn("FIRST_SPEAKER_REFUSAL_NOT_BOUND_TO_FIRST_PERSON_MOVEMENT", errors)
+        self.assertIn("SECOND_SPEAKER_WRONGLY_REFUSES_TO_GO_FIRST", errors)
 
     def test_taro_mika_and_aria_sara_roles_are_checked(self):
         cases={c.id:c for c in STAGE8_CASES}

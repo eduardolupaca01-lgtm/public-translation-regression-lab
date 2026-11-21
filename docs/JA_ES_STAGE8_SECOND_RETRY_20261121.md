@@ -21,3 +21,23 @@
 ## Bloqueos pendientes
 
 La etapa 8 se encuentra en corrección, no aprobada. Un eventual 12/12 por rúbrica no constituye validación lingüística profesional: faltan la revisión bilingüe independiente de etapa 9 y una prueba externa verdaderamente ciega para justificar calidad generalizable. La etapa 10 debe permanecer en HOLD mientras falten aprobaciones o haya cualquier fallo semántico. El PR #4 continúa en borrador y main no se modifica.
+
+## Tercera causa y reparación de la ejecución v6 (run 44949496509)
+
+El artefacto [14727153005](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44949496509/artifacts/14727153005) demuestra que 11/12 casos fueron aceptados y que la persistencia SQLite tras reiniciar pasó. El único rechazo fue npc_first_second_speakers, con FIRST_PERSON_MISSING.
+
+La salida neuronal documentada fue:
+- \N[1] «No iré primero».
+- \N[2] «Entiendo. Iré primero».
+
+El español permite omitir el pronombre sujeto: la forma verbal «iré» ya identifica la primera persona. La rúbrica v3 exigía «yo» o «mi» de forma literal y rechazó incorrectamente esa construcción. No es un error del modelo ni una razón para cambiar la traducción.
+
+### Reparación de la rúbrica v4
+
+- Reconoce formas verbales de primera persona como «voy», «iré», «avanzaré», «seguiré» y «saldré», además del pronombre explícito «yo».
+- Comprueba el papel de cada hablante usando los códigos \N[1] y \N[2]: el primero debe rechazar ir primero y el segundo debe reconocer la respuesta y ofrecerse afirmativamente.
+- Añade pruebas para las formas naturales sin pronombre, los pronombres explícitos, el falso positivo en tercera persona y la inversión de los papeles.
+- No cambia el prompt v6, las fuentes japonesas, los códigos, la traducción original ni el comportamiento de caché. La nueva ejecución usa una carpeta temporal limpia y vuelve a realizar las 12 inferencias.
+
+La nueva corrida deberá terminar en 12/12 y superar la comprobación de reinicio antes de marcar la etapa 8 como aprobada. La revisión bilingüe humana sigue siendo obligatoria; etapa 10 permanece en HOLD hasta esa aprobación.
+

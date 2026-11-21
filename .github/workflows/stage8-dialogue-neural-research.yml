@@ -9,8 +9,8 @@ on:
       - "tools/stage8_dialogue_neural_research.py"
       - "tests/test_stage8_dialogue_neural_research.py"
       - "tools/stage8_dialogue_cases.py"
+      - "tools/stage8_katakana_readings.py"
       - "tools/stage6_discourse_model.py"
-      - "tools/stage8_dialogue_cases.py"
   workflow_dispatch:
 
 permissions:

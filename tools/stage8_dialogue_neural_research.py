@@ -44,6 +44,7 @@ Do not use elliptical broken introductions, and retain each RPG control code.
 This identical instruction applies to EVERY Japanese source. Output only Spanish.
 """
 GENERATION_VARIANT = "stage8_uniform_name_phonetics_and_permissions_v6"
+STAGE8_SEMANTIC_RUBRIC = "stage8_new_source_dialogue_semantic_rubric_v4"
 STAGE8_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT + STAGE8_NAME_FIDELITY_GUIDANCE
 PROMPT_SHA256 = hashlib.sha256(STAGE8_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
 
@@ -111,7 +112,7 @@ def translate_phase(workspace: Path, llama_server: Path | None, model_loader=Non
     report = {
         "schema": "ja-es-stage8-new-source-neural-v1",
         "kind": "EXPLORATORY_RESEARCH_NOT_LINGUISTIC_APPROVAL",
-        "semantic_rubric": "stage8_new_source_dialogue_semantic_rubric_v3",
+        "semantic_rubric": STAGE8_SEMANTIC_RUBRIC,
         "evaluation_scope": "published_synthetic_source_set_not_external_blind",
         "sources_only": True,
         "generation_variant": GENERATION_VARIANT,

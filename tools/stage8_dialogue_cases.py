@@ -141,6 +141,29 @@ def _fold(text: str) -> str:
 
 # Word-family checks are screens, not reference answers. Each must survive,
 # but additional meaning and grammar can still fail undetected.
+# Spanish permits a null subject: first-person inflection (e.g. "iré") is
+# sufficient evidence; an explicit "yo" is not grammatically required.
+_FIRST_PERSON_MOVEMENT = re.compile(
+    r"\b(?:voy|ire|avanzo|avanzare|sigo|seguire|salgo|saldre|paso|pasare|parto|partire)\b"
+    r"|\bme\s+(?:adelanto|adelantare)\b"
+)
+_FIRST_PERSON_MARKER = re.compile(r"\byo\b|" + _FIRST_PERSON_MOVEMENT.pattern)
+_NEGATED_FIRST_PERSON_MOVEMENT = re.compile(
+    r"\b(?:no|nunca)\s+(?:me\s+)?"
+    r"(?:voy|ire|avanzo|avanzare|sigo|seguire|salgo|saldre|paso|pasare|parto|partire|adelanto|adelantare)\b"
+)
+
+
+def _speaker_segment(folded_text: str, speaker_id: int) -> str:
+    """Return only one RPG speaker's text, ending at the next speaker code."""
+    match = re.search(
+        rf"\\n\[{speaker_id}\](.*?)(?=\\n\[\d+\]|$)",
+        folded_text,
+        flags=re.DOTALL,
+    )
+    return match.group(1) if match else ""
+
+
 REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
     "letter_younger_brother": (
         (r"\bmina\b", "MINA_NAME_MISSING"),
@@ -200,7 +223,7 @@ REQUIRED: dict[str, tuple[tuple[str, str], ...]] = {
         (r"\b(?:si|en\s+caso)\b", "IF_NOT_THERE_MISSING"),
     ),
     "npc_first_second_speakers": (
-        (r"\b(?:yo|mi)\b", "FIRST_PERSON_MISSING"),
+        (r"\byo\b|" + _FIRST_PERSON_MOVEMENT.pattern, "FIRST_PERSON_MISSING"),
         (r"\b(?:no|nunca)\b", "FIRST_SPEAKER_REFUSAL_MISSING"),
         (r"\b(?:adelante|primero|antes|delante)\b", "GO_FIRST_MEANING_MISSING"),
         (r"\b(?:voy|ire|avanz|seguir|sald)\w*\b", "MOVEMENT_MISSING"),
@@ -247,8 +270,34 @@ def _semantic_errors(sample: Stage8Case, spanish: str) -> list[str]:
         return ["UNKNOWN_CASE"]
     # Numeric control-code indices are NOT prose thresholds. Preserve codes
     # for structural validation, but exclude them from semantic number scans.
-    v = re.sub(r"\\[nv]\[\d+\]", "", _fold(spanish))
+    folded = _fold(spanish)
+    v = re.sub(r"\\[nv]\[\d+\]", "", folded)
     faults = [code for regex, code in REQUIRED[sample.id] if not re.search(regex, v)]
+    if sample.id == "npc_first_second_speakers":
+        first_speaker = _speaker_segment(folded, 1)
+        second_speaker = _speaker_segment(folded, 2)
+        if not first_speaker:
+            faults.append("FIRST_SPEAKER_CODE_MISSING")
+        else:
+            if not _FIRST_PERSON_MARKER.search(first_speaker):
+                faults.append("FIRST_SPEAKER_FIRST_PERSON_MISSING")
+            if not _NEGATED_FIRST_PERSON_MOVEMENT.search(first_speaker):
+                faults.append("FIRST_SPEAKER_REFUSAL_NOT_BOUND_TO_FIRST_PERSON_MOVEMENT")
+            if not re.search(r"\b(?:adelante|primero|antes|delante)\b", first_speaker):
+                faults.append("FIRST_SPEAKER_GO_FIRST_MEANING_MISSING")
+        if not second_speaker:
+            faults.append("SECOND_SPEAKER_CODE_MISSING")
+        else:
+            if not _FIRST_PERSON_MARKER.search(second_speaker):
+                faults.append("SECOND_SPEAKER_FIRST_PERSON_MISSING")
+            if not re.search(r"\b(?:entiend|entend|comprend)\w*|\b(?:de\s+acuerdo|vale|bien|ok)\b", second_speaker):
+                faults.append("SECOND_SPEAKER_ACKNOWLEDGEMENT_MISSING")
+            if not _FIRST_PERSON_MOVEMENT.search(second_speaker):
+                faults.append("SECOND_SPEAKER_VOLUNTEER_ACTION_MISSING")
+            if _NEGATED_FIRST_PERSON_MOVEMENT.search(second_speaker):
+                faults.append("SECOND_SPEAKER_WRONGLY_REFUSES_TO_GO_FIRST")
+            if not re.search(r"\b(?:adelante|primero|antes|delante)\b", second_speaker):
+                faults.append("SECOND_SPEAKER_GO_FIRST_MEANING_MISSING")
     if sample.id == "taro_hana_mika_witness":
         if re.search(r"\bmika\s+(?:si|tambien)\s+(?:la\s+)?(?:vio|ha\s+visto)\b", v):
             faults.append("MIKA_WRONGLY_SEES_HANA")
