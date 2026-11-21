@@ -20,7 +20,7 @@ def valid_receipts():
             "case": case.id, "source": case.japanese, "status": "accepted",
             "translated": translated,
             "sha256": hashlib.sha256(translated.encode("utf-8")).hexdigest(),
-            "raw_model_attempts": [{"mode": "fixture", "raw_output": translated}],
+            "raw_model_attempts": [{"mode": "fixture", "source_fragment": case.japanese, "raw_output": translated}],
         })
     report = {
         "schema": "public-qwen3-8b-thinking-ja-es-candidate-v1",
@@ -90,7 +90,12 @@ class TestStage3Readiness(unittest.TestCase):
             "same_pinned_model_for_both": True,
         }
         report["neural_review_history"] = [
-            {"source": "fixture", "draft": "draft", "reviewed": "reviewed"}
+            {
+                "source": case.japanese,
+                "draft": "synthetic initial draft",
+                "reviewed": REFERENCE_TRANSLATIONS[case.id],
+            }
+            for case in INDEPENDENT_CASES
         ]
         self.assertEqual(promotion_errors(report, restart), [])
         del report["neural_review_history"]
@@ -99,6 +104,23 @@ class TestStage3Readiness(unittest.TestCase):
             promotion_errors(report, restart),
         )
         report["neural_review_history"] = [{"source": "fixture"}]
+        self.assertIn(
+            "TWO_PASS_RAW_REVIEW_EVIDENCE_MISSING",
+            promotion_errors(report, restart),
+        )
+        report["neural_review_history"] = [
+            {"source": case.japanese,
+             "draft": "synthetic",
+             "reviewed": REFERENCE_TRANSLATIONS[case.id]}
+            for case in INDEPENDENT_CASES
+        ]
+        report["cases"][0]["raw_model_attempts"][0]["raw_output"] = (
+            "Salida no vinculada al segundo pase."
+        )
+        self.assertIn(
+            "TWO_PASS_REVIEW_UNLINKED_FROM_RAW_OUTPUT:meeting_time_contrast",
+            promotion_errors(report, restart),
+        )
         report["generation_parameters"]["review"]["seed"] = 42
         self.assertIn(
             "TWO_PASS_GENERATION_PROVENANCE_CHANGED",
