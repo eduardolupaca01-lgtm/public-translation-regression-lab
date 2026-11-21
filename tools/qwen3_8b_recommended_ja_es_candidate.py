@@ -68,26 +68,30 @@ Accuracy rules:
 - Preserve negation, permission, prohibition, conditions, comparisons, contrast,
   sequence, and cause-and-effect relationships.
 - Preserve quantities, dates, times, currency units, colors, names, and family
-  relationships, including whether a sibling is younger or older.
-- Do not invent a recipient, speaker, object, location, or instruction.
+  relationships, including whether a sibling is younger or older. In particular,
+  妹 means "hermana menor" and 姉 means "hermana mayor"; never omit that age.
+- Do not invent a recipient, speaker, object, location, or instruction. If the
+  Japanese source omits the agent, prefer an impersonal Spanish construction
+  ("hay que" or "se debe") unless context identifies the speaker. Never add an
+  indirect-object pronoun such as "nos", "me", or "le" without a stated recipient.
+- Preserve event type. 届く and 届きました mean arrive or be delivered, not publish;
+  冊 counts physical books, not publication volumes.
 - Translate Japanese contrast, additive, conditional, and obligation constructions
   without dropping either side or changing their logical relationship.
 - Preserve the exact action and event type: ordering, receiving, publishing,
   sending, arriving, checking, and signing are not interchangeable.
-- Preserve every number together with its unit and temporal qualifier. Repeat a
-  currency unit or meridiem on each side of a comparison when Spanish needs it
-  for clarity and the source context supports it.
+- Keep every Arabic digit sequence visible and exactly as written; do not hide it
+  behind placeholders, add thousands separators, or spell it out. Preserve each
+  number's unit and temporal qualifier. When Japanese uses number words, preserve
+  their numeric meaning. Repeat currency units or meridiem when needed for clarity.
 - Use clear, neutral Latin American Spanish. Preserve the source's level of
   politeness where Spanish grammar permits.
 - Keep every line and sentence's meaning. Do not merge or reorder independent lines.
-- The pipeline may include native RPG-style placeholders such as \\V[987650]
-  for protected numbers or glossary terms. Copy every such code exactly once;
-  never translate, alter, split, duplicate, delete, or invent it. You may move
-  it to the grammatically correct Spanish position with the phrase it represents.
-- Preserve original RPG codes such as \\N[3] exactly once and unchanged. A name
-  code represents one named character: treat it as a singular person, never as
-  plural characters, a generic noun, or text to translate. Do not impose Japanese
-  word order on Spanish.
+- Preserve original RPG control codes such as \\N[3] and \\V[12] exactly once
+  and unchanged. They are game commands or variables, not numbers to translate.
+  A name code represents one named character: treat it as a singular person,
+  never as plural characters, a generic noun, or text to translate. Do not impose
+  Japanese word order on Spanish.
 - Return only the translation. Do not add a heading, quotation marks, notes, or
   commentary."""
 
