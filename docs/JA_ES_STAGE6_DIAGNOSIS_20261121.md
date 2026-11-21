@@ -42,3 +42,7 @@ Commit: [2ac4819ab4ddf676e7dc65dd001b10326ec38f0b](https://github.com/eduardolup
 
 ## Continuidad
 Leer también `docs/JA_ES_TRANSLATION_HANDOFF_20261121.md`; código en `experiment/qwen3-ja-es-candidate-20261120`, PR #4 permanece `draft`. Respaldo etapa 5: `checkpoint/stage5-validated-20261121`. La evaluación histórica v1 conserva **13/16**, no se sobrescribe.
+
+## Resultado posterior: etapa 6 v3 (no confundir con el resultado v1 anterior)
+
+La nueva ejecución [44924198938](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44924198938) concluyó **FAIL** con `rubric_accepted=15`, `rejected=1` y `persistence_status=PASS`. El único caso rechazado fue `two_speakers_ask_sara`: en modo documento «pidámosle a Sara» frente al japonés `聞きましょう` (preguntar); en modos segmentados, «Sara/Sarah» inconsistente. Consultar el [diagnóstico cruzado 6+7](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/blob/experiment/qwen3-ja-es-candidate-20261120/docs/JA_ES_STAGE6_STAGE7_POSTMORTEM_20261121.md), la nueva versión uniforme v4 `573835a6b68911461769d03e4b98a00fa9499622` y la inferencia de repetición [44931094612](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44931094612). No sobrescribir los 13/16 v1 ni los 15/16 v3, ambos son evidencia histórica distinta.
