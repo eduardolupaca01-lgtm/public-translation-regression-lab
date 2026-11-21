@@ -18,11 +18,11 @@ on:
       stage7_run:
         description: Stage7 completed neural run ID
         required: true
-        default: "44931094546"
+        default: "44942504944"
       stage8_run:
         description: Stage8 completed neural run ID
         required: true
-        default: "44931420612"
+        default: "44942328483"
 
 permissions:
   contents: read
@@ -36,8 +36,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       STAGE6_RUN: ${{ inputs.stage6_run || '44931094612' }}
-      STAGE7_RUN: ${{ inputs.stage7_run || '44931094546' }}
-      STAGE8_RUN: ${{ inputs.stage8_run || '44931420612' }}
+      STAGE7_RUN: ${{ inputs.stage7_run || '44942504944' }}
+      STAGE8_RUN: ${{ inputs.stage8_run || '44942328483' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
