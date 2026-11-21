@@ -37,6 +37,56 @@ class TestQwen8BStage3(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertFalse(was_loaded)
 
+    def test_rejected_raw_outputs_remain_pending_after_cold_restart(self):
+        report, proof = valid_receipts()
+        calls = []
+
+        class StubTranslator:
+            def translate(self, text):
+                calls.append(text)
+                return "Traducción incompleta."
+
+            def close(self):
+                pass
+
+        def stub_loader():
+            return StubTranslator(), [report["models"][0]]
+
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            dev = base / "dev.json"
+            restart = base / "restart.json"
+            target = base / "stage3"
+            dev.write_text(json.dumps(report), encoding="utf-8")
+            restart.write_text(json.dumps(proof), encoding="utf-8")
+
+            self.assertEqual(
+                translate_phase(
+                    target, dev, restart, None,
+                    model_loader=stub_loader,
+                ), 1
+            )
+            self.assertTrue(calls)
+            raw = json.loads(
+                (target / "stage3-report.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(raw["status"], "FAIL")
+            self.assertEqual(raw["accepted"], 0)
+            self.assertEqual(raw["rejected"], 10)
+            self.assertEqual(raw["cache_rows"], 0)
+            self.assertEqual(raw["review_queue_pending"], 10)
+
+            self.assertEqual(verify_phase(target), 0)
+            cold = json.loads(
+                (target / "stage3-restart-proof.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(cold["status"], "QUALITY_FAIL_PERSISTENCE_PASS")
+            self.assertEqual(cold["persistence_status"], "PASS")
+            self.assertEqual(cold["quality_status"], "FAIL")
+            self.assertFalse(cold["models_loaded_during_restart"])
+
     def test_cold_restart_requires_receipts_not_just_a_directory(self):
         with tempfile.TemporaryDirectory() as root:
             self.assertEqual(verify_phase(Path(root)), 1)
