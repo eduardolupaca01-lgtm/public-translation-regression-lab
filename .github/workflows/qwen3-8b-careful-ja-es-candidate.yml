@@ -27,6 +27,7 @@ jobs:
       TOKENIZERS_PARALLELISM: "false"
       OMP_NUM_THREADS: "2"
       QWEN8B_WORKSPACE: /tmp/qwen8b-careful-ja-es-quality
+      QWEN8B_STAGE3_WORKSPACE: /tmp/qwen8b-careful-stage3-quality
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -66,6 +67,20 @@ jobs:
         run: |
           python -m tools.qwen3_8b_careful_ja_es_candidate verify \
             --workspace "$QWEN8B_WORKSPACE"
+      - name: Translate disjoint ten-dialogue holdout only after 20/20 and cold restart
+        id: stage3_translate
+        if: success()
+        run: |
+          python -m tools.qwen3_stage3_holdout translate \
+            --candidate-report "$QWEN8B_WORKSPACE/qwen8b-candidate-report.json" \
+            --candidate-restart-proof "$QWEN8B_WORKSPACE/qwen8b-restart-proof.json" \
+            --llama-server "$LLAMA_SERVER" \
+            --workspace "$QWEN8B_STAGE3_WORKSPACE"
+      - name: Audit holdout SQLite and review queue in a fresh process
+        if: always() && steps.stage3_translate.outcome != 'skipped'
+        run: |
+          python -m tools.qwen3_stage3_holdout verify \
+            --workspace "$QWEN8B_STAGE3_WORKSPACE"
       - name: Preserve raw outputs, translations, and restart proof
         if: always()
         uses: actions/upload-artifact@v4
@@ -79,3 +94,9 @@ jobs:
             /tmp/qwen8b-careful-ja-es-quality/review-queue.json
             /tmp/qwen8b-careful-ja-es-quality/llama-server.log
             /tmp/qwen8b-careful-ja-es-quality/cache/translation-cache.sqlite3
+            /tmp/qwen8b-careful-stage3-quality/stage3-source-manifest.json
+            /tmp/qwen8b-careful-stage3-quality/stage3-report.json
+            /tmp/qwen8b-careful-stage3-quality/stage3-restart-proof.json
+            /tmp/qwen8b-careful-stage3-quality/stage3-review-queue.json
+            /tmp/qwen8b-careful-stage3-quality/llama-server.log
+            /tmp/qwen8b-careful-stage3-quality/cache/translation-cache.sqlite3
