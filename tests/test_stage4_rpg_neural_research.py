@@ -19,7 +19,7 @@ class TestStage4RpgNeuralResearch(unittest.TestCase):
         class BadModel:
             def translate(self, text):
                 calls.append(text)
-                return "Traducción incompleta."
+                return ""
             def close(self):
                 pass
 
