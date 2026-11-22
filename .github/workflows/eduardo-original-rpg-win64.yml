@@ -152,7 +152,28 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_PRODUCTION_JS_SYNTAX_HOLD" }
           node original/tests/js/test_tx771_game_local_v95_portability.js *> $log
           if ($LASTEXITCODE -ne 0) {
-            Get-Content -LiteralPath $log | Where-Object { $_ -match 'TX771 PORTABLE GAME LOCAL V95 FAIL|AssertionError|Error:|code:|TX771_PORTABLE_WAIT_EXPIRED' } | Select-Object -First 8 | ForEach-Object { Write-Host $_ }
+            # Public workflow: never print raw private log lines or source paths.
+            $text = Get-Content -LiteralPath $log -Raw
+            $diagnostics = @(
+              @{match="TX771_PORTABLE_WAIT_EXPIRED_OWNED_WORKER_SPAWN";code="OWNED_SPAWN_TIMEOUT"},
+              @{match="TX771_PORTABLE_WAIT_EXPIRED_LEGACY_WORKER_SPAWN";code="LEGACY_SPAWN_TIMEOUT"},
+              @{match="portable game should spawn one original worker";code="OWNED_SPAWN_COUNT"},
+              @{match="only worker CHILD gets game-local LOCALAPPDATA";code="CHILD_ENV_MISMATCH"},
+              @{match="PyInstaller temporary extraction must stay within its own game";code="TEMP_ENV_MISMATCH"},
+              @{match="owner-marked portable game must store its cache";code="CACHE_NOT_CREATED"},
+              @{match="a marker for an unknown/faulty sidecar must NEVER";code="FOREIGN_SIDECAR_UNSAFE"},
+              @{match="known TX770 games without sidecars retain";code="LEGACY_SPAWN_COUNT"},
+              @{match="EACCES";code="READ_PERMISSION"},
+              @{match="ENOENT";code="FILE_NOT_FOUND"}
+            )
+            $stage="OTHER_ASSERTION"
+            foreach($diagnostic in $diagnostics) {
+              if($text.Contains($diagnostic.match)) {
+                $stage=$diagnostic.code
+                break
+              }
+            }
+            Write-Host "TX771_SAFE_PORTABLE_FAILURE_STAGE=$stage"
             throw "TX771_PORTABLE_JS_MODEL_AND_CACHE_HOLD"
           }
           node original/tests/js/test_tx771_custom_message_converter_first_paint.js *> $log
