@@ -73,7 +73,7 @@ def dashboard(original:str)->str:
             if !rpgApplyInstallResponse() && !rpgState.startedAt.IsZero(){''',"TIMER_EVENTS")
     s=replace_once(s,
 '''                    rpgStatus(fmt.Sprintf("Instalación en curso (%d s de actividad). La ventana sigue respondiendo; no cierres el juego hasta terminar.",elapsed))''',
-'''                    tx776Append("TX776_EN_CURSO",fmt.Sprintf("Instalación en curso (%d s). No cierres esta ventana ni abras el videojuego hasta terminar.",elapsed))''',"HEARTBEAT_APPEND")
+'''                    tx776Append("TX776_EN_CURSO",fmt.Sprintf("Instalación en curso (%d s de actividad). No cierres esta ventana ni abras el videojuego hasta terminar.",elapsed))''',"HEARTBEAT_APPEND")
     s=replace_once(s,
 '''            rpgStatus("Instalación en curso. Espera a que termine para cerrar sin interrumpir el respaldo.")''',
 '''            tx776Append("TX776_CIERRE_BLOQUEADO","La instalación está trabajando. Cerrar ahora podría interrumpir el respaldo; finaliza primero.")''',"CLOSE_DOES_NOT_CLEAR")
