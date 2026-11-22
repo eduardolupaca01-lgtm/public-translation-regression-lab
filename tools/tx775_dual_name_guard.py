@@ -111,6 +111,7 @@ def self_test()->None:
         else:raise AssertionError("TX775_SOURCE_PIN_WEAK")
     script=(
        "function containsJapanese(s){return /[\\u3040-\\u30ff\\u3400-\\u9fff]/.test(s);}\n"
+       + "function jp(s){return typeof s==='string' && containsJapanese(s);}\n"
        +CORE_HELPER+HAS_JS+"\n"
        + "const src="+json.dumps(source,ensure_ascii=False)+";\n"
        + "const allowed="+json.dumps(accepted,ensure_ascii=False)+";\n"
