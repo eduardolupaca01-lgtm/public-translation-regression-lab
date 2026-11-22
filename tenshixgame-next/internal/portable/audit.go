@@ -35,6 +35,7 @@ type Report struct {
     EntryRecordsProven int
     CacheRecordsRejected int
     CacheFilesSkipped int
+    OrphanInstallStages int
     Issues []string
     // This read-only structural audit NEVER asserts gameplay certification.
     OfflineInferenceTested bool
@@ -110,6 +111,20 @@ func AuditRoot(gameRoot string)Report {
     st,e:=os.Lstat(root)
     if e!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{
         result.Issues=append(result.Issues,"GAME_ROOT_NOT_ORDINARY");return result
+    }
+    // TX771 used MkdirTemp on the game volume; if installation failed,
+    // its incomplete .tx771-stage-* directory could remain behind.
+    // Report these only: never delete folders we have not proven to own.
+    if folders,readErr:=os.ReadDir(root);readErr==nil {
+        for _,entry:=range folders {
+            if strings.HasPrefix(entry.Name(),".tx771-stage-") &&
+                entry.IsDir() && entry.Type()&os.ModeSymlink==0 {
+                result.OrphanInstallStages++
+            }
+        }
+    }
+    if result.OrphanInstallStages>0 {
+        result.Issues=append(result.Issues,"POSSIBLE_INCOMPLETE_V95_INSTALL_STAGES")
     }
     sideRel:="Tenshixgame-IA"
     if _,e:=os.Lstat(filepath.Join(root,sideRel));os.IsNotExist(e){
