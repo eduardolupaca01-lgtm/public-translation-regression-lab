@@ -36,6 +36,7 @@ type Report struct {
     CacheRecordsRejected int
     CacheFilesSkipped int
     OrphanInstallStages int
+    PreservedAppVersions int
     Issues []string
     // This read-only structural audit NEVER asserts gameplay certification.
     OfflineInferenceTested bool
@@ -117,7 +118,8 @@ func AuditRoot(gameRoot string)Report {
     // Report these only: never delete folders we have not proven to own.
     if folders,readErr:=os.ReadDir(root);readErr==nil {
         for _,entry:=range folders {
-            if strings.HasPrefix(entry.Name(),".tx771-stage-") &&
+            if (strings.HasPrefix(entry.Name(),".tx771-stage-") ||
+                strings.HasPrefix(entry.Name(),".tx771-onefile-stage-")) &&
                 entry.IsDir() && entry.Type()&os.ModeSymlink==0 {
                 result.OrphanInstallStages++
             }
@@ -148,6 +150,18 @@ func AuditRoot(gameRoot string)Report {
     }
     result.OwnerVerified=true
     result.State="owner_marker_valid"
+    // TX772 preserves older signed App/<digest> packages on the game disk.
+    // These are counted for disk-use diagnosis, never deleted by the auditor.
+    appRel:=filepath.Join(sideRel,"App")
+    if plainDir(root,appRel) {
+        if apps,readErr:=os.ReadDir(filepath.Join(root,appRel));readErr==nil {
+            for _,entry:=range apps {
+                if entry.IsDir() && entry.Type()&os.ModeSymlink==0 {
+                    result.PreservedAppVersions++
+                }
+            }
+        }
+    }
     base:=filepath.Join(sideRel,".local","TENSHIXGAME-RPG")
     worker:=filepath.Join(base,"engine","engine","TenshixgameAI.exe")
     if plainFile(root,worker,0){
