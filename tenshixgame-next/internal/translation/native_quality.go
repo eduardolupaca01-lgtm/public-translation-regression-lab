@@ -9,8 +9,8 @@ import (
     "unicode/utf8"
 )
 
-var nativeSpeakerTag=regexp.MustCompile(String.raw`\\N<[^>\r\n]{1,128}>`)
-var rawJapanese=regexp.MustCompile(String.raw`[\x{3040}-\x{30ff}\x{3400}-\x{9fff}]`)
+var nativeSpeakerTag=regexp.MustCompile(`\\N<[^>\r\n]{1,128}>`)
+var rawJapanese=regexp.MustCompile(`[\x{3040}-\x{30ff}\x{3400}-\x{9fff}]`)
 
 const (
     QualityAccepted="NATIVE_PROTECTED_TEXT_CANDIDATE"
