@@ -1,0 +1,64 @@
+name: TENSHIXGAME RPG TX772 genuine TX771-to-TX772 Windows upgrade acceptance
+
+on:
+  push:
+    branches:
+      - build/eduardo-original-rpg-tx772-public-update-20261122
+    paths:
+      - ".github/workflows/tx772-original-upgrade-acceptance.yml"
+      - "tools/tx772_accept_previous_on_windows.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: tx772-existing-game-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actual-prior-to-updated-executable:
+    name: Test genuine encrypted TX771 to TX772 upgrade, cache, relocation and game integrity
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EDUARDO_RPG_ARCHIVE_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require successful signed encrypted TX772 Windows compilation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $finished = $false
+          for ($n = 0; $n -lt 240; $n++) {
+            $state = gh api "repos/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45034400292" --jq "{status:.status,conclusion:.conclusion}" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $null -eq $state) { throw "TX772_UPGRADE_PARENT_RUN_NOT_READABLE" }
+            if ($state.status -eq "completed") {
+              if ($state.conclusion -ne "success") {
+                throw "TX772_GENUINE_PARENT_BUILD_NOT_APPROVED"
+              }
+              $finished = $true
+              break
+            }
+            Start-Sleep -Seconds 15
+          }
+          if (-not $finished) { throw "TX772_GENUINE_PARENT_BUILD_NOT_FINISHED" }
+          Write-Host "TX772_ORIGINAL_BUILD_SUCCESS_CONFIRMED"
+      - name: Compare previous genuine EXE against updated EXE in same disposable Windows game
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -NonInteractive -File tools/tx772_accept_previous_on_windows.ps1 -PreviousRun 45028773464 -UpdatedRun 45034400292
+          if ($LASTEXITCODE -ne 0) { throw "TX772_REAL_PRIOR_TO_UPDATED_EXE_OWNER_ACCEPTANCE_HOLD" }
+          Write-Host "TX772_WINDOWS_PRIOR_TO_NEW_EXE_OWNER_ACCEPTANCE_PASS"
+          "TX772_OWNER_ACCEPTANCE_PASS: old and new AES archives, worker SHA, game files, cache, local disk, restart and relocation" | Set-Content -LiteralPath "$env:RUNNER_TEMP/tx772-owner-acceptance.txt" -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: TENSHIXGAME-RPG-TX772-REAL-OWNER-ACCEPTANCE-PASS
+          retention-days: 14
+          path: ${{ runner.temp }}/tx772-owner-acceptance.txt
+          if-no-files-found: error
