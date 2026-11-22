@@ -49,13 +49,15 @@ func servidorClassifyPreparationFailure(err error)(string,string){
   return code,"Falló el registro de propiedad de la instalación portátil. No modifiques manualmente el marcador ni los archivos anteriores."
  case "TX778_VERIFICAR_PAQUETE_PUBLICADO_FALLIDO","TX778_VERIFICAR_PROPIETARIO_PUBLICADO_FALLIDO":
   return code,"La verificación final de la carpeta portátil falló. Se han conservado los archivos existentes para evitar pérdida de datos."
+ case "TX772_OWNER_MARKER_REQUIRED":
+  return code,"La carpeta portátil anterior no dispone de un marcador de propiedad válido. Servidor conserva su contenido para proteger traducciones y partidas; no la borres ni la sobrescribas."
  case "TX771_PORTABLE_PUBLISH_FAILED":
   return code,"Windows rechazó publicar la carpeta preparada. Puede deberse al bloqueo del directorio o a los permisos en la unidad del juego."
  case "TX771_FOREIGN_PORTABLE_FOLDER","TX771_OWNER_MARKER_NOT_REGULAR","TX771_OWNER_MARKER_WRONG_SCHEMA":
   return code,"La carpeta portátil existente no es una instalación comprobada de Servidor. No la borres ni la sobrescribas."
  }
  if strings.HasPrefix(code,"TX541_")||strings.HasPrefix(code,"TX567_")||
-    strings.HasPrefix(code,"TX771_"){
+    strings.HasPrefix(code,"TX771_")||strings.HasPrefix(code,"TX772_"){
   return code,"Un control interno del paquete o del motor V95 rechazó la preparación. El identificador indica el paso que debe revisarse, sin divulgar archivos privados."
  }
  if errors.Is(err,os.ErrNotExist){

@@ -37,16 +37,10 @@ def portable(source: str) -> str:
     if source.count("func tx771PreparePortableOnefile(")!=1:
         raise RuntimeError("SERVIDOR_DIAG_PREPARE_FUNCTION_MISSING")
     head,body=source.split("func tx771PreparePortableOnefile(",1)
-    body=swap(body,
-        'owner,err:=tx771OwnerFile(marker);if err!=nil{return "","",err}',
-        'owner,err:=tx771OwnerFile(marker);if err!=nil{return "","",fmt.Errorf("TX778_CARPETA_EXISTENTE_SIN_PROPIETARIO: %w",err)}')
-    old_verify='if err=verifyDirectory(appDir,payload);err!=nil{return "","",err}'
-    body=swap(body,old_verify,
-        'if err=verifyDirectory(appDir,payload);err!=nil{return "","",fmt.Errorf("TX778_CARPETA_EXISTENTE_NO_VERIFICADA: %w",err)}',
-        expected=2)
-    body=swap(body,
-        'if err=hostCommand(appDir,"verify","--root",engine);err!=nil{return "","",err}',
-        'if err=hostCommand(appDir,"verify","--root",engine);err!=nil{return "","",fmt.Errorf("TX778_CARPETA_EXISTENTE_MODELO_INVALIDO: %w",err)}')
+    # TX772 runs FIRST in CI and replaces the old sidecar branch with its
+    # verified owner-only upgrade path. We must not match removed legacy code.
+    if body.count("return tx772UpgradeOwnedPortable(payload,gameRoot)") != 1:
+        raise RuntimeError("SERVIDOR_DIAG_TX772_UPGRADE_SOURCE_REQUIRED")
     body=swap(body,
         '}else if !os.IsNotExist(err){return "","",err}',
         '}else if !os.IsNotExist(err){return "","",fmt.Errorf("TX778_CARPETA_PORTATIL_INACCESIBLE: %w",err)}')
@@ -68,12 +62,13 @@ def portable(source: str) -> str:
     body=swap(body,
         'if err=os.WriteFile(filepath.Join(stage,"portable-owner-v1.json"),raw,0600);err!=nil{\n        return "","",err\n    }',
         'if err=os.WriteFile(filepath.Join(stage,"portable-owner-v1.json"),raw,0600);err!=nil{\n        return "","",fmt.Errorf("TX778_GUARDAR_MARCADOR_FALLIDO: %w",err)\n    }')
+    old_verify='if err=verifyDirectory(appDir,payload);err!=nil{return "","",err}'
     body=swap(body,old_verify,
         'if err=verifyDirectory(appDir,payload);err!=nil{return "","",fmt.Errorf("TX778_VERIFICAR_PAQUETE_PUBLICADO_FALLIDO: %w",err)}')
     body=swap(body,
         'if _,err=tx771OwnerFile(marker);err!=nil{return "","",err}',
         'if _,err=tx771OwnerFile(marker);err!=nil{return "","",fmt.Errorf("TX778_VERIFICAR_PROPIETARIO_PUBLICADO_FALLIDO: %w",err)}')
-    if body.count("TX778_")<12:
+    if body.count("TX778_")<9:
         raise RuntimeError("SERVIDOR_DIAG_MISSING_PHASE_INSTRUMENTATION")
     return head+"func tx771PreparePortableOnefile("+body
 

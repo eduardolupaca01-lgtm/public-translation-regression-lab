@@ -62,7 +62,7 @@ func TestServidorPreparacionCarpetaAnteriorSinMarcadorNoSeBorra(t *testing.T){
  _,_,err:=tx771PreparePortableOnefile(payload,game)
  if err==nil{t.Fatal("partial prior sidecar accepted without owner marker")}
  code,detail:=servidorClassifyPreparationFailure(err)
- if code!="TX778_CARPETA_EXISTENTE_SIN_PROPIETARIO"||detail==""{
+ if code!="TX772_OWNER_MARKER_REQUIRED"||detail==""{
    t.Fatalf("unidentified old sidecar: %s",code)
  }
  observed,e:=os.ReadFile(sentinel)
