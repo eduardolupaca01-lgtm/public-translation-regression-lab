@@ -130,7 +130,7 @@ def _reviewer_blockers(
             continue
         if any(row.get(dimension) != "approved" for dimension in REVIEW_DIMENSIONS):
             blockers.append("STAGE9_REVIEW_DIMENSIONS_NOT_ALL_APPROVED")
-        if not reviewer or row.get("reviewer", "").casefold() != reviewer.casefold():
+        if not reviewer or (row.get("reviewer") or "").casefold() != reviewer.casefold():
             blockers.append("STAGE9_CASE_REVIEWER_IDENTITY_MISMATCH")
         if row.get("posthoc_screen_flags") and not str(row.get("notes") or "").strip():
             blockers.append("STAGE9_FLAGGED_CASE_LACKS_REVIEWER_NOTES")
