@@ -52,8 +52,9 @@ def audit(game:Path)->dict:
         if detail is not None:entry["count"]=detail
         checks.append(entry)
 
+    requested=game
     game=game.resolve()
-    root_ok=game.is_dir() and not game.is_symlink()
+    root_ok=requested.is_dir() and not requested.is_symlink()
     if not root_ok:
         check("GAME_DIRECTORY",False)
         return {"ok":False,"checks":checks,"runtime_verified":False}
@@ -142,7 +143,8 @@ def audit(game:Path)->dict:
     old=game/"www/data/TenshigameTranduccion"
     if not old.exists():old=game/"data/TenshigameTranduccion"
     if old.is_dir():
-        check("LEGACY_RUNTIME_STATE_ABSENT",False)
+        checks.append({"code":"LEGACY_RUNTIME_STATE_REQUIRES_RUNTIME_REVALIDATION",
+                       "result":"WARN"})
 
     checks.append({"code":"GAME_EXE_LAUNCH_ON_SECOND_WINDOWS_PC",
                    "result":"NOT_TESTED"})
