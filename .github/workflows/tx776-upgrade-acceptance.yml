@@ -1,0 +1,65 @@
+name: TENSHIXGAME TX776 genuine TX775-to-TX776 portable upgrade acceptance
+
+on:
+  push:
+    branches:
+      - rebuild/tenshixgame-unificado-deteccion-20261122
+    paths:
+      - tools/tx776_validate_upgrade_windows.ps1
+      - .github/workflows/tx776-upgrade-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: tx776-owner-upgrade-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  original-v95-inplace-upgrade:
+    name: Encrypted owner V95 update, cache and game relocation proof
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # Owner's two historical secret values are in opposite GitHub fields.
+      EDUARDO_RPG_ARCHIVE_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate Windows PowerShell script parses
+        shell: pwsh
+        run: |
+          $parserErrors=$null
+          $parserTokens=$null
+          $file=(Resolve-Path -LiteralPath 'tools/tx776_validate_upgrade_windows.ps1').Path
+          [System.Management.Automation.Language.Parser]::ParseFile($file,[ref]$parserTokens,[ref]$parserErrors) | Out-Null
+          if ($parserErrors.Count -ne 0) { throw "TX776_OWNER_UPGRADE_SCRIPT_SYNTAX_HOLD" }
+          Write-Host "TX776_OWNER_UPGRADE_POWERSHELL_VALID"
+      - name: Both exact encrypted owner build receipts must have successful CI
+        shell: pwsh
+        run: |
+          foreach($runId in @(45044374825,45049228765)) {
+            $meta=gh api ("repos/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/"+$runId) --jq '{status:.status,conclusion:.conclusion}' | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $null -eq $meta -or $meta.status -ne 'completed' -or $meta.conclusion -ne 'success') {
+              throw "TX776_CRYPTED_V95_BUILD_UNVERIFIED"
+            }
+          }
+          Write-Host "TX776_BOTH_ORIGINAL_WINDOWS_BUILD_SHA_PINS_VERIFIED"
+      - name: Install actual TX775 package, then upgrade with TX776, restart and move game
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -NonInteractive -File tools/tx776_validate_upgrade_windows.ps1 -PreviousRun 45044374825 -UpdatedRun 45049228765
+          if ($LASTEXITCODE -ne 0){ throw "TX776_PREDECESSOR_UPGRADE_ACCEPTANCE_HOLD" }
+          Write-Host "TX776_GENUINE_V95_GAME_LOCAL_UPGRADE_PASS"
+          "TX776_UPGRADE_PASS: authentic owner AES archives, SHA receipts, distinct original V95 EXEs, preserved previous App and cache, game EXE and registry unchanged, worker hash valid, repeated boot and game relocation, no Windows profile engine" | Set-Content -LiteralPath "$env:RUNNER_TEMP/tx776-upgrade-pass.txt" -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: TENSHIXGAME-TX776-REAL-TX775-TO-TX776-UPGRADE-PASS
+          retention-days: 14
+          path: ${{ runner.temp }}/tx776-upgrade-pass.txt
+          if-no-files-found: error
