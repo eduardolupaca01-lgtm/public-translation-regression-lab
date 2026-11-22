@@ -34,6 +34,8 @@ type Report struct {
     SnapshotRecordsUnverifiable int
     EntryRecordsProven int
     CacheRecordsRejected int
+    CacheQualityRejected int
+    CacheProtectedNameCandidates int
     CacheFilesSkipped int
     OrphanInstallStages int
     PreservedAppVersions int
@@ -218,6 +220,13 @@ func AuditRoot(gameRoot string)Report {
                     if err!=nil||native!=k {
                         result.CacheRecordsRejected++;continue
                     }
+                    src:=translation.Source{Family:"rpg-maker",Engine:"mv",Language:language,Raw:original}
+                    accepted,_:=translation.AssessNativeCandidate(src,value)
+                    if !accepted {
+                        result.CacheQualityRejected++
+                        continue
+                    }
+                    if strings.Contains(original,"\\N<") {result.CacheProtectedNameCandidates++}
                     result.SnapshotRecordsProven++
                 }
             }
@@ -257,6 +266,13 @@ func AuditRoot(gameRoot string)Report {
                     if e!=nil||native!=record.Key {
                         result.CacheRecordsRejected++;continue
                     }
+                    src:=translation.Source{Family:"rpg-maker",Engine:"mv",Language:record.Language,Raw:record.Source}
+                    accepted,_:=translation.AssessNativeCandidate(src,record.Translated)
+                    if !accepted {
+                        result.CacheQualityRejected++
+                        continue
+                    }
+                    if strings.Contains(record.Source,"\\N<") {result.CacheProtectedNameCandidates++}
                     result.EntryRecordsProven++
                 }
             }
