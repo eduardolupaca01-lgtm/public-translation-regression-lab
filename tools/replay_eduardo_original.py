@@ -191,7 +191,7 @@ def execute(source_root, receipt_path):
                 # model output, paths, bearer credentials or stack traces.
                 import re
                 safe_codes = sorted(set(re.findall(
-                    r"\\bTX[0-9]{3}_[A-Z][A-Z0-9_]{4,90}\\b",
+                    r"\bTX[0-9]{3}_[A-Z][A-Z0-9_]{4,90}\b",
                     private_log.read_text(encoding="utf-8", errors="replace")[-25000:],
                 )))
                 result["safe_gate_error_codes"] = safe_codes[:12]

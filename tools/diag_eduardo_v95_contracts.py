@@ -39,10 +39,10 @@ def main():
    # No original stack, private source text, file paths or secret values.
    import re
    source=log.read_text(encoding="utf-8",errors="replace")[-35000:]
-   codes=sorted(set(re.findall(r"\\bTX[0-9]{3}_[A-Z0-9_]{4,100}\\b",source)))
+   codes=sorted(set(re.findall(r"\bTX[0-9]{3}_[A-Z0-9_]{4,100}\b",source)))
    classes=sorted(set(re.findall(
-    r"\\b(?:RuntimeError|AssertionError|ValueError|FileNotFoundError|"
-    r"ModuleNotFoundError|UnicodeError|KeyError|TypeError|SyntaxError)\\b",source
+    r"\b(?:RuntimeError|AssertionError|ValueError|FileNotFoundError|"
+    r"ModuleNotFoundError|UnicodeError|KeyError|TypeError|SyntaxError)\b",source
    )))
    print("EDUARDO_SAFE_DIAGNOSTIC:"+
          label+":CODES="+",".join(codes[:12])+
