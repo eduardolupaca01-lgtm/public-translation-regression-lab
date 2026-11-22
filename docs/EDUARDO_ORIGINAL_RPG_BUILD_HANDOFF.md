@@ -5,7 +5,7 @@
 ## Código y procedencia
 
 - Código real de la GUI, plugin RPG Maker, instalador, pruebas, worker y modelos: repositorio PRIVADO `eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build`.
-- Commit exacto: `0faa1f31bf1069cada2b86b1d4ebce7344fd1035` de `fix/tx765-rpg-live-bridge-native-paint-20261121`.
+- Commit de esta prueba: `579cb1570efb2889057f7f9f5e03fb3bb7156268` de `fix/tx768-rpg-namebox-body-firstpaint-20261122` (rama privada, no rama principal).
 - Workflow original: `.github/workflows/tx758-clean-current-baseline.yml` del mismo commit (emplea la suite TX765).
 - Compilador público: `.github/workflows/eduardo-original-rpg-win64.yml` con `tools/replay_eduardo_original.py`.
 
@@ -24,7 +24,7 @@ Desde GitHub, abrir el repositorio público → **Settings → Secrets and varia
 2. Seleccionar **Run workflow** con la rama `build/eduardo-original-rpg-win64-20261121` (o volver a ejecutar los trabajos después de crear los dos secretos).
 3. El runner verifica el SHA exacto del repositorio privado y comprueba los **26 pasos** del workflow original: GUI, V95 original, repaquetado de 21 componentes, 10 traducciones reales y 6 diálogos RPG, SQLite, instalación, primer y segundo arranque, integridad SHA, rollback y código de los plugins.
 4. No ejecuta los dos pasos finales originales de modificación de la rama privada ni de creación de una release. El programa original se crea dentro del runner, se cifra con contraseña y solo el archivo cifrado y el recibo de hash pueden descargarse del artifact.
-5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX765-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX765-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
+5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX768-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX768-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
 
 ## Evidencia actualizada de TX765 (2026-11-22)
 
@@ -58,3 +58,13 @@ La primera fuente TX767 tenía un texto de confirmación del instalador incompat
 ## Ajuste TX767 del control de instalación
 
 La compilación pública 44979280454 aprobó 24/26 verificaciones, incluyendo motor V95 y render nativo, pero la comprobación de instalación TX591 exige que el mensaje de éxito preserve las palabras históricas `Traductor V95 instalado` y `el idioma original se detecta`, que se habían omitido al aclarar el paso de reinstalación. La rama privada `fix/tx767-rpg-visible-speech-20261122` ahora mantiene ambas frases exactas y conserva el consejo de cerrar y abrir el juego (commit `0faa1f31bf1069cada2b86b1d4ebce7344fd1035`). Esto cambia exclusivamente el texto del mensaje, sin desactivar ni modificar la instalación ni la restauración de complementos. La nueva compilación reevalúa obligatoriamente los 26 controles.
+
+## TX768 — recuperar solicitudes perdidas y primer dibujo de voz con namebox independiente
+
+Después de la ejecución TX767 #44980315118 (26/26 gates PASS, **no** equivale a aceptación del usuario) el propietario confirmó que siguen escenas japonesas sin reemplazo. El nuevo diagnóstico distingue la ausencia de solicitudes de diálogo visible de las traducciones de precarga; la evidencia histórica muestra `foregroundRequests=0` y también rechazos V95 por calidad. No atribuir automáticamente esos rechazos al motor o a un token sin observar la sesión.
+
+Se descubrió una ruta sin probar por TX767: `request(text)` abandonaba mensajes que comenzaban por `\\N<name>`; un plugin nativo podía consumir ese prefijo y dibujar solo japonés hablado durante `startMessage`, pero la intervención previa exigía una igualdad de la frase completa. TX768 encola únicamente el cuerpo reconocido, preserva el nombre original, y reemplaza el cuerpo en el primer dibujo únicamente cuando la ventana de nombre pertenece a esa ventana de mensaje, las superficies son independientes, el japonés coincide exactamente y la traducción española está validada y cabe. Si alguna condición no se cumple no dibuja una segunda capa española.
+
+La regresión `tests/js/test_tx765_no_overdraw_sync_custom_start.js` ahora comprueba marcadores dinámicos, actor con comillas, cuerpo separado, solicitudes únicas, bitmap propio, bitmap compartido, namebox ajeno, caché ausente y no-superposición. Un precontrol del workflow público ejecuta esa prueba sobre el código fuente privado descargado antes de reconstruir el motor V95. Luego se exigen los 26 controles originales sin omitir ninguna fase.
+
+**Límite:** incluso con PASS, no se certificará el arreglo de las escenas concretas del propietario sin reinstalar el plugin dentro de la copia del juego y comprobar F10 + logs `*.live.json.diagnostics.jsonl`. El EXE no reemplaza automáticamente el JS previamente instalado dentro del juego. No compartir el token GitHub ni la contraseña AES-256 en mensajes.
