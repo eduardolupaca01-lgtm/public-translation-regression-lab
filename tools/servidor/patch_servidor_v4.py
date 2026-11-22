@@ -36,6 +36,16 @@ NEW='''    // TX567 can return App/.stage-* when Windows Defender briefly locks
 def transform(source:str)->str:
     if source.count(OLD)!=1:raise RuntimeError("SERVIDOR_TX567_PUBLICATION_SOURCE_CONTRACT_CHANGED")
     result=source.replace(OLD,NEW,1)
+    # TX772 removed the legacy existing-directory branch. The old App/<hash>
+    # locals became dead once the post-publish verifier switched to the
+    # *actual* TX567 verified App path. Go forbids unused local variables.
+    old_locals='''    appRoot:=filepath.Join(sidecar,"App")
+    key:=hex.EncodeToString(payload.checksum[:12])
+    appDir:=filepath.Join(appRoot,key)'''
+    if result.count(old_locals)!=1:
+        raise RuntimeError("SERVIDOR_TX567_UNUSED_LEGACY_PATH_CONTRACT_CHANGED")
+    result=result.replace(old_locals,
+        '    key:=hex.EncodeToString(payload.checksum[:12])',1)
     if result.count("servidorPublishedPortableApp(")!=1:
         raise RuntimeError("SERVIDOR_TX567_RESOLVED_APP_PATH_REQUIRED")
     return result
@@ -47,7 +57,10 @@ def main()->None:
     p.add_argument("--overlays",type=Path)
     args=p.parse_args()
     if args.self_test:
-        candidate=transform("prefix\n"+OLD+"\nsuffix")
+        candidate=transform("prefix\n"+
+            '    appRoot:=filepath.Join(sidecar,"App")\n'+
+            '    key:=hex.EncodeToString(payload.checksum[:12])\n'+
+            '    appDir:=filepath.Join(appRoot,key)\n'+OLD+"\nsuffix")
         assert "return publishedApp,runtime,nil" in candidate
         assert "return appDir,runtime,nil" not in candidate
         print("SERVIDOR_TX567_VERIFIED_APP_LOCATION_PREFLIGHT_PASS")
