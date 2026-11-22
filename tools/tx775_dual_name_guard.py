@@ -33,7 +33,10 @@ CORE_HELPER=r'''    // TX775: preserve only an unchanged native speaker-name con
         for (var i=0;i<oldNames.length;i++) {
             if (oldNames[i]!==newNames[i]) return true;
         }
-        return jp(candidate.replace(actorTag,""));
+        var originalProse=source.replace(actorTag,"");
+        var translatedProse=candidate.replace(actorTag,"");
+        if (!originalProse.trim() || !translatedProse.trim()) return true;
+        return jp(translatedProse);
     }
 '''
 HAS_JS=r'''    // TX775: native Japanese actor metadata can coexist with Spanish prose.
