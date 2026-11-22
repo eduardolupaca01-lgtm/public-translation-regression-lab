@@ -284,8 +284,7 @@ func tx777WindowThread(){
     h,_,_:=tx777GetModule.Call(0)
     klass:=tx777WndClass{Size:uint32(unsafe.Sizeof(tx777WndClass{})),
         Procedure:cb,Module:h,Background:6,Name:name}
-    reg,_,_:=tx777Register.Call(uintptr(unsafe.Pointer(&klass))
-    )
+    reg,_,_:=tx777Register.Call(uintptr(unsafe.Pointer(&klass)))
     if reg==0{tx777SendChoice(tx777Selection{err:errors.New("TX777_WINDOWS_CLASS_REGISTRATION_FAILED")});return}
     title:=tx777UTF16("TENSHIXGAME — Instalador portátil de IA")
     hwnd,_,_:=tx777Create.Call(0,uintptr(unsafe.Pointer(name)),uintptr(unsafe.Pointer(title)),
