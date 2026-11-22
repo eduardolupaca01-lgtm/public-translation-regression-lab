@@ -44,7 +44,9 @@ func ordinaryFile(root,rel string) bool {
     st,err:=os.Lstat(full)
     if err!=nil||!st.Mode().IsRegular()||st.Mode()&os.ModeSymlink!=0{return false}
     canonical,err:=filepath.EvalSymlinks(full)
-    return err==nil&&isInside(root,canonical)
+    if err!=nil{return false}
+    canonicalRoot,err:=filepath.EvalSymlinks(root)
+    return err==nil&&isInside(canonicalRoot,canonical)
 }
 func ordinaryDir(root,rel string)bool {
     full:=filepath.Join(root,filepath.FromSlash(rel))
@@ -52,7 +54,9 @@ func ordinaryDir(root,rel string)bool {
     st,err:=os.Lstat(full)
     if err!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{return false}
     actual,err:=filepath.EvalSymlinks(full)
-    return err==nil&&isInside(root,actual)
+    if err!=nil{return false}
+    canonicalRoot,err:=filepath.EvalSymlinks(root)
+    return err==nil&&isInside(canonicalRoot,actual)
 }
 func boundedRead(root,rel string) ([]byte,error) {
     if !ordinaryFile(root,rel){return nil,errors.New("archivo no ordinario o fuera del juego")}
@@ -81,12 +85,18 @@ func gameLocation(value string)(root, selectedFile string, err error){
         selectedFile=filepath.Base(absolute)
         root=filepath.Dir(absolute)
     }else{return "","",errors.New("selección no ordinaria")}
+    // Root itself must be an ordinary directory. Windows 8.3 aliases,
+    // drive spellings and platform-managed parent junctions are compared
+    // by file ID, not by textual representation (TX200 Windows regression).
+    originalInfo,e:=os.Lstat(root)
+    if e!=nil||!originalInfo.IsDir()||originalInfo.Mode()&os.ModeSymlink!=0{
+        return "","",errors.New("raíz de juego enlazada o inexistente")
+    }
     canonical,e:=filepath.EvalSymlinks(root)
     if e!=nil{return "","",e}
-    // Parent junctions and aliases are not followed implicitly. A custom
-    // source root must be explicitly confirmed rather than guessed.
-    if !strings.EqualFold(filepath.Clean(canonical),filepath.Clean(root)){
-        return "","",errors.New("ruta de carpeta enlazada: inspección bloqueada")
+    realInfo,e:=os.Stat(canonical)
+    if e!=nil||!os.SameFile(originalInfo,realInfo){
+        return "","",errors.New("ruta de juego no verificable")
     }
     return root,selectedFile,nil
 }
