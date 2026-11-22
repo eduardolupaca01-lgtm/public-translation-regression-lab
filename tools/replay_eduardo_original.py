@@ -15,8 +15,8 @@ from pathlib import Path
 import subprocess
 
 SOURCE_REPO = "eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build"
-SOURCE_SHA = "c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33"
-SOURCE_BRANCH = "fix/tx770-rpg-foreground-cache-20261122"
+SOURCE_SHA = "1e79a39df94be810918f50a377cfc1efb4e95f8f"
+SOURCE_BRANCH = "fix/tx771-portable-game-local-worker-and-render-20261122"
 SOURCE_WORKFLOW = ".github/workflows/tx758-clean-current-baseline.yml"
 
 BUILD_STEPS = (
@@ -135,7 +135,7 @@ def execute(source_root, receipt_path):
     template = root / "reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js"
     native_go = root / "reference/tx331-clean-product-host/cmd/tenshixgame-ui/main_windows.go"
     for label, file, signatures in (
-        ("TX765_JS", template, ("tx765FirstNativePaint", "separateName", "nameVisible", "localNameBox", "_tx765FirstPaintSource", "dynamicSpeaker", "mirrorSqliteTranslation", "sqliteVerifiedKeys", "native_lookup_untranslated", "whitespaceAliasKey", "foregroundRetriedAt", "native_adapter_installed", "bridge_descriptor_located",
+        ("TX765_JS", template, ("tx765FirstNativePaint", "separateName", "nameVisible", "localNameBox", "_tx765FirstPaintSource", "dynamicSpeaker", "mirrorSqliteTranslation", "sqliteVerifiedKeys", "native_lookup_untranslated", "whitespaceAliasKey", "foregroundRetriedAt", "native_adapter_installed", "tx771PortableRuntime", "tx771BridgeFailed", "_tx771ConvertedBeforeDraw", "bridge_descriptor_located",
                                 "TenshigameTraduccion", "prefetch_read_summary")),
         ("TX765_WINDOWS", native_go, ("TenshigameTranduccion", "TenshigameTraduccion")),
         ("TX768_JS_TEST", root / "tests/js/test_tx765_no_overdraw_sync_custom_start.js",
@@ -151,6 +151,17 @@ def execute(source_root, receipt_path):
         ("TX770_OWNER_PREDECESSOR_TEST", root / "reference/tx331-clean-product-host/rpg_tx770_owner_tx769_upgrade_test.go",
          ("TestTX770RecognizesOwnersExactTX769InstalledScriptForUpgrade",
           "TX770 must not relax owner source guard")),
+        ("TX771_PORTABLE_PLUGIN_TEST", root / "tests/js/test_tx771_game_local_v95_portability.js",
+         ("TX771 PORTABLE GAME LOCAL V95 PASS", "TEMP", "TMPDIR")),
+        ("TX771_CUSTOM_NATIVE_RENDER_TEST", root / "tests/js/test_tx771_custom_message_converter_first_paint.js",
+         ("TX771 CUSTOM NATIVE CONVERTER FIRST PAINT PASS", "no second paint layer")),
+        ("TX771_GAME_LOCAL_WORKER", root / "reference/tx541-rpg-onefile/tx771_portable_windows.go",
+         ("tx771PreparePortableOnefile", "tx771ChooseGameEXE", "TX771_PORTABLE_PUBLISH_FAILED")),
+        ("TX771_GAME_LOCAL_JOURNAL", root / "reference/tx331-clean-product-host/rpg_tx771_adopt_legacy.go",
+         ("rpgTX771AdoptVerifiedPreviousInstall", "TX771_PREVIOUS_JS_UNKNOWN_OR_MODIFIED")),
+        ("TX771_MIGRATION_TEST", root / "reference/tx331-clean-product-host/rpg_tx771_legacy_official_adoption_test.go",
+         ("TestTX771RecoverPreviousKnownPluginNoGlobalJournal",
+          "TestTX771RefuseAlteredPriorInstalledPlugin")),
     ):
         if not file.is_file() or not all(p in file.read_text(encoding="utf-8") for p in signatures):
             raise RuntimeError(label + "_ORIGINAL_SOURCE_REPAIR_MISSING")
