@@ -1,9 +1,9 @@
-name: Tenshixgame RPG original TX770 Windows V95 build (encrypted test only)
+name: Tenshixgame RPG original TX771 portable original V95 Windows build (encrypted owner test only)
 
 on:
   push:
     branches:
-      - build/eduardo-original-rpg-win64-20261121
+      - build/eduardo-original-rpg-tx771-portable-20261122
     paths:
       - "tools/replay_eduardo_original.py"
       - ".github/workflows/eduardo-original-rpg-win64.yml"
@@ -72,7 +72,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
-          ref: c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33
+          ref: 1e79a39df94be810918f50a377cfc1efb4e95f8f
           path: original
           token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
           persist-credentials: false
@@ -141,6 +141,42 @@ jobs:
           } finally { Pop-Location }
           Write-Host "TX770_OWNER_TX769_PREDECESSOR_HASH_PASS"
 
+      - name: TX771 prove original plugin real JS with portable runtime and no Internet
+        shell: pwsh
+        env:
+          TX771_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+          TX765_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "tx771-portable-js.log"
+          node --check $env:TX771_TEST_PLUGIN *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_PRODUCTION_JS_SYNTAX_HOLD" }
+          node original/tests/js/test_tx771_game_local_v95_portability.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_JS_MODEL_AND_CACHE_HOLD" }
+          node original/tests/js/test_tx771_custom_message_converter_first_paint.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_CUSTOM_NATIVE_GLYPH_FIRST_PAINT_HOLD" }
+          node original/tests/js/test_tx765_no_overdraw_sync_custom_start.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_PREVIOUS_MESSAGE_NO_OVERDRAW_HOLD" }
+          Write-Host "TX771_PORTABLE_AND_CUSTOM_FIRST_PAINT_REGRESSION_PASS"
+
+      - name: TX771 prove portable Go bootstrap, private V95 model installer and missing journal recovery
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx541-rpg-onefile
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx771-portable-onefile.log"
+            go test . -run TestTX771 -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_ONEFILE_GO_TEST_HOLD" }
+          } finally { Pop-Location }
+          Push-Location original/reference/tx331-clean-product-host
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx771-portable-journal.log"
+            go test . -run TestTX771 -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_JOURNAL_ADOPTION_GO_TEST_HOLD" }
+            go test ./cmd/tenshixgame-ui -run TestTX771 -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_GAME_MODEL_INSTALL_GO_TEST_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX771_PORTABLE_GO_MODEL_AND_SAFE_JOURNAL_PASS"
+
       - name: Install build-orchestrator YAML parser
         shell: pwsh
         run: |
@@ -153,9 +189,50 @@ jobs:
           python ci/tools/replay_eduardo_original.py --source-root original --receipt "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json"
           if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ORIGINAL_V95_BUILD_OR_TEST_HOLD" }
           $receipt = Get-Content "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json" -Raw | ConvertFrom-Json
-          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33") {
+          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "1e79a39df94be810918f50a377cfc1efb4e95f8f") {
             throw "EDUARDO_ORIGINAL_EXE_RECEIPT_INVALID"
           }
+
+      - name: TX771 verify rebuilt real V95 portable EXE on game volume and repeat after copied game relocation
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "Tenshixgame-RPG.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "TX771_PORTABLE_FULL_EXE_MISSING" }
+          $game = Join-Path $env:RUNNER_TEMP "tx771-owner-test-game"
+          $data = Join-Path $game "www\data"
+          $js = Join-Path $game "www\js"
+          New-Item -ItemType Directory -Force -Path $data,$js | Out-Null
+          $gameExe = Join-Path $game "Game.exe"
+          [System.IO.File]::WriteAllBytes($gameExe,[byte[]]@(77,90,0,0))
+          '{}' | Set-Content -LiteralPath (Join-Path $data 'System.json') -Encoding UTF8
+          'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js 'plugins.js') -Encoding UTF8
+          $env:TX771_PORTABLE_GAME_EXE=$gameExe
+          $log = Join-Path $env:RUNNER_TEMP "tx771-portable-original-real-model.log"
+          & $exe --rpg-onefile-portable-smoke *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_COLD_PORTABLE_ONEFILE_REAL_MODEL_HOLD" }
+          $folder = Join-Path $game "Tenshixgame-IA"
+          $worker = Join-Path $folder ".local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
+          $marker = Join-Path $folder "portable-owner-v1.json"
+          if (-not (Test-Path -LiteralPath $worker -PathType Leaf) -or -not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+            throw "TX771_COLD_PORTABLE_WORKER_AND_OWNER_MISSING"
+          }
+          $markerJSON = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+          $hash = (Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($markerJSON.schema -ne "tenshixgame-rpg-portable-owner-v1" -or $markerJSON.worker_sha256 -ne $hash) {
+            throw "TX771_ORIGINAL_PORTABLE_MODEL_SHA_MISMATCH"
+          }
+          Write-Host "TX771_PORTABLE_ORIGINAL_V95_INSTALL_GAME_VOLUME_PASS"
+          $copy = Join-Path $env:RUNNER_TEMP "tx771-relocated-full-game"
+          Copy-Item -LiteralPath $game -Destination $copy -Recurse
+          $env:TX771_PORTABLE_GAME_EXE = Join-Path $copy "Game.exe"
+          & $exe --rpg-onefile-portable-smoke *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_RELOCATED_GAME_WORKER_FAILED" }
+          $copyWorker=Join-Path $copy "Tenshixgame-IA\.local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
+          if ((Get-FileHash -LiteralPath $copyWorker -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) {
+            throw "TX771_PORTABLE_RELOCATED_MODEL_DRIFT"
+          }
+          Write-Host "TX771_PORTABLE_RELOCATED_ORIGINAL_V95_SHA_PASS"
+          Remove-Item Env:TX771_PORTABLE_GAME_EXE -ErrorAction SilentlyContinue
 
       - name: Encrypt private original EXE so public Actions never exposes the underlying binary
         shell: pwsh
@@ -174,7 +251,7 @@ jobs:
           }
           $directory = Join-Path $env:RUNNER_TEMP "eduardo-encrypted-output"
           New-Item -ItemType Directory -Force $directory | Out-Null
-          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX770-V95-PRUEBA.7z"
+          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX771-PORTATIL-V95-PRUEBA.7z"
           $passArgument = "-p" + $env:EDUARDO_RPG_ARCHIVE_PASSWORD
           & $sevenExe a -t7z -mhe=on -mx=0 $passArgument $ciphertext $exe | Out-Null
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ciphertext)) {
@@ -185,7 +262,7 @@ jobs:
           $receipt = Join-Path $env:RUNNER_TEMP "eduardo-original-rebuild-receipt.json"
           Copy-Item -LiteralPath $receipt -Destination (Join-Path $directory "eduardo-original-build-receipt.json")
           $hash = (Get-FileHash -LiteralPath $ciphertext -Algorithm SHA256).Hash.ToLowerInvariant()
-          ($hash + "  Tenshixgame-RPG-TX770-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
+          ($hash + "  Tenshixgame-RPG-TX771-PORTATIL-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
           Write-Host "EDUARDO_ORIGINAL_ENCRYPTED_ARCHIVE_SHA256=$hash"
           Write-Host "EDUARDO_ORIGINAL_REAL_V95_ONEFILE_ENCRYPTED_OWNER_ONLY_NO_PUBLIC_PLAINTEXT"
           "Verified original V95 EXE. Encrypted with owner-held EDUARDO_RPG_ARCHIVE_PASSWORD. Extract with 7-Zip and test only on a copy of your game. This does not certify the user's own game or authorize public distribution." |
@@ -194,7 +271,7 @@ jobs:
       - name: Upload ONLY encrypted original EXE and nonsensitive provenance
         uses: actions/upload-artifact@v4
         with:
-          name: Eduardo-Tenshixgame-RPG-ORIGINAL-TX770-V95-Windows-TEST-ENCRYPTED
+          name: Eduardo-Tenshixgame-RPG-ORIGINAL-TX771-PORTABLE-V95-Windows-TEST-ENCRYPTED
           retention-days: 14
           if-no-files-found: error
           path: ${{ runner.temp }}/eduardo-encrypted-output/
