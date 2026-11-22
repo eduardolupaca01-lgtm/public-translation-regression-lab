@@ -231,6 +231,54 @@ jobs:
         run: |
           $exe = Join-Path $env:RUNNER_TEMP "Tenshixgame-RPG.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "TX771_PORTABLE_FULL_EXE_MISSING" }
+          # The single EXE has a Windows GUI subsystem. PowerShell's direct &
+          # invocation can return before the GUI process and its neural child
+          # have exited. This step MUST wait for the real exit code; never
+          # accept stale $LASTEXITCODE or an asynchronous launch as a test.
+          function Invoke-TX771PortableSmoke {
+            param([string]$TargetExe,[string]$SelectedGame,[string]$CaseName)
+            $env:TX771_PORTABLE_GAME_EXE=$SelectedGame
+            $diag=Join-Path $env:RUNNER_TEMP ("tx771-onefile-" + $CaseName + "-private-diagnostic.txt")
+            $stdout=Join-Path $env:RUNNER_TEMP ("tx771-onefile-" + $CaseName + "-stdout.txt")
+            $stderr=Join-Path $env:RUNNER_TEMP ("tx771-onefile-" + $CaseName + "-stderr.txt")
+            $env:TX541_RPG_DIAGNOSTIC_FILE=$diag
+            try {
+              $proc=Start-Process -FilePath $TargetExe -ArgumentList "--rpg-onefile-portable-smoke" -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ErrorAction Stop
+            } catch {
+              throw "TX771_PORTABLE_START_PROCESS_FAILED"
+            }
+            if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+              # Only emit a fixed, sanitized category to a PUBLIC runner.
+              # The actual Go exception remains solely in RUNNER_TEMP.
+              $raw=""
+              if (Test-Path -LiteralPath $diag -PathType Leaf) {
+                $raw=Get-Content -LiteralPath $diag -Raw
+              }
+              $safe=@("TX771_SELECT_ORDINARY_GAME_EXE",
+                "TX771_MV_MZ_GAME_LAYOUT_REQUIRED",
+                "TX771_GAME_ROOT_REPARSE_REFUSED",
+                "TX771_GAME_ROOT_LINKED_OR_MISSING",
+                "TX771_PORTABLE_ENGINE_MANIFEST_MISMATCH",
+                "TX771_PORTABLE_WORKER_MISMATCH",
+                "TX771_FOREIGN_PORTABLE_FOLDER",
+                "TX541_PAYLOAD_REQUIRED_FILES_MISSING",
+                "TX541_RPG_HOST_VALIDATION_OR_INSTALL_FAILED",
+                "TX541_EMBEDDED_PAYLOAD_SHA256_MISMATCH",
+                "TX541_INSTALLED_APP_FILES_NOT_EXACT",
+                "TX541_EXISTING_ENGINE_CORRUPT_OR_FOREIGN",
+                "TX541_INSTALLED_V95_MODEL_MANIFEST_DRIFT")
+              $code="UNCLASSIFIED_ONEFILE_ERROR"
+              foreach($item in $safe){ if($raw.Contains($item)){$code=$item;break} }
+              Write-Host ("TX771_SAFE_ONEFILE_FAILURE_CODE="+$code)
+              throw "TX771_PORTABLE_ONEFILE_SMOKE_NONZERO"
+            }
+            # The actual GUI-subsystem main writes this witness before any
+            # extraction. It is not sufficient without a verified exit code.
+            if (-not (Test-Path -LiteralPath $diag -PathType Leaf) -or
+                -not ((Get-Content -LiteralPath $diag -Raw).Contains("TX541_WINDOWS_MAIN_ENTERED"))) {
+              throw "TX771_PORTABLE_ONEFILE_MAIN_NOT_OBSERVED"
+            }
+          }
           $game = Join-Path $env:RUNNER_TEMP "tx771-owner-test-game"
           $data = Join-Path $game "www\data"
           $js = Join-Path $game "www\js"
@@ -239,10 +287,7 @@ jobs:
           [System.IO.File]::WriteAllBytes($gameExe,[byte[]]@(77,90,0,0))
           '{}' | Set-Content -LiteralPath (Join-Path $data 'System.json') -Encoding UTF8
           'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js 'plugins.js') -Encoding UTF8
-          $env:TX771_PORTABLE_GAME_EXE=$gameExe
-          $log = Join-Path $env:RUNNER_TEMP "tx771-portable-original-real-model.log"
-          & $exe --rpg-onefile-portable-smoke *> $log
-          if ($LASTEXITCODE -ne 0) { throw "TX771_COLD_PORTABLE_ONEFILE_REAL_MODEL_HOLD" }
+          Invoke-TX771PortableSmoke -TargetExe $exe -SelectedGame $gameExe -CaseName "cold"
           $folder = Join-Path $game "Tenshixgame-IA"
           $worker = Join-Path $folder ".local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
           $marker = Join-Path $folder "portable-owner-v1.json"
@@ -257,15 +302,14 @@ jobs:
           Write-Host "TX771_PORTABLE_ORIGINAL_V95_INSTALL_GAME_VOLUME_PASS"
           $copy = Join-Path $env:RUNNER_TEMP "tx771-relocated-full-game"
           Copy-Item -LiteralPath $game -Destination $copy -Recurse
-          $env:TX771_PORTABLE_GAME_EXE = Join-Path $copy "Game.exe"
-          & $exe --rpg-onefile-portable-smoke *> $log
-          if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_RELOCATED_GAME_WORKER_FAILED" }
+          Invoke-TX771PortableSmoke -TargetExe $exe -SelectedGame (Join-Path $copy "Game.exe") -CaseName "relocated"
           $copyWorker=Join-Path $copy "Tenshixgame-IA\.local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
           if ((Get-FileHash -LiteralPath $copyWorker -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) {
             throw "TX771_PORTABLE_RELOCATED_MODEL_DRIFT"
           }
           Write-Host "TX771_PORTABLE_RELOCATED_ORIGINAL_V95_SHA_PASS"
           Remove-Item Env:TX771_PORTABLE_GAME_EXE -ErrorAction SilentlyContinue
+          Remove-Item Env:TX541_RPG_DIAGNOSTIC_FILE -ErrorAction SilentlyContinue
 
       - name: Encrypt private original EXE so public Actions never exposes the underlying binary
         shell: pwsh
