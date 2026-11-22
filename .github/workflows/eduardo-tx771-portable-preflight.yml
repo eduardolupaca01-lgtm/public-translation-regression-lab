@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
-          ref: ca3348e1a1afd6128f0ca23614afe0dffd3f7705
+          ref: 8ed8542a83d842114401a457ea42e31b72424dfb
           path: original
           token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
           persist-credentials: false
@@ -56,6 +56,11 @@ jobs:
           node original/tests/js/test_tx771_game_local_v95_portability.js
           if ($LASTEXITCODE -ne 0) { throw "TX771_GAME_LOCAL_MODEL_OR_CACHE_HOLD" }
           Write-Host "TX771_JS_PORTABLE_MODEL_CACHE_PASS"
+          node original/tests/js/test_tx771_custom_message_converter_first_paint.js
+          if ($LASTEXITCODE -ne 0) { throw "TX771_CUSTOM_NATIVE_EFFECT_FIRST_PAINT_HOLD" }
+          Write-Host "TX771_CUSTOM_NATIVE_EFFECT_FIRST_PAINT_PASS"
+          node original/tests/js/test_tx765_no_overdraw_sync_custom_start.js
+          if ($LASTEXITCODE -ne 0) { throw "TX771_ORIGINAL_NAMEBOX_NO_OVERDRAW_HOLD" }
           node original/tests/js/test_tx769_sqlite_durable_restart.js
           if ($LASTEXITCODE -ne 0) { throw "TX771_SQLITE_RESTART_HOLD" }
           node original/tests/js/test_tx770_sqlite_whitespace_recovery.js
