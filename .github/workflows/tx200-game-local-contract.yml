@@ -1,0 +1,34 @@
+name: TX200 self-contained game-local structural contract (no game content)
+
+on:
+  push:
+    branches:
+      - audit/tx200-selfcontained-game-local-20261122
+    paths:
+      - tools/audit_tx200_game_local.py
+      - .github/workflows/tx200-game-local-contract.yml
+      - docs/TX200_GAME_LOCAL_TRANSFER_AUDIT.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-layout-and-integrity:
+    name: Structural relocation, model hash and owner safety (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Syntax and isolated synthetic relocation tests
+        shell: bash
+        run: |
+          python -m py_compile tools/audit_tx200_game_local.py
+          python tools/audit_tx200_game_local.py --self-test
+          echo "TX200_STRUCTURAL_ONLY_NOT_SECOND_MACHINE_PROOF_PASS"
