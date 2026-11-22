@@ -1,0 +1,65 @@
+name: TENSHIXGAME TX775 genuine TX772-to-TX775 encrypted Windows upgrade acceptance
+
+on:
+  push:
+    branches:
+      - rebuild/tenshixgame-unificado-deteccion-20261122
+    paths:
+      - tools/tx775_accept_previous_on_windows.ps1
+      - .github/workflows/tx775-upgrade-acceptance.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: tx775-owner-upgrade-acceptance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-owner-package-upgrade:
+    name: Actual encrypted TX772 to TX775 worker, cache and game-volume proof
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # The owner stored the password VALUE in the opposite Actions field.
+      EDUARDO_RPG_ARCHIVE_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify exact source-free PowerShell acceptance script syntax
+        shell: pwsh
+        run: |
+          $errors=$null
+          $tokens=$null
+          $script=(Resolve-Path -LiteralPath 'tools/tx775_accept_previous_on_windows.ps1').Path
+          [System.Management.Automation.Language.Parser]::ParseFile($script,[ref]$tokens,[ref]$errors) | Out-Null
+          if($errors.Count -gt 0){throw 'TX775_OWNER_ACCEPTANCE_PS_SYNTAX_HOLD'}
+          Write-Host 'TX775_UPGRADE_SCRIPT_POWERSHELL_SYNTAX_PASS'
+      - name: Require both exact original signed encrypted build runs to be successful
+        shell: pwsh
+        run: |
+          foreach($runId in @(45034400292,45044374825)){
+            $state=gh api ('repos/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/'+$runId) --jq '{status:.status,conclusion:.conclusion}' | ConvertFrom-Json
+            if($LASTEXITCODE -ne 0 -or $null -eq $state -or $state.status -ne 'completed' -or $state.conclusion -ne 'success'){
+              throw 'TX775_ORIGINAL_OWNER_BUILDS_NOT_APPROVED'
+            }
+          }
+          Write-Host 'TX775_BOTH_ORIGINAL_ENCRYPTED_BUILDS_SUCCESS_CONFIRMED'
+      - name: Verify authenticated genuine TX772-to-TX775 portable upgrade
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -NonInteractive -File tools/tx775_accept_previous_on_windows.ps1 -PreviousRun 45034400292 -UpdatedRun 45044374825
+          if($LASTEXITCODE -ne 0){throw 'TX775_ACTUAL_OWNER_UPGRADE_VALIDATION_HOLD'}
+          Write-Host 'TX775_REAL_OWNER_GAME_LOCAL_UPGRADE_ACCEPTANCE_PASS'
+          'TX775_OWNER_ACCEPTANCE_PASS: source-encrypted receipts, distinct V95 EXEs, old/new worker SHA, old App preserved, game resources unchanged, cache persistence, restart, relocation, no profile engine' | Set-Content -LiteralPath "$env:RUNNER_TEMP/tx775-upgrade-pass.txt" -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: TENSHIXGAME-TX775-REAL-TX772-TO-TX775-UPGRADE-PASS
+          retention-days: 14
+          path: ${{ runner.temp }}/tx775-upgrade-pass.txt
+          if-no-files-found: error
