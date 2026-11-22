@@ -49,7 +49,7 @@ def load_public_translator(progress: Callable[[str], None] = lambda _: None):
         import argostranslate.package as packages
         import argostranslate.translate as translation
     except ImportError as exc:
-        raise RuntimeError("Falta el motor público Argos Translate del EXE.") from exc
+        raise RuntimeError(f"Importación del motor público Argos fallida: {type(exc).__name__}: {exc}") from exc
 
     installed = {(p.from_code, p.to_code) for p in packages.get_installed_packages()}
     required = [("ja", "en"), ("en", "es")]
