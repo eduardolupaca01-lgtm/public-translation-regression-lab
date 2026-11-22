@@ -1,0 +1,97 @@
+name: Stage10 final integration technical preflight
+
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - ".github/workflows/stage10-final-integration-preflight.yml"
+      - "tools/stage10_release_gate.py"
+      - "tests/test_stage9_stage10_release_gate.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  integration-preflight:
+    name: Verify original 40-case evidence and maintain human review HOLD
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STAGE6_RUN: "44931094612"
+      STAGE7_RUN: "44942504944"
+      STAGE8_RUN: "44961618206"
+      STAGE9_RUN: "44965198361"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify safety boundaries and run full Python tests
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q translation_lab tests tools
+          python -m unittest discover -s tests -v
+      - name: Download all original reports and Stage9 signed-packet template
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence/stage6" "$RUNNER_TEMP/evidence/stage7" "$RUNNER_TEMP/evidence/stage8" "$RUNNER_TEMP/stage9" "$RUNNER_TEMP/gate"
+          gh run download "$STAGE6_RUN" -n stage6-dialogue-sixteen-research-receipts -D "$RUNNER_TEMP/evidence/stage6"
+          gh run download "$STAGE7_RUN" -n stage7-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage7"
+          gh run download "$STAGE8_RUN" -n stage8-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage8"
+          gh run download "$STAGE9_RUN" -n stage9-independent-review-40-cases -D "$RUNNER_TEMP/stage9"
+      - name: Perform final integration preflight without human-approval fabrication
+        run: |
+          python -m tools.stage10_release_gate \
+            --receipts "$RUNNER_TEMP/evidence" \
+            --stage9-packet "$RUNNER_TEMP/stage9/stage9-bilingual-review-packet.json" \
+            --output "$RUNNER_TEMP/gate/stage10-final-preflight.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          packet = json.loads((root / "stage9/stage9-bilingual-review-packet.json").read_text(encoding="utf-8"))
+          gate = json.loads((root / "gate/stage10-final-preflight.json").read_text(encoding="utf-8"))
+          passed = {"6": "PASS", "7": "PASS", "8": "PASS"}
+          if gate["automated_checks"] != passed:
+              raise RuntimeError("STAGE10_UPSTREAM_NEURAL_TESTS_NOT_READY")
+          if packet["total_items"] != 40 or len(packet["items"]) != 40:
+              raise RuntimeError("STAGE10_INCOMPLETE_REVIEW_DOSSIERS")
+          if packet["human_review_completed"] or packet["human_review_approved"]:
+              raise RuntimeError("STAGE10_INVALID_PREPOPULATED_HUMAN_SIGNOFF")
+          if gate["status"] != "HOLD" or gate["automatic_merge_or_publication_permitted"] or gate["merge_performed"]:
+              raise RuntimeError("STAGE10_UNSAFE_RELEASE_DECISION")
+          serious_markers = (
+              "POSTHOC_SEMANTIC_ERROR", "QUALITY_OR_PERSISTENCE_NOT_READY",
+              "STAGE9_ORIGINAL_CASE_EVIDENCE_CHANGED", "STAGE9_PACKET_CASE_SET_MISMATCH",
+              "STAGE9_PACKET_DUPLICATE_CASE_ID", "STAGE9_PACKET_MALFORMED_CASE_ROW",
+              "STAGE9_ORIGINAL_CASE_ID_DUPLICATE", "STAGE9_REPORT_HASH_SET_MISMATCH",
+              "STAGE9_FROZEN_RUN_PROVENANCE_MISMATCH", "STAGE9_PACKET_SCHEMA_UNRECOGNIZED",
+              "STAGE9_SYNTHETIC_SCOPE_DECLARATION_CHANGED",
+              "STAGE9_AUTOMATIC_APPROVAL_POLICY_CHANGED",
+          )
+          unexpected = [x for x in gate["blockers"] if any(k in x for k in serious_markers)]
+          if unexpected:
+              raise RuntimeError("STAGE10_ORIGINAL_EVIDENCE_TAMPERED_OR_MISMATCHED:" + ",".join(unexpected))
+          if "STAGE9_INDEPENDENT_HUMAN_REVIEW_PENDING" not in gate["blockers"]:
+              raise RuntimeError("STAGE10_HUMAN_REVIEW_EXPECTED_PENDING")
+          if "STAGE10_CURRENT_HEAD_INDEPENDENT_GITHUB_APPROVAL_NOT_VERIFIED" not in gate["blockers"]:
+              raise RuntimeError("STAGE10_AUTHENTIC_GITHUB_REVIEW_MANDATORY")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write("## Stage10 technical integration preflight\n\n")
+              out.write("Original stages: **PASS / PASS / PASS**; frozen bilingual dossiers: **40/40**.\n\n")
+              out.write("Independent bilingual verification: **PENDING**; strict release: **HOLD**.\n")
+          print("STAGE10_TECHNICAL_PREFLIGHT_PASS_AUTHENTIC_EVIDENCE_BUT_HUMAN_APPROVAL_HOLD")
+          PY
+      - name: Upload final technical preflight and remaining blocker evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage10-technical-integration-preflight
+          retention-days: 30
+          if-no-files-found: error
+          path: ${{ runner.temp }}/gate/stage10-final-preflight.json
