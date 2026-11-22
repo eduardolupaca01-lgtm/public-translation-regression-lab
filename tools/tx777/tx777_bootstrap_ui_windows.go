@@ -11,6 +11,7 @@ import (
     "fmt"
     "path/filepath"
     "regexp"
+    "reflect"
     "runtime"
     "strings"
     "sync/atomic"
@@ -324,7 +325,10 @@ func tx777WindowThread(){
     // NEVER silently triggers the 650MB model extraction.
 }
 func tx777CheckOriginalNoWelcome()error{
-    if tx777PlainWelcome==nil{return fmt.Errorf("TX777_STARTUP_NOT_READY")}
+    // Compare function pointers rather than an always-false function-vs-nil test.
+    if reflect.ValueOf(tx771WelcomeBeforePayload).Pointer()!=reflect.ValueOf(tx777PlainWelcome).Pointer(){
+        return fmt.Errorf("TX777_LEGACY_V95_MODAL_WELCOME_RESTORED")
+    }
     return nil
 }
 func tx777StatusCategory(err error)string{
