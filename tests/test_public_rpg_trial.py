@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -81,7 +82,7 @@ class TestPublicRPGTrial(unittest.TestCase):
                 translated["events"][1]["pages"][0]["list"][1],
                 events["events"][1]["pages"][0]["list"][1],
             )
-            self.assertEqual(locate_rpg_data(root / "game"), data)
+            self.assertTrue(os.path.samefile(locate_rpg_data(root / "game"), data))
 
     def test_refuse_overwrite_existing_output(self):
         with tempfile.TemporaryDirectory() as tmp:
