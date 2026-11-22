@@ -190,3 +190,34 @@ func TestCacheAuditDistinguishesProtectedActorFromJapaneseBody(t *testing.T){
         t.Fatal("cache audit claimed actual visible translation")
     }
 }
+
+func TestCacheAuditorRejectsMutatedRpgCommandsEvenWithValidSHA(t *testing.T){
+    root:=newFixture(t)
+    marker(t,root,strings.Repeat("0",64))
+    base:=filepath.Join("Tenshixgame-IA",".local","TENSHIXGAME-RPG","live-cache")
+    original:="\\N<隼人>\\C[6]おはよう\\C[0] \\V[2]"
+    wrong:="\\N<隼人>\\C[6]Hola\\C[0] \\V[9]"
+    s:=translation.Source{Family:"rpg-maker",Engine:"mv",Language:"ja",Raw:original}
+    key,err:=translation.Key(s)
+    if err!=nil{t.Fatal(err)}
+    snapshot:=filepath.Join(base,stem("ja")+".live.json")
+    write(t,root,snapshot,jsonBytes(t,map[string]any{
+        "schema":"tx394-live-cache-v1",
+        "items":map[string]string{key:wrong},
+        "sources":map[string]string{key:original},
+    }))
+    entry:=filepath.Join(base,stem("ja")+".live.json.entries",key[:2],key+".json")
+    write(t,root,entry,jsonBytes(t,map[string]any{
+        "schema":"tx394-live-cache-entry-v1",
+        "key":key,"language":"ja","source":original,"translated":wrong,
+    }))
+    originalBytes,err:=os.ReadFile(filepath.Join(root,snapshot))
+    if err!=nil{t.Fatal(err)}
+    found:=AuditRoot(root)
+    if found.CacheQualityRejected!=2||found.SnapshotRecordsProven!=0||
+       found.EntryRecordsProven!=0||found.CacheRecordsRejected!=0{
+        t.Fatalf("valid key with unsafe control codes misclassified: %+v",found)
+    }
+    after,err:=os.ReadFile(filepath.Join(root,snapshot))
+    if err!=nil||string(after)!=string(originalBytes){t.Fatal("auditor modified cached text")}
+}
