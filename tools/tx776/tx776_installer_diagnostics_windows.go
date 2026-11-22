@@ -71,10 +71,9 @@ func tx776ExplainError(err error)(string,string){
     if len(codes)>0{
         // First code identifies the public stage that failed; a nested code
         // may be the more specific cause. Display both when available.
-        code=codes[0]
-        if len(codes)>1 && codes[len(codes)-1]!=code{
-            code=code+" / "+codes[len(codes)-1]
-        }
+        // A nested failure is generally more specific than the wrapper.
+        // Keep the code machine-readable (never put separators in it).
+        code=codes[len(codes)-1]
     } else if strings.Contains(detail,"ACCESS DENIED")||strings.Contains(detail,"ACCESO DENEGADO")||
         strings.Contains(detail,"PERMISSION DENIED") {
         code="TX776_SIN_PERMISOS"
