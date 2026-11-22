@@ -62,6 +62,16 @@ jobs:
               @{text="TX765 verified core";code="CORE_TEST_LOAD"}
             )
             foreach($case in $cases){ if($message.Contains($case.text)) { $state=$case.code;break } }
+            if($state -eq "UNCLASSIFIED_SYNTHETIC_REGRESSION") {
+              $assertion=[regex]::Match($message,'AssertionError \\[ERR_ASSERTION\\]:\\s*([^\\r\\n]{1,160})')
+              if($assertion.Success) {
+                $safeMessage= [regex]::Replace($assertion.Groups[1].Value,'[^A-Za-z0-9 _-]','_')
+                $state="ASSERT_"+$safeMessage.Substring(0,[Math]::Min(110,$safeMessage.Length))
+              } elseif($message -match "TypeError:") {$state="NODE_TYPE_ERROR"}
+              elseif($message -match "ReferenceError:") {$state="NODE_REFERENCE_ERROR"}
+              elseif($message -match "SyntaxError:") {$state="NODE_SYNTAX_ERROR"}
+              elseif($message -match "ERR_ASSERTION") {$state="UNMATCHED_ASSERTION"}
+            }
             Write-Host ("TX775_"+$label+"_VISUAL=FAIL_"+$state)
             return $false
           }
