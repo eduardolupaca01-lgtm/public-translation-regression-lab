@@ -89,10 +89,25 @@ func servidorPickerComplete(){
 	tx777Add("SERVIDOR_EXE_VERIFICADO","Se verificó la estructura RPG de la copia seleccionada.")
 	servidorSetSummary("EXE verificado. Puedes instalar el traductor automático.")
 }
+// servidorEXEFilter constructs the OPENFILENAMEW filter exactly as the
+// working legacy chooseFile/filters implementation does: a sequence of
+// separate UTF-16Z strings with one extra NUL at the very end.
+// StringToUTF16 on an already NUL-separated string PANICS in Go on Windows.
+func servidorEXEFilter() []uint16 {
+	result:=make([]uint16,0,72)
+	for _,part:=range []string{
+		"Juegos Windows (*.exe)", "*.exe",
+		"Todos los archivos", "*.*",
+	} {
+		result=append(result,syscall.StringToUTF16(part)...)
+	}
+	return append(result,0)
+}
+
 func servidorPickFileOwned(owner uintptr)(string,bool,error){
 	if owner==0{return "",false,errors.New("SERVIDOR_SELECTOR_NO_OWNER_WINDOW")}
 	buffer:=make([]uint16,32768)
-	filter:=syscall.StringToUTF16("Aplicaciones Windows"+string(rune(0))+"*.exe"+string(rune(0))+string(rune(0)))
+	filter:=servidorEXEFilter()
 	title,err:=syscall.UTF16PtrFromString("Servidor — Selecciona el EXE de tu juego RPG cerrado")
 	if err!=nil{return "",false,errors.New("SERVIDOR_SELECTOR_TITLE_INVALID")}
 	of:=tx771FileDialog{

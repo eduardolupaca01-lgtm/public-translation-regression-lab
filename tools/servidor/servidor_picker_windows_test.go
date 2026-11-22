@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -61,4 +62,24 @@ func TestServidorPickerRejectsOrdinaryNonGameEXE(t *testing.T){
 	if err:=os.WriteFile(wrong,[]byte("not a game"),0600);err!=nil{t.Fatal(err)}
 	got:=servidorCompletePickerTest(t,servidorFilePickerResponse{file:wrong,chosen:true},"")
 	if got!=""{t.Fatalf("non-game selected: %q",got)}
+}
+
+func TestServidorPickerWindowsFilterMatchesWorkingLegacyDialog(t *testing.T) {
+	filter:=servidorEXEFilter()
+	want:=[]string{"Juegos Windows (*.exe)","*.exe","Todos los archivos","*.*"}
+	position:=0
+	for _,part:=range want {
+		if position>=len(filter){t.Fatalf("missing filter field: %q",part)}
+		got:=syscall.UTF16ToString(filter[position:])
+		if got!=part{t.Fatalf("bad Win32 dialog filter: got %q, want %q",got,part)}
+		position+=len(syscall.StringToUTF16(part))
+	}
+	if position!=len(filter)-1 || filter[len(filter)-1]!=0 || filter[len(filter)-2]!=0 {
+		t.Fatalf("Win32 filter must end with two NULs, len=%d end=%d",len(filter),position)
+	}
+}
+func TestServidorPickerRegressionEmbeddedNULCannotReachStringToUTF16(t *testing.T) {
+	_,bad:=syscall.UTF16FromString("Juegos Windows\x00*.exe\x00")
+	if bad==nil{t.Fatal("Go accepted the previously crashing NUL-embedded filter")}
+	if len(servidorEXEFilter())==0{t.Fatal("safe filter unexpectedly empty")}
 }
