@@ -159,3 +159,34 @@ func TestPreservedAppVersionsAreOnlyCountedNeverRemoved(t *testing.T){
         if e!=nil||len(v)==0{t.Fatal("auditor removed a version of the existing app")}
     }
 }
+
+func TestCacheAuditDistinguishesProtectedActorFromJapaneseBody(t *testing.T){
+    root:=newFixture(t)
+    marker(t,root,strings.Repeat("0",64))
+    data:=filepath.Join("Tenshixgame-IA",".local","TENSHIXGAME-RPG","live-cache")
+    goodSource:="\\N<隼人 \\N[2]>おはようございます。"
+    badSource:="\\N<夏実 \\N[2]>まだ日本語です。"
+    sourceType:=func(value string)translation.Source{
+        return translation.Source{Family:"rpg-maker",Engine:"mv",Language:"ja",Raw:value}
+    }
+    goodKey,err:=translation.Key(sourceType(goodSource))
+    if err!=nil{t.Fatal(err)}
+    badKey,err:=translation.Key(sourceType(badSource))
+    if err!=nil{t.Fatal(err)}
+    goodResult:="\\N<隼人 \\N[2]>Buenos días."
+    badResult:="\\N<夏実 \\N[2]>Todavía 日本語."
+    write(t,root,filepath.Join(data,stem("ja")+".live.json"),
+        jsonBytes(t,map[string]any{
+            "schema":"tx394-live-cache-v1",
+            "items":map[string]string{goodKey:goodResult,badKey:badResult},
+            "sources":map[string]string{goodKey:goodSource,badKey:badSource},
+        }))
+    report:=AuditRoot(root)
+    if report.SnapshotRecordsProven!=1||report.CacheQualityRejected!=1||
+        report.CacheProtectedNameCandidates!=1{
+        t.Fatalf("native quality audit mixed protected and visible Japanese %+v",report)
+    }
+    if report.InGameSpanishRenderedTested||report.OfflineInferenceTested {
+        t.Fatal("cache audit claimed actual visible translation")
+    }
+}
