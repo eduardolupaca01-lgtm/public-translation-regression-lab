@@ -15,8 +15,8 @@ from pathlib import Path
 import subprocess
 
 SOURCE_REPO = "eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build"
-SOURCE_SHA = "2102e593a8f1733d4b846c54eaa9b98381048c51"
-SOURCE_BRANCH = "fix/tx765-rpg-live-bridge-native-paint-20261121"
+SOURCE_SHA = "faa96f7e83abf57f457660f6ba5dfa2ca4ca9daa"
+SOURCE_BRANCH = "fix/tx767-rpg-visible-speech-20261122"
 SOURCE_WORKFLOW = ".github/workflows/tx758-clean-current-baseline.yml"
 
 BUILD_STEPS = (
@@ -135,7 +135,7 @@ def execute(source_root, receipt_path):
     template = root / "reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js"
     native_go = root / "reference/tx331-clean-product-host/cmd/tenshixgame-ui/main_windows.go"
     for label, file, signatures in (
-        ("TX765_JS", template, ("tx765FirstNativePaint", "bridge_descriptor_located",
+        ("TX765_JS", template, ("tx765FirstNativePaint", "separateName", "nameVisible", "localNameBox", "bridge_descriptor_located",
                                 "TenshigameTraduccion", "prefetch_read_summary")),
         ("TX765_WINDOWS", native_go, ("TenshigameTranduccion", "TenshigameTraduccion")),
     ):
