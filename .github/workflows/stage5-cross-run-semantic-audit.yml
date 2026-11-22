@@ -1,0 +1,70 @@
+name: Stage5 independent JA-ES semantic audit of sealed neural outputs
+
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - ".github/workflows/stage5-cross-run-semantic-audit.yml"
+      - "tools/stage5_cross_run_semantic_audit.py"
+      - "tests/test_stage5_cross_run_semantic_audit.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: stage5-cross-run-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Check actual Japanese-to-Spanish meaning and integrity, no target repairs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Guard and offline regression tests
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q translation_lab tests tools
+          python -m unittest discover -s tests -v
+      - name: Retrieve original ten-case neural receipts
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 44908793937
+          name: stage4-source-complete-neural-calibration-receipts
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/stage5/calibration
+      - name: Retrieve original twelve-case RPG neural receipts
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 44908983065
+          name: stage4-rpg-twelve-research-receipts
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/stage5/rpg
+      - name: Read-only cross-run source-aware semantic audit
+        run: |
+          python -m tools.stage5_cross_run_semantic_audit \
+            --calibration-report "$RUNNER_TEMP/stage5/calibration/stage3-report.json" \
+            --calibration-restart "$RUNNER_TEMP/stage5/calibration/stage3-restart-proof.json" \
+            --calibration-manifest "$RUNNER_TEMP/stage5/calibration/stage3-source-manifest.json" \
+            --calibration-screen "$RUNNER_TEMP/stage5/calibration/stage4-bilingual-audit.json" \
+            --rpg-report "$RUNNER_TEMP/stage5/rpg/rpg-neural-report.json" \
+            --rpg-restart "$RUNNER_TEMP/stage5/rpg/rpg-cold-restart-proof.json" \
+            --rpg-manifest "$RUNNER_TEMP/stage5/rpg/rpg-source-manifest.json" \
+            --out "$RUNNER_TEMP/stage5/stage5-semantic-audit.json"
+      - name: Preserve report even if substantive errors block promotion
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage5-cross-run-semantic-audit-receipts
+          retention-days: 30
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/stage5/stage5-semantic-audit.json

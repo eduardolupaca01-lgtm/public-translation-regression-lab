@@ -1,0 +1,138 @@
+name: Qwen3-8B thinking ten-dialogue independent holdout
+
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - ".github/workflows/qwen3-8b-thinking-stage3-holdout.yml"
+      - "tools/qwen3_stage3_holdout.py"
+      - "tests/test_qwen3_stage3_holdout.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: qwen3-8b-thinking-stage3-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    name: Verify 20-case evidence and evaluate ten new dialogues
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HF_HOME: /tmp/qwen8b-thinking-stage3-hf
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DOWNLOAD_TIMEOUT: "120"
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      BASELINE_RUN_ID: "44855395959"
+      BASELINE_HEAD_SHA: "1c881e0a047c4a66e4c985c1c0a3d9103e161184"
+      STAGE3_WORKSPACE: /tmp/qwen8b-thinking-stage3-quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Public-safety guard and offline regressions
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q translation_lab tests tools
+          python -m unittest discover -s tests -v
+
+      - name: Verify exact successful development execution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$BASELINE_RUN_ID" \
+            --output "$RUNNER_TEMP/origin.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          r=json.loads((Path(os.environ["RUNNER_TEMP"])/"origin.json").read_text())
+          assert r["status"]=="completed" and r["conclusion"]=="success", "SOURCE_RUN_FAILED"
+          assert r["head_sha"]==os.environ["BASELINE_HEAD_SHA"], "SOURCE_COMMIT_CHANGED"
+          assert r["head_branch"]=="experiment/qwen3-ja-es-candidate-20261120", "SOURCE_BRANCH_CHANGED"
+          assert r["repository"]["full_name"]==os.environ["GITHUB_REPOSITORY"], "SOURCE_REPO_CHANGED"
+          print("PINNED_SOURCE_RUN_PASS",r["id"],r["head_sha"])
+          PY
+
+      - name: Retrieve unmodified model and restart receipts from verified run
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-8b-thinking-ja-es-candidate-receipts
+          run-id: 44855395959
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/approved-dev
+
+      - name: Run 20-of-20 promotion gate before downloading model
+        run: |
+          DEV_REPORT="$(find "$RUNNER_TEMP/approved-dev" -type f -name qwen8b-think-candidate-report.json -print -quit)"
+          DEV_PROOF="$(find "$RUNNER_TEMP/approved-dev" -type f -name qwen8b-think-restart-proof.json -print -quit)"
+          test -n "$DEV_REPORT" && test -n "$DEV_PROOF"
+          echo "DEV_REPORT=$DEV_REPORT" >> "$GITHUB_ENV"
+          echo "DEV_PROOF=$DEV_PROOF" >> "$GITHUB_ENV"
+          python -m tools.stage3_readiness \
+            --candidate-report "$DEV_REPORT" \
+            --restart-proof "$DEV_PROOF" \
+            --manifest-out "$RUNNER_TEMP/approved-stage3-manifest.json"
+
+      - name: Download pinned llama.cpp CPU server
+        run: |
+          mkdir -p "$RUNNER_TEMP/llama"
+          curl --fail --location --retry 3 --retry-all-errors \
+            "https://github.com/ggml-org/llama.cpp/releases/download/b12584/llama-b12584-bin-ubuntu-x64.tar.gz" \
+            --output "$RUNNER_TEMP/llama-b12584.tar.gz"
+          tar -xzf "$RUNNER_TEMP/llama-b12584.tar.gz" -C "$RUNNER_TEMP/llama"
+          LLAMA_SERVER="$(find "$RUNNER_TEMP/llama" -type f -name llama-server -print -quit)"
+          test -n "$LLAMA_SERVER"
+          chmod +x "$LLAMA_SERVER"
+          echo "LLAMA_SERVER=$LLAMA_SERVER" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(dirname "$LLAMA_SERVER"):$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          "$LLAMA_SERVER" --version
+
+      - name: Install pinned Hugging Face download client
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            huggingface_hub==0.36.0
+
+      - name: Translate the ten separate Japanese cases with pinned thinking mode
+        run: |
+          python -m tools.qwen3_stage3_holdout translate \
+            --candidate-report "$DEV_REPORT" \
+            --candidate-restart-proof "$DEV_PROOF" \
+            --llama-server "$LLAMA_SERVER" \
+            --workspace "$STAGE3_WORKSPACE"
+
+      - name: Audit cold restart and pending review queue
+        if: always()
+        run: |
+          if [ -f "$STAGE3_WORKSPACE/stage3-report.json" ]; then
+            python -m tools.qwen3_stage3_holdout verify \
+              --workspace "$STAGE3_WORKSPACE"
+          else
+            echo "STAGE3_NO_REPORT_YET"
+          fi
+
+      - name: Preserve holdout outputs, failures, and restart evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-8b-thinking-stage3-receipts
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            /tmp/qwen8b-thinking-stage3-quality/stage3-source-manifest.json
+            /tmp/qwen8b-thinking-stage3-quality/stage3-report.json
+            /tmp/qwen8b-thinking-stage3-quality/stage3-restart-proof.json
+            /tmp/qwen8b-thinking-stage3-quality/stage3-review-queue.json
+            /tmp/qwen8b-thinking-stage3-quality/llama-server.log
+            /tmp/qwen8b-thinking-stage3-quality/cache/translation-cache.sqlite3

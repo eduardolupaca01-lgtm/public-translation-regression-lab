@@ -1,0 +1,98 @@
+name: Stage10 strict independent review approval gate
+
+# A signed packet push runs a strict HOLD until an independent reviewer
+# approves that exact PR head. Re-run failed jobs after the reviewer approves.
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - "reviews/stage9-independent-reviewed-packet.json"
+  workflow_dispatch:
+    inputs:
+      stage6_run:
+        description: Stage6 completed neural run ID
+        required: true
+        default: "44931094612"
+      stage7_run:
+        description: Stage7 completed neural run ID
+        required: true
+        default: "44942504944"
+      stage8_run:
+        description: Stage8 completed neural run ID
+        required: true
+        default: "44961618206"
+      stage9_run:
+        description: Stage9 frozen independent human review packet run ID
+        required: true
+        default: "44965198361"
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  review-and-gate:
+    name: Review packet and strict no-merge integration check
+    if: github.ref == 'refs/heads/experiment/qwen3-ja-es-candidate-20261120'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STAGE6_RUN: ${{ inputs.stage6_run || '44931094612' }}
+      STAGE7_RUN: ${{ inputs.stage7_run || '44942504944' }}
+      STAGE8_RUN: ${{ inputs.stage8_run || '44961618206' }}
+      STAGE9_RUN: ${{ inputs.stage9_run || '44965198361' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify public safety and run comprehensive offline regression tests
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q tools tests translation_lab
+          python -m unittest discover -s tests -v
+      - name: Obtain immutable original neural receipts
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence/stage6" "$RUNNER_TEMP/evidence/stage7" "$RUNNER_TEMP/evidence/stage8" "$RUNNER_TEMP/gates"
+          gh run download "$STAGE6_RUN" -n stage6-dialogue-sixteen-research-receipts -D "$RUNNER_TEMP/evidence/stage6"
+          gh run download "$STAGE7_RUN" -n stage7-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage7"
+          gh run download "$STAGE8_RUN" -n stage8-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage8"
+      - name: Collect the existing independent review packet and authenticate GitHub reviews
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence/stage9" "$RUNNER_TEMP/gates"
+          gh run download "$STAGE9_RUN" -n stage9-independent-review-40-cases \
+            -D "$RUNNER_TEMP/evidence/stage9"
+          if [ -f reviews/stage9-independent-reviewed-packet.json ]; then
+            cp reviews/stage9-independent-reviewed-packet.json \
+              "$RUNNER_TEMP/gates/stage9-human-reviewed-packet.json"
+            echo "Human-authored review file loaded for validation."
+          else
+            cp "$RUNNER_TEMP/evidence/stage9/stage9-bilingual-review-packet.json" \
+              "$RUNNER_TEMP/gates/stage9-human-reviewed-packet.json"
+            echo "No human review file submitted; gate must remain HOLD."
+          fi
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/4/reviews?per_page=100" \
+            --jq '.[] | {user_login: .user.login, state: .state, commit_id: .commit_id, submitted_at: .submitted_at, id: .id}' \
+            > "$RUNNER_TEMP/gates/independent-github-reviews.jsonl"
+
+      - name: Stage10 strict validation - HOLD without authenticated current-head human signoff
+        run: |
+          python -m tools.stage10_release_gate --receipts "$RUNNER_TEMP/evidence" \
+            --stage9-packet "$RUNNER_TEMP/gates/stage9-human-reviewed-packet.json" \
+            --github-reviews-jsonl "$RUNNER_TEMP/gates/independent-github-reviews.jsonl" \
+            --expected-head-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/gates/stage10-final-readiness.json" \
+            --require-ready
+      - name: Preserve review and readiness receipts even on failed gate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage9-stage10-review-gate-evidence
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/gates/stage9-human-reviewed-packet.json
+            ${{ runner.temp }}/gates/stage10-final-readiness.json

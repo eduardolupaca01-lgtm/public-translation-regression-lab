@@ -1,0 +1,97 @@
+name: Qwen3-8B direct Japanese to Spanish candidate evaluation
+
+on:
+  push:
+    paths:
+      - ".github/workflows/qwen3-8b-ja-es-candidate.yml"
+      - "tools/qwen3_8b_ja_es_candidate.py"
+      - "tests/test_qwen3_8b_ja_es_candidate.py"
+      - "tools/independent_pivot_holdout.py"
+      - "translation_lab/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qwen3-8b-ja-es-candidate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    name: Qwen3-8B direct ja-es candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      HF_HOME: /tmp/qwen8b-hf-home
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      HF_HUB_DOWNLOAD_TIMEOUT: "120"
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+      QWEN8B_WORKSPACE: /tmp/qwen8b-ja-es-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Reject private assets and credentials
+        run: python tools/publication_guard.py
+
+      - name: Compile Python sources
+        run: python -m compileall -q translation_lab tests tools
+
+      - name: Run full offline regression and Qwen adapter tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Download pinned llama.cpp CPU server
+        run: |
+          mkdir -p "$RUNNER_TEMP/llama"
+          curl --fail --location --retry 3 --retry-all-errors \
+            "https://github.com/ggml-org/llama.cpp/releases/download/b12584/llama-b12584-bin-ubuntu-x64.tar.gz" \
+            --output "$RUNNER_TEMP/llama-b12584.tar.gz"
+          tar -xzf "$RUNNER_TEMP/llama-b12584.tar.gz" -C "$RUNNER_TEMP/llama"
+          LLAMA_SERVER="$(find "$RUNNER_TEMP/llama" -type f -name llama-server -print -quit)"
+          if [ -z "$LLAMA_SERVER" ]; then
+            echo "llama-server binary missing from pinned release"
+            find "$RUNNER_TEMP/llama" -maxdepth 4 -type f | head -80
+            exit 1
+          fi
+          chmod +x "$LLAMA_SERVER"
+          echo "LLAMA_SERVER=$LLAMA_SERVER" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$(dirname "$LLAMA_SERVER"):$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          "$LLAMA_SERVER" --version
+
+      - name: Install pinned Hugging Face download client
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary \
+            huggingface_hub==0.36.0
+
+      - name: Run real local Qwen3 inference on the fixed 20-case development benchmark
+        run: |
+          python -m tools.qwen3_8b_ja_es_candidate translate \
+            --llama-server "$LLAMA_SERVER" \
+            --workspace "$QWEN8B_WORKSPACE"
+
+      - name: Verify accepted SQLite rows in a fresh process without model weights
+        if: always()
+        run: |
+          python -m tools.qwen3_8b_ja_es_candidate verify \
+            --workspace "$QWEN8B_WORKSPACE"
+
+      - name: Preserve raw outputs, translations, and cold-restart proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-8b-ja-es-candidate-receipts
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            /tmp/qwen8b-ja-es-quality/qwen-candidate-report.json
+            /tmp/qwen8b-ja-es-quality/qwen-restart-proof.json
+            /tmp/qwen8b-ja-es-quality/review-queue.json
+            /tmp/qwen8b-ja-es-quality/llama-server.log
+            /tmp/qwen8b-ja-es-quality/cache/translation-cache.sqlite3

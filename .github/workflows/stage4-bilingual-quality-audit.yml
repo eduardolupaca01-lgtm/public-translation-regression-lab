@@ -1,0 +1,98 @@
+name: Stage4 bilingual QA of approved Qwen3-8B Japanese-to-Spanish holdout
+
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - ".github/workflows/stage4-bilingual-quality-audit.yml"
+      - "tools/stage4_bilingual_audit.py"
+      - "tools/stage4_rpg_stress_cases.py"
+      - "tests/test_stage4_bilingual_audit.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: stage4-bilingual-screen-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Pin 10/10 receipts, audit bilingual quality, prepare RPG stress corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOURCE_RUN_ID: "44893774138"
+      SOURCE_HEAD_SHA: "fffed203ed2e22f7383fb69dcd33bfbd174f4dff"
+      AUDIT_OUT: /tmp/stage4-bilingual-audit.json
+      STRESS_MANIFEST: /tmp/stage4-rpg-stress-manifest.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Public-safety guard and complete offline unit tests
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q translation_lab tools tests
+          python -m unittest discover -s tests -v
+
+      - name: Verify exact Stage3 success and source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            --output "$RUNNER_TEMP/stage3-origin.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          run=json.loads((Path(os.environ["RUNNER_TEMP"])/"stage3-origin.json").read_text())
+          assert run["status"]=="completed" and run["conclusion"]=="success", "STAGE3_RUN_NOT_PASSED"
+          assert run["head_sha"]==os.environ["SOURCE_HEAD_SHA"], "STAGE3_SOURCE_SHA_CHANGED"
+          assert run["head_branch"]=="experiment/qwen3-ja-es-candidate-20261120", "STAGE3_BRANCH_CHANGED"
+          assert run["repository"]["full_name"]==os.environ["GITHUB_REPOSITORY"], "STAGE3_REPOSITORY_CHANGED"
+          print("STAGE4_PINNED_STAGE3_RUN_PASS",run["id"],run["head_sha"])
+          PY
+
+      - name: Download unmodified original Stage3 translations and restart proof
+        uses: actions/download-artifact@v4
+        with:
+          name: qwen3-8b-thinking-stage3-receipts
+          run-id: 44893774138
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/stage3-evidence
+
+      - name: Freeze twelve separate RPG stress dialogue sources
+        run: |
+          python -m tools.stage4_rpg_stress_cases --out "$STRESS_MANIFEST"
+
+      - name: Independently screen historical translations and block quality defects
+        run: |
+          REPORT="$(find "$RUNNER_TEMP/stage3-evidence" -type f -name stage3-report.json -print -quit)"
+          RESTART="$(find "$RUNNER_TEMP/stage3-evidence" -type f -name stage3-restart-proof.json -print -quit)"
+          MANIFEST="$(find "$RUNNER_TEMP/stage3-evidence" -type f -name stage3-source-manifest.json -print -quit)"
+          test -n "$REPORT" && test -n "$RESTART" && test -n "$MANIFEST"
+          python -m tools.stage4_bilingual_audit \
+            --report "$REPORT" \
+            --restart-proof "$RESTART" \
+            --source-manifest "$MANIFEST" \
+            --out "$AUDIT_OUT"
+
+      - name: Preserve quality flags and next-stage source-only manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-bilingual-quality-and-rpg-stress-manifest
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            /tmp/stage4-bilingual-audit.json
+            /tmp/stage4-rpg-stress-manifest.json
