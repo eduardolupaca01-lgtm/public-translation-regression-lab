@@ -46,7 +46,7 @@ foreach($pair in @(
     throw "TX775_SOURCE_SHA256_RECEIPT_MISSING"
   }
   $digestLine=(Get-Content -LiteralPath $receiptPath -TotalCount 1).Trim()
-  if($digestLine -notmatch '^([a-f0-9]{64})\\s+') {
+  if($digestLine -notmatch '^([a-f0-9]{64})\s+') {
     throw "TX775_SOURCE_SHA256_RECEIPT_INVALID"
   }
   $expected=$Matches[1]
