@@ -40,9 +40,11 @@ jobs:
     needs: source-free-preflight
     runs-on: windows-2022
     timeout-minutes: 180
+    # The owner stated they saved the two secret VALUES under opposite names.
+    # Map by actual contents here; no values, tokens, or passwords in git.
     env:
-      EDUARDO_RPG_SOURCE_TOKEN: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
-      EDUARDO_RPG_ARCHIVE_PASSWORD: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+      EDUARDO_RPG_SOURCE_TOKEN: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+      EDUARDO_RPG_ARCHIVE_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,14 +55,14 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Require private read access and separate owner-held encryption password
+      - name: Verify secret values according to owner's reversed field placement (no disclosure)
         shell: pwsh
         run: |
-          if (-not $env:EDUARDO_RPG_SOURCE_TOKEN -or $env:EDUARDO_RPG_SOURCE_TOKEN.Length -lt 20) {
+          if (-not $env:EDUARDO_RPG_SOURCE_TOKEN -or $env:EDUARDO_RPG_SOURCE_TOKEN.Length -lt 20 -or -not $env:EDUARDO_RPG_SOURCE_TOKEN.StartsWith('github_pat_')) {
             Write-Host "HOLD: Set the public repo's EDUARDO_RPG_SOURCE_TOKEN Actions secret to a fine-grained read-only token for Eduardo's private source and releases."
             throw "EDUARDO_PRIVATE_SOURCE_READ_ACCESS_REQUIRED"
           }
-          if (-not $env:EDUARDO_RPG_ARCHIVE_PASSWORD -or $env:EDUARDO_RPG_ARCHIVE_PASSWORD.Length -lt 20) {
+          if (-not $env:EDUARDO_RPG_ARCHIVE_PASSWORD -or $env:EDUARDO_RPG_ARCHIVE_PASSWORD.Length -lt 20 -or $env:EDUARDO_RPG_ARCHIVE_PASSWORD.StartsWith('github_pat_')) {
             Write-Host "HOLD: Set EDUARDO_RPG_ARCHIVE_PASSWORD (20+ characters) to encrypt the private original EXE before public artifact upload."
             throw "EDUARDO_OWNER_ONLY_ENCRYPTION_REQUIRED"
           }
@@ -72,7 +74,7 @@ jobs:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
           ref: 091f7326101a61b02ecaa7a447370102f7952328
           path: original
-          token: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
+          token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
           persist-credentials: false
           fetch-depth: 1
           lfs: false
