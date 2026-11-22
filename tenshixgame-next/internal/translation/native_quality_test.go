@@ -57,3 +57,31 @@ func TestEscapedActorCommandOutsideNameAlsoPreservesParameters(t *testing.T){
         t.Fatalf("original actor ID should survive: %s",why)
     }
 }
+
+func TestVisibleDigitsSurviveJapaneseToSpanishTranslation(t *testing.T){
+    input:=Source{"rpg-maker","mv","ja","\\N<隼人42>レベル３で5回成功。\\C[6]注意\\C[0]"}
+    good:="\\N<隼人42>Éxito 5 veces en el nivel 3.\\C[6]Atención\\C[0]"
+    if ok,reason:=AssessNativeCandidate(input,good);!ok||reason!=QualityAccepted{
+        t.Fatalf("fullwidth digits and reordered quantities should be accepted: %s",reason)
+    }
+    checks:=[]string{
+        "\\N<隼人42>Éxito 5 veces.\\C[6]Atención\\C[0]", // missing level
+        "\\N<隼人42>Éxito 5 veces en el nivel 4.\\C[6]Atención\\C[0]",
+        "\\N<隼人42>Éxito 5 veces en el nivel 3, bonus 10.\\C[6]Atención\\C[0]",
+    }
+    for _,candidate:=range checks{
+        if ok,reason:=AssessNativeCandidate(input,candidate);ok||reason!=QualityNumberChanged{
+            t.Fatalf("changed visible digits must be rejected: %s",reason)
+        }
+    }
+}
+func TestDynamicCodeParametersAreNotMistakenForSpokenNumbers(t *testing.T){
+    input:=Source{"rpg-maker","mz","ja","\\V[12]は最後の章です。"}
+    spanish:="\\V[12] es el capítulo final."
+    if good,why:=AssessNativeCandidate(input,spanish);!good||why!=QualityAccepted{
+        t.Fatalf("variable parameter not visible number: %s",why)
+    }
+    if good,why:=AssessNativeCandidate(input,"\\V[13] es el capítulo final.");good||why!=QualityControlChanged{
+        t.Fatalf("parameter changed: %s",why)
+    }
+}
