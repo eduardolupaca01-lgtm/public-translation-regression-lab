@@ -212,6 +212,8 @@ func formatResult(item engine.Result,audit portable.Report)string{
     fmt.Fprintf(&b,"Caché: %d archivos; %d pares verificados; %d entradas verificadas; %d rechazadas\r\n",
         audit.CacheSnapshots,audit.SnapshotRecordsProven,
         audit.EntryRecordsProven,audit.CacheRecordsRejected)
+    fmt.Fprintf(&b,"Nombres japoneses protegidos: %d | Cuerpos o resultados incompatibles: %d\r\n",
+        audit.CacheProtectedNameCandidates,audit.CacheQualityRejected)
     if audit.PreservedAppVersions>0 {
         fmt.Fprintf(&b,"Versiones App conservadas en el juego: %d\r\n",audit.PreservedAppVersions)
     }
