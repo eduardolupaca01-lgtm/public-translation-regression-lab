@@ -138,13 +138,13 @@ def patch_private_checkout(source_root:Path)->None:
     # TX768 test slices this plugin at an EXACT LF delimiter and failed
     # even though the first IIFE had not changed. Keep source bytes.
     raw_bytes=filename.read_bytes()
-    boundary=b'\\n(function () {\\n    "use strict";'
-    if b"\\r" in raw_bytes or raw_bytes.count(boundary)!=1:
+    boundary=b'\n(function () {\n    "use strict";'
+    if b"\r" in raw_bytes or raw_bytes.count(boundary)!=1:
         raise RuntimeError("TX775_ORIGINAL_NATIVE_JS_LINE_ENDINGS_CHANGED")
     raw=raw_bytes.decode("utf-8")
     patched=transform(raw)
     patched_bytes=patched.encode("utf-8")
-    if b"\\r" in patched_bytes or patched_bytes.count(boundary)!=1:
+    if b"\r" in patched_bytes or patched_bytes.count(boundary)!=1:
         raise RuntimeError("TX775_NATIVE_JS_FIRST_PAINT_BOUNDARY_DAMAGED")
     filename.write_bytes(patched_bytes)
     print("TX775_BOTH_PRIVATE_V95_GUARDS_APPLIED_WITH_EXACT_LF")
