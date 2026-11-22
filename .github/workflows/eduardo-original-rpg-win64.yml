@@ -36,6 +36,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - name: Reject malformed TX777 native Win32 bootstrap before expensive model extraction
+        shell: bash
+        run: |
+          gofmt -e tools/tx777/tx777_bootstrap_ui_windows.go > /dev/null
+          gofmt -e tools/tx777/tx777_bootstrap_ui_windows_test.go > /dev/null
+          echo "TX777_PUBLIC_WIN32_GO_SYNTAX_PASS"
       - name: Check reproducible source-free bridge code
         shell: bash
         run: |
