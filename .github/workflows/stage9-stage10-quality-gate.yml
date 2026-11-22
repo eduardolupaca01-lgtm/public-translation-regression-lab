@@ -1,14 +1,7 @@
-name: Stage9 bilingual packet and Stage10 fail-closed quality gate
+name: Stage10 strict manual-only release gate
 
+# Stage9 packet generation is separate; this strict check never auto-approves.
 on:
-  push:
-    branches:
-      - experiment/qwen3-ja-es-candidate-20261120
-    paths:
-      - "tools/stage9_bilingual_review.py"
-      - "tools/stage10_release_gate.py"
-      - "tests/test_stage9_stage10_release_gate.py"
-      - ".github/workflows/stage9-stage10-quality-gate.yml"
   workflow_dispatch:
     inputs:
       stage6_run:
@@ -22,7 +15,7 @@ on:
       stage8_run:
         description: Stage8 completed neural run ID
         required: true
-        default: "44942328483"
+        default: "44961618206"
 
 permissions:
   contents: read
@@ -37,7 +30,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       STAGE6_RUN: ${{ inputs.stage6_run || '44931094612' }}
       STAGE7_RUN: ${{ inputs.stage7_run || '44942504944' }}
-      STAGE8_RUN: ${{ inputs.stage8_run || '44942328483' }}
+      STAGE8_RUN: ${{ inputs.stage8_run || '44961618206' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

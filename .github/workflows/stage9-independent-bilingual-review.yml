@@ -1,0 +1,151 @@
+name: Stage9 independent bilingual review packet (40 cases)
+
+on:
+  push:
+    branches:
+      - experiment/qwen3-ja-es-candidate-20261120
+    paths:
+      - ".github/workflows/stage9-independent-bilingual-review.yml"
+  workflow_dispatch:
+    inputs:
+      stage6_run:
+        description: Frozen successful Stage6 neural run
+        required: true
+        default: "44931094612"
+      stage7_run:
+        description: Frozen successful Stage7 neural run
+        required: true
+        default: "44942504944"
+      stage8_run:
+        description: Frozen successful Stage8 v4 neural run
+        required: true
+        default: "44961618206"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  stage9-review-packet:
+    name: Prepare 40 translation dossiers for independent human review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STAGE6_RUN: ${{ inputs.stage6_run || '44931094612' }}
+      STAGE7_RUN: ${{ inputs.stage7_run || '44942504944' }}
+      STAGE8_RUN: ${{ inputs.stage8_run || '44961618206' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate safety and run all offline regression tests
+        run: |
+          python tools/publication_guard.py
+          python -m compileall -q translation_lab tests tools
+          python -m unittest discover -s tests -v
+
+      - name: Download immutable original neural receipts for stages 6, 7 and 8
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence/stage6" "$RUNNER_TEMP/evidence/stage7" "$RUNNER_TEMP/evidence/stage8" "$RUNNER_TEMP/review"
+          gh run download "$STAGE6_RUN" -n stage6-dialogue-sixteen-research-receipts -D "$RUNNER_TEMP/evidence/stage6"
+          gh run download "$STAGE7_RUN" -n stage7-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage7"
+          gh run download "$STAGE8_RUN" -n stage8-dialogue-twelve-research-receipts -D "$RUNNER_TEMP/evidence/stage8"
+
+      - name: Produce original Japanese and Spanish 40-case human review packet
+        run: |
+          python -m tools.stage9_bilingual_review \
+            --receipts "$RUNNER_TEMP/evidence" \
+            --output "$RUNNER_TEMP/review/stage9-bilingual-review-packet.json"
+
+      - name: Inspect original hashes and keep preliminary Stage10 on HOLD
+        run: |
+          python -m tools.stage10_release_gate \
+            --receipts "$RUNNER_TEMP/evidence" \
+            --stage9-packet "$RUNNER_TEMP/review/stage9-bilingual-review-packet.json" \
+            --output "$RUNNER_TEMP/review/stage10-preliminary-HOLD.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          folder = Path(os.environ["RUNNER_TEMP"]) / "review"
+          packet_path = folder / "stage9-bilingual-review-packet.json"
+          packet = json.loads(packet_path.read_text(encoding="utf-8"))
+          gate = json.loads((folder / "stage10-preliminary-HOLD.json").read_text(encoding="utf-8"))
+          accepted = {"6": 16, "7": 12, "8": 12}
+          if packet["rubric_accepted_by_stage"] != accepted:
+              raise RuntimeError("STAGE9_SOURCE_STAGES_NOT_ALL_AUTOMATED_PASS")
+          if packet["persistence_by_stage"] != {n: "PASS" for n in accepted}:
+              raise RuntimeError("STAGE9_ORIGINAL_COLD_RESTART_NOT_PASS")
+          if packet["total_items"] != 40 or len(packet["items"]) != 40:
+              raise RuntimeError("STAGE9_INCOMPLETE_40_CASES")
+          if len({x["id"] for x in packet["items"]}) != 40:
+              raise RuntimeError("STAGE9_DUPLICATE_CASE_IDS")
+          if any(x.get("human_decision") != "pending" for x in packet["items"]):
+              raise RuntimeError("STAGE9_HUMAN_APPROVAL_NOT_AUTHORIZED")
+          if gate["automated_checks"] != {n: "PASS" for n in accepted}:
+              raise RuntimeError("STAGE9_AUTOMATED_CHECKS_DISAGREE")
+          if any("POSTHOC_SEMANTIC_ERROR" in b for b in gate["blockers"]):
+              raise RuntimeError("STAGE9_POSTHOC_SEMANTIC_FLAG")
+          if gate["status"] != "HOLD" or gate["automatic_merge_or_publication_permitted"]:
+              raise RuntimeError("STAGE10_GATE_MUST_REMAIN_CLOSED")
+
+          packet["source_run_ids_by_stage"] = {
+              "6": os.environ["STAGE6_RUN"],
+              "7": os.environ["STAGE7_RUN"],
+              "8": os.environ["STAGE8_RUN"],
+          }
+          packet_path.write_text(
+              json.dumps(packet, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          fence = chr(96) * 3
+          md = [
+              "# Etapa 9: revisión bilingüe independiente",
+              "",
+              "Estado: 40 de 40 expedientes preparados; 0 aprobaciones humanas.",
+              "Este documento es para lectura. El JSON y los recibos originales son la evidencia.",
+              "Los marcadores CRLF se muestran explícitamente como barra-r-barra-n.",
+              "Una aceptación automática no significa calidad profesional.",
+              "",
+          ]
+          for i, x in enumerate(packet["items"], 1):
+              source = (x.get("source_ja") or "").replace("\r\n", r"\r\n" + "\n")
+              translated = (x.get("candidate_es_419") or "(sin candidato)").replace("\r\n", r"\r\n" + "\n")
+              flags = ", ".join(x.get("posthoc_screen_flags") or []) or "ninguno"
+              md.extend([
+                  f"## {i:02d} - {x['id']}", "",
+                  f"Rúbrica automática: {x['historical_rubric']}", "",
+                  "Original japonés:", fence + "text", source, fence, "",
+                  "Traducción propuesta ES-419:", fence + "text", translated, fence, "",
+                  f"Alertas para el revisor: {flags}", "",
+                  "- [ ] Fidelidad semántica", "- [ ] Gramática",
+                  "- [ ] Naturalidad ES-419", "- [ ] Códigos y CRLF",
+                  "Revisor: pendiente | Dictamen: pendiente | Observaciones: pendiente", "",
+              ])
+          (folder / "stage9-review-checklist.md").write_text(
+              "\n".join(md).rstrip() + "\n", encoding="utf-8"
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(
+                  "## Stage9: 40 bilingual cases prepared\n\n"
+                  "Stages 6/7/8 automated checks: PASS (16+12+12).\n\n"
+                  "Independent human review: 40 pending. Stage10: HOLD; no merge or publication.\n"
+              )
+          print("STAGE9_PACKET_READY_40_PENDING_STAGE10_HOLD")
+          PY
+
+      - name: Publish Stage9 packet and explicit preliminary HOLD evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage9-independent-review-40-cases
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/review/stage9-bilingual-review-packet.json
+            ${{ runner.temp }}/review/stage9-review-checklist.md
+            ${{ runner.temp }}/review/stage10-preliminary-HOLD.json
