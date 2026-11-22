@@ -5,6 +5,7 @@ package translation
 // that any text has actually reached the in-game message window.
 import (
     "regexp"
+    "sort"
     "strings"
     "unicode/utf8"
 )
@@ -14,6 +15,7 @@ var rawJapanese=regexp.MustCompile(`[\x{3040}-\x{30ff}\x{3400}-\x{9fff}]`)
 // Use the same RPG escape-code family as the ORIGINAL V95 native bridge.
 // Actor tags are checked separately and then removed ONLY from scratch copies.
 var rpgEscapeCode=regexp.MustCompile(`\\(?:[A-Za-z]+\[[^\]\r\n]+\]|[A-Za-z{}.!^$<>\\|])`)
+var visibleDigits=regexp.MustCompile(`[0-9０-９]+`)
 
 const (
     QualityAccepted="NATIVE_PROTECTED_TEXT_CANDIDATE"
@@ -21,9 +23,29 @@ const (
     QualityOriginal="NOT_TRANSLATED"
     QualityChangedSpeaker="ACTOR_CONTROL_CHANGED"
     QualityControlChanged="RPG_CONTROL_CODE_CHANGED"
+    QualityNumberChanged="RPG_VISIBLE_DIGITS_CHANGED"
     QualityEmptyBody="EMPTY_SPOKEN_BODY"
     QualityRemainingJapanese="JAPANESE_REMAINS_IN_VISIBLE_BODY"
 )
+
+// digitsOutsideControls mirrors the ORIGINAL TX710CleanCore.valid numeric gate.
+// The controls' parameters and Japanese actor metadata are not spoken text,
+// so they must NOT be counted as quantities in the visible dialogue.
+func digitsOutsideControls(text string) []string {
+    body:=rpgEscapeCode.ReplaceAllString(nativeSpeakerTag.ReplaceAllString(text,""),"")
+    tokens:=visibleDigits.FindAllString(body,-1)
+    for i,token:=range tokens {
+        runes:=[]rune(token)
+        for j,digit:=range runes {
+            if digit>='０' && digit<='９'{
+                runes[j]='0'+(digit-'０')
+            }
+        }
+        tokens[i]=string(runes)
+    }
+    sort.Strings(tokens)
+    return tokens
+}
 
 // AssessNativeCandidate does not delete any controls; strips original name
 // tags only from a TEMPORARY copy to inspect the displayed prose. The game
@@ -62,6 +84,19 @@ func AssessNativeCandidate(source Source, translated string) (bool,string) {
     for i:=range originalCodes {
         if originalCodes[i]!=translatedCodes[i] {
             return false,QualityControlChanged
+        }
+    }
+    // A completed model result with missing or modified visible digits
+    // is NOT safe to paint or persist. Allow reordered quantities, but not
+    // deleted or newly invented ones; normalize full-width Japanese digits.
+    originals:=digitsOutsideControls(source.Raw)
+    translatedNums:=digitsOutsideControls(translated)
+    if len(originals)!=len(translatedNums){
+        return false,QualityNumberChanged
+    }
+    for i:=range originals {
+        if originals[i]!=translatedNums[i] {
+            return false,QualityNumberChanged
         }
     }
     if rawJapanese.MatchString(newBody) {
