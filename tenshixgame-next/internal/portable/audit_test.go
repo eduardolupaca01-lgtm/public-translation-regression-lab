@@ -129,3 +129,16 @@ func TestRejectsLinkedForeignWorkerWithoutFollowingIt(t *testing.T){
         t.Fatal("outside linked file accepted as owned worker")
     }
 }
+
+func TestUnfinishedV95StageIsReportedWithoutDeletion(t *testing.T) {
+    root:=newFixture(t)
+    staged:=filepath.Join(root,".tx771-stage-abandoned")
+    if err:=os.Mkdir(staged,0700);err!=nil{t.Fatal(err)}
+    write(t,root,".tx771-stage-abandoned/engine-model.keep",[]byte("do not delete"))
+    status:=AuditRoot(root)
+    if status.State!="not_installed"||status.OrphanInstallStages!=1 {
+        t.Fatalf("orphan stage not detected correctly: %+v",status)
+    }
+    data,err:=os.ReadFile(filepath.Join(staged,"engine-model.keep"))
+    if err!=nil||string(data)!="do not delete" {t.Fatal("read-only audit removed unowned staged content")}
+}
