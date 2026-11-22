@@ -161,8 +161,8 @@ func AuditRoot(gameRoot string)Report {
         for _,mode:=range []string{"auto","ja","en"} {
             sum:=sha256.Sum256([]byte(mode))
             stem:="game-portable-"+hex.EncodeToString(sum[:])[:24]+".json"
-            for _,suffix:=range []string{"",".live.json"}{
-                name:=stem+suffix
+            for _,suffix:=range []string{".json",".live.json"}{
+                name:=strings.TrimSuffix(stem,".json")+suffix
                 if !plainFile(root,filepath.Join(cacheRel,name),5<<20){continue}
                 result.CacheSnapshots++
                 var snapshot cacheSnapshot
@@ -198,7 +198,7 @@ func AuditRoot(gameRoot string)Report {
         const maxEntries=12000
         for _,mode:=range []string{"auto","ja","en"} {
             sum:=sha256.Sum256([]byte(mode))
-            stem:="game-portable-"+hex.EncodeToString(sum[:])[:24]+".json.live.json.entries"
+            stem:="game-portable-"+hex.EncodeToString(sum[:])[:24]+".live.json.entries"
             dir:=filepath.Join(cacheRel,stem)
             if !plainDir(root,dir){continue}
             buckets,e:=os.ReadDir(filepath.Join(root,dir))
