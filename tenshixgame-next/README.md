@@ -30,7 +30,9 @@ Artifact: `Eduardo-TENSHIXGAME-TX775-V95-NOMBRES-PORTABLE-Windows-ENCRYPTED` (ca
 
 **Descarga:** artifact `Eduardo-TENSHIXGAME-TX776-V95-DIAGNOSTICO-PORTABLE-Windows-ENCRYPTED`, válido hasta el **6 de diciembre de 2026**. El ZIP contiene el archivo AES `Tenshixgame-RPG-TX776-DIAGNOSTICO-V95-PRUEBA.7z` (SHA-256 de este archivo cifrado: `693f4a619e5a560f25736a89bc0fad9733f3c6065ad3a347488ad4fc4da80f94`). Usar la contraseña que el propietario configuró; no se publica por GitHub. Una copia desprotegida del EXE o los modelos nunca se adjunta a este repositorio.
 
-El nuevo panel conserva el histórico, comunica pasos y permite copiar un informe de error privado sin eliminar archivos ni iniciarse en segundo plano. **Todavía falta ver el español en una copia del juego real y confirmar un segundo PC Windows sin Internet.** No se debe declarar compatible un título solo porque Actions sea verde. La versión TX775 permanece como artefacto histórico anterior; no es el instalador con botón copiar TX776.
+El nuevo panel conserva el histórico, comunica pasos y permite copiar un informe de error privado sin eliminar archivos ni iniciarse en segundo plano.
+
+**Prueba de actualización del EXE anterior TX775 a TX776:** [Windows CI #45050398132](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45050398132) — **SUCCESS**. Se descargaron ambos paquetes originales cifrados; se verificaron SHA-256 y que eran ejecutables distintos. Se instaló TX775 y se actualizó con TX776 dentro de una carpeta sintética, conservando caché, paquetes App previos, Game.exe y plugins.js. Se probó reinicio, traslado de carpeta y ausencia de motor global en AppData. Esto **NO** sustituye una prueba de diálogos reales en español ni de segundo PC físico. **Todavía falta ver el español en una copia del juego real y confirmar un segundo PC Windows sin Internet.** No se debe declarar compatible un título solo porque Actions sea verde. La versión TX775 permanece como artefacto histórico anterior; no es el instalador con botón copiar TX776.
 
 ## Diagnóstico nuevo TX776 (instalador original de Windows)
 
