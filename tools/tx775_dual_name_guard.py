@@ -134,10 +134,20 @@ def patch_private_checkout(source_root:Path)->None:
     filename=root/TARGET
     if not filename.is_file() or filename.is_symlink():
         raise RuntimeError("TX775_ORIGINAL_PLUGIN_MISSING_OR_LINKED")
-    raw=filename.read_text(encoding="utf-8")
+    # Path.write_text() on Windows normalizes LF -> CRLF. The original
+    # TX768 test slices this plugin at an EXACT LF delimiter and failed
+    # even though the first IIFE had not changed. Keep source bytes.
+    raw_bytes=filename.read_bytes()
+    boundary=b'\\n(function () {\\n    "use strict";'
+    if b"\\r" in raw_bytes or raw_bytes.count(boundary)!=1:
+        raise RuntimeError("TX775_ORIGINAL_NATIVE_JS_LINE_ENDINGS_CHANGED")
+    raw=raw_bytes.decode("utf-8")
     patched=transform(raw)
-    filename.write_text(patched,encoding="utf-8")
-    print("TX775_BOTH_PRIVATE_V95_GUARDS_APPLIED_TEMPORARILY")
+    patched_bytes=patched.encode("utf-8")
+    if b"\\r" in patched_bytes or patched_bytes.count(boundary)!=1:
+        raise RuntimeError("TX775_NATIVE_JS_FIRST_PAINT_BOUNDARY_DAMAGED")
+    filename.write_bytes(patched_bytes)
+    print("TX775_BOTH_PRIVATE_V95_GUARDS_APPLIED_WITH_EXACT_LF")
 
 def main()->None:
     parser=argparse.ArgumentParser(description=__doc__)
