@@ -183,9 +183,13 @@ def patch_private(root:Path,overlays:Path) ->None:
         dest=root/BASE/filename
         if not origin.is_file() or origin.is_symlink() or dest.exists():
             raise RuntimeError("TX776_OVERLAY_SOURCE_MISSING_OR_ALREADY_PRESENT")
-        payload=origin.read_bytes()
-        if b"\r" in payload or b"package main" not in payload:
-            raise RuntimeError("TX776_INVALID_GO_DIAGNOSTIC_OVERLAY")
+        # A public Go file can be checked out by Windows with CRLF while
+        # the immutable private source uses LF. Normalize ONLY new overlays.
+        payload=origin.read_bytes().replace(b"\r\n",b"\n")
+        if b"\r" in payload:
+            raise RuntimeError("TX776_PUBLIC_OVERLAY_NONSTANDARD_LINE_ENDINGS")
+        if b"package main" not in payload:
+            raise RuntimeError("TX776_PUBLIC_OVERLAY_GO_PACKAGE_MISSING")
         planned.append((dest,payload))
     # No file is touched unless ALL source pins and anchors have passed.
     for dest,payload in planned:
