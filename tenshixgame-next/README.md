@@ -24,6 +24,14 @@ Artifact: `Eduardo-TENSHIXGAME-TX775-V95-NOMBRES-PORTABLE-Windows-ENCRYPTED` (ca
 
 **Actualización real TX772 → TX775 aprobada:** [Windows CI #45046277149](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45046277149). Descifró ambos EXE originales solo en Windows desechable, comprobó sus recibos SHA, conservó caché y paquetes App anteriores, no modificó Game.exe ni plugins.js, y verificó reinicio, traslado de carpeta y ausencia de motor global en el perfil. Solo se publicó un pequeño recibo de PASS sin modelos. No es una prueba visual en el juego real.
 
+## Diagnóstico nuevo TX776 (instalador original de Windows)
+
+El área de **Estado de instalación** conserva los eventos anteriores en vez de reemplazarlos. El botón **COPIAR DIAGNÓSTICO PARA ENVIAR** recoge códigos, etapa y recomendaciones sin enviar nada por Internet ni copiar rutas personales, contraseñas ni textos privados del juego. Hay pruebas Go de Windows para la acumulación y seguridad del informe.
+
+El overlay de instalación se aplica **únicamente** a la copia temporal del código V95 auténtico fijado por SHA, mediante el orquestador protegido. Este código R1 del detector NO se convierte en instalador por sí mismo. Antes de recomendar el EXE TX776, debe aprobar la compilación neuronal cifrada completa. El panel no cubre el arranque inicial del EXE único anterior a abrir la GUI.
+
+[Cómo copiar el diagnóstico después de instalar](docs/TX776_COMO_COPIAR_DIAGNOSTICO_INSTALACION.md) · [Rompecabezas y pendientes de las 11 cuentas](docs/TX776_ROMPECABEZAS_11_CUENTAS_DIAGNOSTICO_Y_GATES.md).
+
 ## 3. Cómo probar sin poner en riesgo el juego
 
 1. Conservar la carpeta original y sus partidas. Trabajar únicamente sobre una copia con el juego cerrado y el antiguo complemento no ejecutándose.
