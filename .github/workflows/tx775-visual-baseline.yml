@@ -6,6 +6,7 @@ on:
       - rebuild/tenshixgame-unificado-deteccion-20261122
     paths:
       - tools/tx775_dual_name_guard.py
+      - tools/tx775_real_core_probe.js
       - .github/workflows/tx775-visual-baseline.yml
   workflow_dispatch:
 
@@ -75,11 +76,15 @@ jobs:
             Write-Host ("TX775_"+$label+"_VISUAL=FAIL_"+$state)
             return $false
           }
+          $plugin="original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js"
+          node ci/tools/tx775_real_core_probe.js $plugin original
+          if ($LASTEXITCODE -ne 0) { throw "TX775_NATIVE_ORIGINAL_CORE_BASELINE_HOLD" }
           $baseline=Invoke-VisualRegression "ORIGINAL"
           python ci/tools/tx775_dual_name_guard.py --source-root original
           if ($LASTEXITCODE -ne 0) { throw "TX775_EXACT_SOURCE_PATCH_HOLD" }
-          $plugin="original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js"
           node --check $plugin
+          node ci/tools/tx775_real_core_probe.js $plugin patched
+          if ($LASTEXITCODE -ne 0) { throw "TX775_NATIVE_DUAL_GUARD_NOT_ACCEPTED" }
           if ($LASTEXITCODE -ne 0) { throw "TX775_PATCHED_JS_SYNTAX_HOLD" }
           $patched=Invoke-VisualRegression "PATCHED"
           if (-not $baseline -or -not $patched) {
