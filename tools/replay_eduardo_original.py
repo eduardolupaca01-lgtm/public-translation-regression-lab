@@ -143,7 +143,7 @@ def execute(source_root, receipt_path):
         ("TX769_SQLITE_PERSISTENCE_TEST", root / "tests/js/test_tx769_sqlite_durable_restart.js",
          ("TX769 SQLITE DURABLE RESTORE PASS", "awaitSavedSqliteMirror", "serveHistoricalSqlite=false")),
         ("TX770_FOREGROUND_RECOVERY_TEST", root / "tests/js/test_tx770_foreground_cache_before_cooldown.js",
-         ("TX770 FOREGROUND CACHE BEFORE COOLDOWN PASS", "A failed background retry", "One bounded retry")),
+         ("TX770 FOREGROUND CACHE BEFORE COOLDOWN PASS", "A failed background retry", "No second urgent retry")),
         ("TX770_WHITESPACE_RESTART_TEST", root / "tests/js/test_tx770_sqlite_whitespace_recovery.js",
          ("TX770 SQLITE WHITESPACE RESTORE PASS", "paddedFile", "paddedRestartWindow")),
     ):
