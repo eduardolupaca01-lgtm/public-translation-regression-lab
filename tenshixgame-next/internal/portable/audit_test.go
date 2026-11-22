@@ -139,6 +139,23 @@ func TestUnfinishedV95StageIsReportedWithoutDeletion(t *testing.T) {
     if status.State!="not_installed"||status.OrphanInstallStages!=1 {
         t.Fatalf("orphan stage not detected correctly: %+v",status)
     }
+    second:=filepath.Join(root,".tx771-onefile-stage-abandoned")
+    if err:=os.Mkdir(second,0700);err!=nil{t.Fatal(err)}
+    again:=AuditRoot(root)
+    if again.OrphanInstallStages!=2 {t.Fatalf("second historical stage prefix not recognized: %+v",again)}
     data,err:=os.ReadFile(filepath.Join(staged,"engine-model.keep"))
     if err!=nil||string(data)!="do not delete" {t.Fatal("read-only audit removed unowned staged content")}
+}
+
+func TestPreservedAppVersionsAreOnlyCountedNeverRemoved(t *testing.T){
+    root:=newFixture(t)
+    marker(t,root,strings.Repeat("0",64))
+    write(t,root,"Tenshixgame-IA/App/old-verified/keep.txt",[]byte("older app cache"))
+    write(t,root,"Tenshixgame-IA/App/new-verified/keep.txt",[]byte("newer app cache"))
+    report:=AuditRoot(root)
+    if report.PreservedAppVersions!=2 {t.Fatalf("version count: %+v",report)}
+    for _,sub:=range []string{"old-verified","new-verified"} {
+        v,e:=os.ReadFile(filepath.Join(root,"Tenshixgame-IA","App",sub,"keep.txt"))
+        if e!=nil||len(v)==0{t.Fatal("auditor removed a version of the existing app")}
+    }
 }
