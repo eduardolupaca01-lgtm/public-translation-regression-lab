@@ -45,6 +45,28 @@ jobs:
           fetch-depth: 1
           lfs: false
 
+      - name: Verify Windows one-file portable launcher and safety tests
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx541-rpg-onefile
+          try {
+            go test . -run TestTX771 -count=1
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_ONEFILE_COMPILE_OR_TEST_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX771_PORTABLE_ONEFILE_TEST_PASS"
+
+      - name: Verify journal containment and original V95 sidecar installer with Go
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx331-clean-product-host
+          try {
+            go test . -run TestTX771 -count=1
+            if ($LASTEXITCODE -ne 0) { throw "TX771_JOURNAL_CONTAINMENT_HOLD" }
+            go test ./cmd/tenshixgame-ui -run TestTX771 -count=1
+            if ($LASTEXITCODE -ne 0) { throw "TX771_ORIGINAL_MODEL_PORTABLE_INSTALL_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX771_WINDOWS_GO_PORTABLE_PASS"
+
       - name: Execute TX771 actual embedded RPG plugin JS with per-game V95 and cache
         shell: pwsh
         env:
@@ -73,28 +95,6 @@ jobs:
           node original/tests/js/test_tx771_copied_game_translation_cache.js
           if ($LASTEXITCODE -ne 0) { throw "TX771_COPIED_GAME_SPANISH_CACHE_OR_PORTABLE_DISK_HOLD" }
           Write-Host "TX771_COPIED_GAME_SPANISH_CACHE_PASS"
-
-      - name: Verify Windows one-file portable launcher and safety tests
-        shell: pwsh
-        run: |
-          Push-Location original/reference/tx541-rpg-onefile
-          try {
-            go test . -run TestTX771 -count=1
-            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_ONEFILE_COMPILE_OR_TEST_HOLD" }
-          } finally { Pop-Location }
-          Write-Host "TX771_PORTABLE_ONEFILE_TEST_PASS"
-
-      - name: Verify journal containment and original V95 sidecar installer with Go
-        shell: pwsh
-        run: |
-          Push-Location original/reference/tx331-clean-product-host
-          try {
-            go test . -run TestTX771 -count=1
-            if ($LASTEXITCODE -ne 0) { throw "TX771_JOURNAL_CONTAINMENT_HOLD" }
-            go test ./cmd/tenshixgame-ui -run TestTX771 -count=1
-            if ($LASTEXITCODE -ne 0) { throw "TX771_ORIGINAL_MODEL_PORTABLE_INSTALL_HOLD" }
-          } finally { Pop-Location }
-          Write-Host "TX771_WINDOWS_GO_PORTABLE_PASS"
 
       - name: Preflight conclusion
         shell: pwsh
