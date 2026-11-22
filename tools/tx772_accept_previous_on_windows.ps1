@@ -111,4 +111,23 @@ Invoke-PortableSmoke $newExe $gameEXE "restart"
 if((Get-Content -LiteralPath $sentinel -Raw) -ne "TX772_UNMODIFIED_TRANSLATION_CACHE"){
   throw "TX772_GAME_CACHE_LOST_ON_RESTART"
 }
-Write-Host "TX772_REAL_TX771_TO_TX772_UPGRADE_CACHED_GAME_AND_SAME_VOLUME_PASS"
+# Same-volume folder move after the two EXEs exit. Windows refuses this if a
+# lingering worker or GUI retains open handles to the game's files.
+$relocated=Join-Path $root "GameCopy-relocated"
+Move-Item -LiteralPath $game -Destination $relocated -ErrorAction Stop
+$relocatedEXE=Join-Path $relocated "Game.exe"
+Invoke-PortableSmoke $newExe $relocatedEXE "relocated"
+$relocatedWorker=Join-Path $relocated "Tenshixgame-IA\.local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
+$relocatedMarker=Join-Path $relocated "Tenshixgame-IA\portable-owner-v1.json"
+$relocatedInfo=Get-Content -LiteralPath $relocatedMarker -Raw | ConvertFrom-Json
+if($relocatedInfo.worker_sha256 -ne (Get-FileHash -LiteralPath $relocatedWorker -Algorithm SHA256).Hash.ToLowerInvariant()){
+  throw "TX772_PORTABLE_WORKER_DRIFT_AFTER_GAME_MOVE"
+}
+if((Get-Content -LiteralPath (Join-Path $relocated "Tenshixgame-IA\.local\TENSHIXGAME-RPG\live-cache\owner-test-cache.keep") -Raw) -ne "TX772_UNMODIFIED_TRANSLATION_CACHE"){
+  throw "TX772_CACHE_NOT_RELOCATABLE_WITH_GAME"
+}
+if(Test-Path -LiteralPath (Join-Path $globalProfile "TENSHIXGAME-RPG")){
+  throw "TX772_RELOCATED_GAME_CREATED_GLOBAL_ENGINE"
+}
+Write-Host "TX772_REAL_TX771_TO_TX772_UPGRADE_RESTART_RELOCATION_CACHE_AND_LOCAL_DISK_PASS"
+
