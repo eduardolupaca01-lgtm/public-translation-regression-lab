@@ -5,7 +5,7 @@
 ## Código y procedencia
 
 - Código real de la GUI, plugin RPG Maker, instalador, pruebas, worker y modelos: repositorio PRIVADO `eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build`.
-- Commit de esta prueba: `c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33` de `fix/tx770-rpg-foreground-cache-20261122` (rama privada, no rama principal).
+- Commit de esta prueba: `1e79a39df94be810918f50a377cfc1efb4e95f8f` de `fix/tx771-portable-game-local-worker-and-render-20261122` (rama privada, no rama principal).
 - Workflow original: `.github/workflows/tx758-clean-current-baseline.yml` del mismo commit (emplea la suite TX765).
 - Compilador público: `.github/workflows/eduardo-original-rpg-win64.yml` con `tools/replay_eduardo_original.py`.
 
@@ -21,10 +21,10 @@ Desde GitHub, abrir el repositorio público → **Settings → Secrets and varia
 ## Ejecución
 
 1. Abrir [el workflow del EXE original](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/workflows/eduardo-original-rpg-win64.yml).
-2. Seleccionar **Run workflow** con la rama `build/eduardo-original-rpg-win64-20261121` (o volver a ejecutar los trabajos después de crear los dos secretos).
+2. Seleccionar **Run workflow** con la rama `build/eduardo-original-rpg-tx771-portable-20261122` (o volver a ejecutar los trabajos después de crear los dos secretos).
 3. El runner verifica el SHA exacto del repositorio privado y comprueba los **26 pasos** del workflow original: GUI, V95 original, repaquetado de 21 componentes, 10 traducciones reales y 6 diálogos RPG, SQLite, instalación, primer y segundo arranque, integridad SHA, rollback y código de los plugins.
 4. No ejecuta los dos pasos finales originales de modificación de la rama privada ni de creación de una release. El programa original se crea dentro del runner, se cifra con contraseña y solo el archivo cifrado y el recibo de hash pueden descargarse del artifact.
-5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX770-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX770-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
+5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX771-PORTABLE-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX771-PORTATIL-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
 
 ## Evidencia actualizada de TX765 (2026-11-22)
 
@@ -92,3 +92,15 @@ El artefacto se publica **solo cifrado** y sus archivos de código/modelos origi
 **Hallazgo adicional revisado antes de entregar:** la cadena TX769 de JavaScript realmente instalada por el propietario tiene SHA-256 `bd4bbbbde3e9151ed40aef1cd75d3e7b7175da833efa5bffa4083fb1b82edd1e`. Al revertir únicamente el hash fijado del trabajador V95, reproduce byte por byte el blob oficial de plantilla TX769 `28417712f079c9a2fa836aa7641153d6872bc9cf`. El Go `rpgOwnedPluginHash` de anteriores versiones no reconocía ese SHA concreto, por lo que la nueva aplicación podía rechazar su actualización con `TX395_JOURNAL_OR_SOURCE_MISMATCH`.
 
 Se añadió **sólo ese hash único y revisado**, sin copiar archivos ajenos ni debilitar la protección contra modificaciones arbitrarias. El nuevo gate público `TX770_OWNER_TX769_PREDECESSOR_HASH_PASS` exige un test Go que apruebe ese SHA y rechace archivos modificados, **además** de los dos controles JavaScript y los 26 controles originales Windows. El paquete sigue cifrado y contiene el motor local original, sin API comercial.
+
+## TX771 — motor original V95 y caché PORTÁTILES por videojuego (22 de noviembre de 2026)
+
+**Código privado exacto**: `1e79a39df94be810918f50a377cfc1efb4e95f8f` de la cuenta Eduardo. El EXE autosuficiente pregunta primero por `Game.exe`, detecta un único RPG Maker MV/MZ legítimo y prepara su V95 verdadero con 22 archivos originales verificados en `<Juego>/Tenshixgame-IA/`, con contenido de `App`, `.local/TENSHIXGAME-RPG/engine`, caché española, modelos Argos y archivos temporales. Esto vale para C:, D:, E: y juegos completos trasladados a otros PCs. No necesita un API ni motor ajeno. El instalador crea un marcador de propiedad SHA del trabajador y rechaza carpetas ya existentes sin prueba de propiedad; conserva todo el resto del juego, sus plugins y partidas.
+
+**Nueva recuperación de TX769/TX770**: si el usuario borró el antiguo diario de C:, el nuevo instalador verifica el JS previo como código oficial (hash SHA o fuente TX770 completa normalizada con el Git blob inmutable), y reconstruye el respaldo desde un único registro `$plugins` generado de forma verificable por el instalador. No modifica ni adopta complementos desconocidos. Si falla la comprobación, aborta y conserva archivos en lugar de forzar cambios. 
+
+**Dibujo personalizado**: únicamente durante `Window_Message.startMessage`, intercepta la salida del conversor nativo original de esa instancia, después de que procese códigos de nombres dinámicos y antes de que `MPP_MessageEX` o `SRD_ShakingText` dibujen glifos. Acepta solamente una traducción completa, medida y validada en caché; no altera la ventana del personaje, entradas de juego ni el render global, y no pinta español encima de japonés ya dibujado. Prueba Windows del core oficial `TX771 CUSTOM NATIVE CONVERTER FIRST PAINT PASS`, además de la anterior TX768.
+
+**Pruebas de liberación**: después de los 26 pasos originales de inferencia neural V95 real, se ejecuta el EXE real en un videojuego MV sintético dentro de la unidad de trabajo, comprueba que instale su IA y el marcador original dentro del juego (no en C:), copia toda la carpeta a otra ubicación y abre el EXE con esa copia sin reinstalar el motor ni cambiar su hash. No se publica el EXE sin el PASS de estos pasos ni sin cifrado AES-256. **La simulación de ventanas NO constituye prueba en el título específico del propietario**: tras descargar debe verificarse japonés→español, nombres separados, persistencia en disco y reinicio de Game.exe sobre una copia legítima. Cualquier resultado fallido queda como HOLD para corrección, no se declarará versión funcional a ciegas.
+
+Flujo Windows público protegido: `https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/workflows/eduardo-original-rpg-win64.yml` (rama TX771 nombrada arriba).
