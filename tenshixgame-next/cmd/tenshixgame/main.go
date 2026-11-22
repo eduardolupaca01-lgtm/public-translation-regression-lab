@@ -7,7 +7,9 @@ import (
     "flag"
     "fmt"
     "os"
+    "path/filepath"
     "github.com/eduardolupaca01-lgtm/public-translation-regression-lab/tenshixgame-next/internal/engine"
+    "github.com/eduardolupaca01-lgtm/public-translation-regression-lab/tenshixgame-next/internal/portable"
 )
 func main(){
     catalog:=flag.Bool("catalogo",false,"mostrar los 17 grupos (no certificaciones)")
@@ -29,6 +31,13 @@ func main(){
         fmt.Fprintln(os.Stderr,"Inspección segura bloqueada:",err)
         os.Exit(3)
     }
-    if err=encoder.Encode(result);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+    root:=*game
+    if st,e:=os.Stat(root);e==nil&&!st.IsDir(){root=filepath.Dir(root)}
+    audit:=portable.AuditRoot(root)
+    payload:=struct{
+        engine.Result
+        InstalacionPortable portable.Report `json:"InstalacionPortable"`
+    }{Result:result,InstalacionPortable:audit}
+    if err=encoder.Encode(payload);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
     if result.Status!="identified"{os.Exit(3)}
 }
