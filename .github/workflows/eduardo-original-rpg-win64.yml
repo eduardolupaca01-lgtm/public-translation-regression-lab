@@ -36,7 +36,7 @@ jobs:
           echo "EDUARDO_ORIGINAL_PUBLIC_ORCHESTRATION_ONLY_PASS"
 
   rebuild-genuine-original-windows:
-    name: Eduardo ORIGINAL RPG EXE - 25 gates, encrypted owner-only output
+    name: Eduardo ORIGINAL RPG EXE - 26 gates, encrypted owner-only output
     needs: source-free-preflight
     runs-on: windows-2022
     timeout-minutes: 180
@@ -66,11 +66,11 @@ jobs:
           }
           Write-Host "EDUARDO_BUILD_CREDENTIALS_PRESENT_AND_NOT_LOGGED"
 
-      - name: Fetch actual private original source from Eduardo at fixed TX763 commit
+      - name: Fetch actual private original source from Eduardo at fixed TX765 commit
         uses: actions/checkout@v4
         with:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
-          ref: 1a3b215ccdfa04f6a3144c6c2f928913afbc57c2
+          ref: 091f7326101a61b02ecaa7a447370102f7952328
           path: original
           token: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
           persist-credentials: false
@@ -96,7 +96,7 @@ jobs:
           python ci/tools/replay_eduardo_original.py --source-root original --receipt "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json"
           if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ORIGINAL_V95_BUILD_OR_TEST_HOLD" }
           $receipt = Get-Content "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json" -Raw | ConvertFrom-Json
-          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or $receipt.steps_passed -ne 25 -or $receipt.source_commit -ne "1a3b215ccdfa04f6a3144c6c2f928913afbc57c2") {
+          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "091f7326101a61b02ecaa7a447370102f7952328") {
             throw "EDUARDO_ORIGINAL_EXE_RECEIPT_INVALID"
           }
 
@@ -117,7 +117,7 @@ jobs:
           }
           $directory = Join-Path $env:RUNNER_TEMP "eduardo-encrypted-output"
           New-Item -ItemType Directory -Force $directory | Out-Null
-          $ciphertext = Join-Path $directory "Tenshixgame-RPG-Original-V95-PRUEBA.7z"
+          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX765-V95-PRUEBA.7z"
           $passArgument = "-p" + $env:EDUARDO_RPG_ARCHIVE_PASSWORD
           & $sevenExe a -t7z -mhe=on -mx=0 $passArgument $ciphertext $exe | Out-Null
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ciphertext)) {
@@ -128,7 +128,7 @@ jobs:
           $receipt = Join-Path $env:RUNNER_TEMP "eduardo-original-rebuild-receipt.json"
           Copy-Item -LiteralPath $receipt -Destination (Join-Path $directory "eduardo-original-build-receipt.json")
           $hash = (Get-FileHash -LiteralPath $ciphertext -Algorithm SHA256).Hash.ToLowerInvariant()
-          ($hash + "  Tenshixgame-RPG-Original-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
+          ($hash + "  Tenshixgame-RPG-TX765-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
           Write-Host "EDUARDO_ORIGINAL_ENCRYPTED_ARCHIVE_SHA256=$hash"
           Write-Host "EDUARDO_ORIGINAL_REAL_V95_ONEFILE_ENCRYPTED_OWNER_ONLY_NO_PUBLIC_PLAINTEXT"
           "Verified original V95 EXE. Encrypted with owner-held EDUARDO_RPG_ARCHIVE_PASSWORD. Extract with 7-Zip and test only on a copy of your game. This does not certify the user's own game or authorize public distribution." |
@@ -137,7 +137,7 @@ jobs:
       - name: Upload ONLY encrypted original EXE and nonsensitive provenance
         uses: actions/upload-artifact@v4
         with:
-          name: Eduardo-Tenshixgame-RPG-ORIGINAL-V95-Windows-TEST-ENCRYPTED
+          name: Eduardo-Tenshixgame-RPG-ORIGINAL-TX765-V95-Windows-TEST-ENCRYPTED
           retention-days: 14
           if-no-files-found: error
           path: ${{ runner.temp }}/eduardo-encrypted-output/

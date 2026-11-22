@@ -1,4 +1,4 @@
-"""Execute original Eduardo TX763 Windows build, preserving its exact private gates.
+"""Execute original Eduardo TX765 Windows build, preserving its exact private gates.
 
 The private source is checked out only in the ephemeral Windows runner at a
 pinned SHA. No game files, model weights, original code, or build logs are
@@ -15,13 +15,14 @@ from pathlib import Path
 import subprocess
 
 SOURCE_REPO = "eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build"
-SOURCE_SHA = "1a3b215ccdfa04f6a3144c6c2f928913afbc57c2"
-SOURCE_BRANCH = "fix/tx763-native-marker-contract-20261120"
+SOURCE_SHA = "091f7326101a61b02ecaa7a447370102f7952328"
+SOURCE_BRANCH = "fix/tx765-rpg-live-bridge-native-paint-20261121"
 SOURCE_WORKFLOW = ".github/workflows/tx758-clean-current-baseline.yml"
 
 BUILD_STEPS = (
     "TX718 original cache speed, native labels, names, Japanese punctuation and strict regressions",
     "TX757 independently prove the durable-cache template survives restart before neural rebuild",
+    "TX765 protect synchronous custom RPG Bitmap from Spanish-over-Japanese and recover real bridge folder",
     "TX712 beta confirm V95 SQLite durable cache and native no-double-scan on MV/MZ",
     "Check new GUI and one-executable integrity tests only",
     "Verify TX203 archived source, bounded continuation and safe original onefile contracts",
@@ -88,7 +89,7 @@ def self_test():
     ] + [{"name": n, "shell": "pwsh", "run": "echo OK"}
          for n in BUILD_STEPS + EXCLUDED]
     sample = {"jobs": {"build-verify-private-windows": {"steps": template}}}
-    assert len(check_original_workflow(sample)) == 25
+    assert len(check_original_workflow(sample)) == 26
     template[-1]["name"] = "unauthorized release"
     try:
         check_original_workflow(sample)
@@ -129,6 +130,17 @@ def execute(source_root, receipt_path):
                                   text=True).strip()
     if sha != SOURCE_SHA:
         raise RuntimeError("EDUARDO_ORIGINAL_SOURCE_COMMIT_MISMATCH")
+    # Require the real existing app's TX765 runtime and bridge repairs.
+    # The original 26 Windows quality gates remain separately mandatory.
+    template = root / "reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js"
+    native_go = root / "reference/tx331-clean-product-host/cmd/tenshixgame-ui/main_windows.go"
+    for label, file, signatures in (
+        ("TX765_JS", template, ("tx765FirstNativePaint", "bridge_descriptor_located",
+                                "TenshigameTraduccion", "prefetch_read_summary")),
+        ("TX765_WINDOWS", native_go, ("TenshigameTranduccion", "TenshigameTraduccion")),
+    ):
+        if not file.is_file() or not all(p in file.read_text(encoding="utf-8") for p in signatures):
+            raise RuntimeError(label + "_ORIGINAL_SOURCE_REPAIR_MISSING")
     private_workflow = (root / SOURCE_WORKFLOW).read_bytes()
     steps = check_original_workflow(yaml.safe_load(private_workflow.decode("utf-8")))
     result = {
@@ -136,8 +148,9 @@ def execute(source_root, receipt_path):
         "status": "HOLD",
         "original_private_repository": SOURCE_REPO,
         "source_commit": sha,
+        "tx765_private_repair_source_verified": True,
         "source_workflow_sha256": hashlib.sha256(private_workflow).hexdigest(),
-        "real_original_steps": 25,
+        "real_original_steps": 26,
         "steps_passed": 0,
         "source_repository_written": False,
         "original_source_or_model_files_published": False,
