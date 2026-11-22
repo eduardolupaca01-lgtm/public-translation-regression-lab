@@ -1,0 +1,41 @@
+name: TX765 public Windows and Linux RPG regression tests
+
+on:
+  push:
+    branches:
+      - fix/tx765-public-live-rpg-regressions-20261121
+    paths:
+      - ".github/workflows/tx765-public-rpg-regression.yml"
+      - "tools/tx765_public_core.js"
+      - "tests/js/test_tx765_public_runtime.js"
+      - "docs/TX765_PUBLIC_RPG_TESTS.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: RPG first-paint and bridge checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Reject publication of private models or game binaries
+        run: python tools/publication_guard.py
+      - name: Check JS syntax
+        run: |
+          node --check tools/tx765_public_core.js
+          node --check tests/js/test_tx765_public_runtime.js
+      - name: Test native window replacement, bitmap, V95 bridge paths and limited scan
+        run: node tests/js/test_tx765_public_runtime.js
