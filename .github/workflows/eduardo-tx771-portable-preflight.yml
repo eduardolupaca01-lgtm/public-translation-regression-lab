@@ -1,0 +1,91 @@
+name: Eduardo TX771 portable game-local original V95 preflight
+
+on:
+  push:
+    branches:
+      - validation/tx771-portable-windows-20261122
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tx771-portable-windows:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      EDUARDO_RPG_SOURCE_TOKEN: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Validate token presence without disclosure
+        shell: pwsh
+        run: |
+          if (-not $env:EDUARDO_RPG_SOURCE_TOKEN -or -not $env:EDUARDO_RPG_SOURCE_TOKEN.StartsWith("github_pat_")) {
+            throw "EDUARDO_PRIVATE_SOURCE_READ_ACCESS_REQUIRED"
+          }
+
+      - name: Checkout exactly pinned source of Eduardo without publishing it
+        uses: actions/checkout@v4
+        with:
+          repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
+          ref: 00cea51198c6f55396347fb923f8ca677da58bf8
+          path: original
+          token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+
+      - name: Execute TX771 actual embedded RPG plugin JS with per-game V95 and cache
+        shell: pwsh
+        env:
+          TX771_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+          TX765_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+        run: |
+          node --check $env:TX771_TEST_PLUGIN
+          if ($LASTEXITCODE -ne 0) { throw "TX771_JS_SYNTAX_HOLD" }
+          node original/tests/js/test_tx771_game_local_v95_portability.js
+          if ($LASTEXITCODE -ne 0) { throw "TX771_GAME_LOCAL_MODEL_OR_CACHE_HOLD" }
+          Write-Host "TX771_JS_PORTABLE_MODEL_CACHE_PASS"
+          node original/tests/js/test_tx769_sqlite_durable_restart.js
+          if ($LASTEXITCODE -ne 0) { throw "TX771_SQLITE_RESTART_HOLD" }
+          node original/tests/js/test_tx770_sqlite_whitespace_recovery.js
+          if ($LASTEXITCODE -ne 0) { throw "TX771_SQLITE_WHITESPACE_RESTART_HOLD" }
+          Write-Host "TX771_SQLITE_RESTART_PASS"
+
+      - name: Verify Windows one-file portable launcher and safety tests
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx541-rpg-onefile
+          try {
+            go test . -run TestTX771 -count=1
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_ONEFILE_COMPILE_OR_TEST_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX771_PORTABLE_ONEFILE_TEST_PASS"
+
+      - name: Verify journal containment and original V95 sidecar installer with Go
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx331-clean-product-host
+          try {
+            go test . -run TestTX771 -count=1
+            if ($LASTEXITCODE -ne 0) { throw "TX771_JOURNAL_CONTAINMENT_HOLD" }
+            go test ./cmd/tenshixgame-ui -run TestTX771 -count=1
+            if ($LASTEXITCODE -ne 0) { throw "TX771_ORIGINAL_MODEL_PORTABLE_INSTALL_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX771_WINDOWS_GO_PORTABLE_PASS"
+
+      - name: Preflight conclusion
+        shell: pwsh
+        run: |
+          Write-Host "TX771_EDUARDO_PUBLIC_PORTABLE_PREFLIGHT_PASS"
+          Write-Host "Not a release: genuine model inference, game-specific native rendering, and full folder relocation must also pass"
