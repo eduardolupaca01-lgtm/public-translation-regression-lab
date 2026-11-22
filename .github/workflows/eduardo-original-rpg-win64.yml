@@ -1,4 +1,4 @@
-name: TENSHIXGAME TX776 V95 diagnostico instalador (prueba cifrada)
+name: TENSHIXGAME TX777 V95 arranque sin popup y diagnostico (cifrado)
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - "tools/tx775_dual_name_guard.py"
       - "tools/tx775_real_core_probe.js"
       - "tools/tx776/**"
+      - "tools/tx777/**"
       - ".github/workflows/eduardo-original-rpg-win64.yml"
       - "docs/EDUARDO_ORIGINAL_RPG_BUILD_HANDOFF.md"
   workflow_dispatch:
@@ -43,6 +44,7 @@ jobs:
           python tools/tx772_public_portable_upgrade.py --self-test
           python tools/tx775_dual_name_guard.py --self-test
           python tools/tx776/tx776_patch_installer.py --self-test
+          python tools/tx777/tx777_patch_startup.py --self-test
           python tools/publication_guard.py
           echo "EDUARDO_ORIGINAL_PUBLIC_ORCHESTRATION_ONLY_PASS"
 
@@ -116,6 +118,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "TX776_ORIGINAL_INSTALLER_DIAGNOSTIC_SOURCE_HOLD" }
           Write-Host "TX776_ORIGINAL_INSTALLER_STAGE_DIAGNOSTIC_PATCH_APPLIED"
 
+      - name: TX777 replace modal V95 welcome with immediate native launcher in SHA-pinned original
+        shell: pwsh
+        run: |
+          python ci/tools/tx777/tx777_patch_startup.py --source-root original --overlays ci/tools/tx777
+          if ($LASTEXITCODE -ne 0) { throw "TX777_SOURCE_PINNED_WINDOW_LAUNCH_HOLD" }
+          Write-Host "TX777_NATIVE_LAUNCHER_REPLACES_MODAL_WELCOME"
+
       - name: Diagnose private V95 gate-06 contracts without leaking their test output
         shell: pwsh
         run: |
@@ -128,6 +137,27 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: TX777 prove no popup and original TX771 Windows startup tests
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx541-rpg-onefile
+          try {
+            $log=Join-Path $env:RUNNER_TEMP "tx777-native-startup-tests-private.log"
+            go test . -run 'TestTX777|TestTX771' -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) {
+              $why="GO_STARTUP_COMPILE_OR_TEST_FAILURE"
+              $raw=Get-Content -LiteralPath $log -Raw
+              if ($raw -match 'undefined:') {$why="GO_UNDEFINED_SYMBOL"}
+              elseif($raw -match 'syntax error') {$why="GO_PARSER_FAILURE"}
+              elseif($raw -match 'declared and not used') {$why="GO_UNUSED_SYMBOL"}
+              elseif($raw -match '--- FAIL: TestTX777') {$why="TX777_NOMODAL_REGRESSION"}
+              elseif($raw -match '--- FAIL: TestTX771') {$why="HISTORIC_TX771_REGRESSION"}
+              Write-Host ("TX777_SAFE_STARTUP_FAILURE_CATEGORY="+$why)
+              throw "TX777_ORIGINAL_WINDOWS_NATIVE_LAUNCH_HOLD"
+            }
+          } finally { Pop-Location }
+          Write-Host "TX777_NO_V95_POPUP_AND_HISTORIC_BOOTSTRAP_TEST_PASS"
 
       - name: TX776 prove Win32 error report privacy and chronological install diagnostics
         shell: pwsh
@@ -422,7 +452,7 @@ jobs:
           }
           $directory = Join-Path $env:RUNNER_TEMP "eduardo-encrypted-output"
           New-Item -ItemType Directory -Force $directory | Out-Null
-          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX776-DIAGNOSTICO-V95-PRUEBA.7z"
+          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX777-INICIO-SIN-POPUP-V95-PRUEBA.7z"
           $passArgument = "-p" + $env:EDUARDO_RPG_ARCHIVE_PASSWORD
           & $sevenExe a -t7z -mhe=on -mx=0 $passArgument $ciphertext $exe | Out-Null
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ciphertext)) {
@@ -433,16 +463,16 @@ jobs:
           $receipt = Join-Path $env:RUNNER_TEMP "eduardo-original-rebuild-receipt.json"
           Copy-Item -LiteralPath $receipt -Destination (Join-Path $directory "eduardo-original-build-receipt.json")
           $hash = (Get-FileHash -LiteralPath $ciphertext -Algorithm SHA256).Hash.ToLowerInvariant()
-          ($hash + "  Tenshixgame-RPG-TX776-DIAGNOSTICO-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
+          ($hash + "  Tenshixgame-RPG-TX777-INICIO-SIN-POPUP-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
           Write-Host "EDUARDO_ORIGINAL_ENCRYPTED_ARCHIVE_SHA256=$hash"
           Write-Host "EDUARDO_ORIGINAL_REAL_V95_ONEFILE_ENCRYPTED_OWNER_ONLY_NO_PUBLIC_PLAINTEXT"
-          "TX775 dual native-name validation candidate built with original V95. Encrypted with owner-held EDUARDO_RPG_ARCHIVE_PASSWORD. Extract with 7-Zip and test only on a copy of your game. This does not certify the user's own game or authorize public distribution." |
+          "TX777 original V95: main Win32 game selector instead of modal V95 welcome, live model preparation diagnostics, TX776 cumulative error panel, TX775 protected names. Test only on a copy. This does not certify the user's own game or authorize public distribution." |
             Set-Content -LiteralPath (Join-Path $directory "LEER-ORIGINAL.txt") -Encoding utf8
 
       - name: Upload ONLY encrypted original EXE and nonsensitive provenance
         uses: actions/upload-artifact@v4
         with:
-          name: Eduardo-TENSHIXGAME-TX776-V95-DIAGNOSTICO-PORTABLE-Windows-ENCRYPTED
+          name: Eduardo-TENSHIXGAME-TX777-V95-ARRANQUE-SIN-POPUP-Windows-ENCRYPTED
           retention-days: 14
           if-no-files-found: error
           path: ${{ runner.temp }}/eduardo-encrypted-output/
