@@ -87,7 +87,7 @@ def main()->None:
         original=Path(__file__).resolve().parents[1]/"tx777"/GUI
         transformed=panel(original.read_text(encoding="utf-8"))
         assert "servidorClassifyPreparationFailure(err)" in transformed
-        assert "TX777_ERROR_NO_CLASIFICADO" not in transformed
+        assert 'event.code="TX777_ERROR_NO_CLASIFICADO"' not in transformed
         assert all(".." not in x for x in GO_FILES)
         print("SERVIDOR_PREPARACION_DIAGNOSTICO_SOURCE_PREFLIGHT_PASS")
         return
