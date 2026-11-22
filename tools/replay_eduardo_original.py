@@ -15,7 +15,7 @@ from pathlib import Path
 import subprocess
 
 SOURCE_REPO = "eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build"
-SOURCE_SHA = "45fe914f21d1c09a2b49ae8f87529e9511bc643f"
+SOURCE_SHA = "c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33"
 SOURCE_BRANCH = "fix/tx770-rpg-foreground-cache-20261122"
 SOURCE_WORKFLOW = ".github/workflows/tx758-clean-current-baseline.yml"
 
@@ -146,6 +146,11 @@ def execute(source_root, receipt_path):
          ("TX770 FOREGROUND CACHE BEFORE COOLDOWN PASS", "A failed background retry", "No second urgent retry")),
         ("TX770_WHITESPACE_RESTART_TEST", root / "tests/js/test_tx770_sqlite_whitespace_recovery.js",
          ("TX770 SQLITE WHITESPACE RESTORE PASS", "paddedFile", "paddedRestartWindow")),
+        ("TX770_OWNER_PREDECESSOR_GO", root / "reference/tx331-clean-product-host/rpg_live.go",
+         ("rpgLegacyTX769OwnerInstalledSHA", "rpgOwnedPluginHash")),
+        ("TX770_OWNER_PREDECESSOR_TEST", root / "reference/tx331-clean-product-host/rpg_tx770_owner_tx769_upgrade_test.go",
+         ("TestTX770RecognizesOwnersExactTX769InstalledScriptForUpgrade",
+          "TX770 must not relax owner source guard")),
     ):
         if not file.is_file() or not all(p in file.read_text(encoding="utf-8") for p in signatures):
             raise RuntimeError(label + "_ORIGINAL_SOURCE_REPAIR_MISSING")

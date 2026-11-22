@@ -72,7 +72,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
-          ref: 45fe914f21d1c09a2b49ae8f87529e9511bc643f
+          ref: c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33
           path: original
           token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
           persist-credentials: false
@@ -130,6 +130,83 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "TX770_SQLITE_WHITESPACE_RESTART_HOLD" }
           Write-Host "TX770_SQLITE_WHITESPACE_RESTART_PASS"
 
+      - name: TX770 approve owner's exact installed TX769 JS for crash-safe in-place upgrade
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx331-clean-product-host
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx770-known-predecessor.log"
+            go test . -run '^TestTX770RecognizesOwnersExactTX769InstalledScriptForUpgrade
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --no-input "PyYAML==6.0.2"
+          if ($LASTEXITCODE -ne 0) { throw "BUILD_REPLAY_YAML_PARSER_MISSING" }
+
+      - name: Run the EXACT original source-pinned GUI and V95 chain on Windows
+        shell: pwsh
+        run: |
+          python ci/tools/replay_eduardo_original.py --source-root original --receipt "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json"
+          if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ORIGINAL_V95_BUILD_OR_TEST_HOLD" }
+          $receipt = Get-Content "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json" -Raw | ConvertFrom-Json
+          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33") {
+            throw "EDUARDO_ORIGINAL_EXE_RECEIPT_INVALID"
+          }
+
+      - name: Encrypt private original EXE so public Actions never exposes the underlying binary
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "Tenshixgame-RPG.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "ORIGINAL_EXE_NOT_FOUND"
+          }
+          $seven = Get-Command 7z.exe -ErrorAction SilentlyContinue
+          if ($null -eq $seven -and (Test-Path "C:\Program Files\7-Zip\7z.exe")) {
+            $sevenExe = "C:\Program Files\7-Zip\7z.exe"
+          } elseif ($null -ne $seven) {
+            $sevenExe = $seven.Source
+          } else {
+            throw "7ZIP_AES256_REQUIRED_FOR_PROTECTED_ARTIFACT"
+          }
+          $directory = Join-Path $env:RUNNER_TEMP "eduardo-encrypted-output"
+          New-Item -ItemType Directory -Force $directory | Out-Null
+          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX770-V95-PRUEBA.7z"
+          $passArgument = "-p" + $env:EDUARDO_RPG_ARCHIVE_PASSWORD
+          & $sevenExe a -t7z -mhe=on -mx=0 $passArgument $ciphertext $exe | Out-Null
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ciphertext)) {
+            throw "EDUARDO_PRIVATE_EXE_ENCRYPTION_FAILED"
+          }
+          & $sevenExe t $passArgument $ciphertext | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ENCRYPTED_ARCHIVE_INTEGRITY_FAILED" }
+          $receipt = Join-Path $env:RUNNER_TEMP "eduardo-original-rebuild-receipt.json"
+          Copy-Item -LiteralPath $receipt -Destination (Join-Path $directory "eduardo-original-build-receipt.json")
+          $hash = (Get-FileHash -LiteralPath $ciphertext -Algorithm SHA256).Hash.ToLowerInvariant()
+          ($hash + "  Tenshixgame-RPG-TX770-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
+          Write-Host "EDUARDO_ORIGINAL_ENCRYPTED_ARCHIVE_SHA256=$hash"
+          Write-Host "EDUARDO_ORIGINAL_REAL_V95_ONEFILE_ENCRYPTED_OWNER_ONLY_NO_PUBLIC_PLAINTEXT"
+          "Verified original V95 EXE. Encrypted with owner-held EDUARDO_RPG_ARCHIVE_PASSWORD. Extract with 7-Zip and test only on a copy of your game. This does not certify the user's own game or authorize public distribution." |
+            Set-Content -LiteralPath (Join-Path $directory "LEER-ORIGINAL.txt") -Encoding utf8
+
+      - name: Upload ONLY encrypted original EXE and nonsensitive provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eduardo-Tenshixgame-RPG-ORIGINAL-TX770-V95-Windows-TEST-ENCRYPTED
+          retention-days: 14
+          if-no-files-found: error
+          path: ${{ runner.temp }}/eduardo-encrypted-output/
+
+      - name: Keep only nonsensitive HOLD receipt on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eduardo-Original-RPG-Windows-HOLD
+          retention-days: 7
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/eduardo-original-rebuild-receipt.json
+ -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX770_OWNER_TX769_PREDECESSOR_HASH_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX770_OWNER_TX769_PREDECESSOR_HASH_PASS"
+
       - name: Install build-orchestrator YAML parser
         shell: pwsh
         run: |
@@ -142,7 +219,7 @@ jobs:
           python ci/tools/replay_eduardo_original.py --source-root original --receipt "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json"
           if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ORIGINAL_V95_BUILD_OR_TEST_HOLD" }
           $receipt = Get-Content "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json" -Raw | ConvertFrom-Json
-          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "45fe914f21d1c09a2b49ae8f87529e9511bc643f") {
+          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33") {
             throw "EDUARDO_ORIGINAL_EXE_RECEIPT_INVALID"
           }
 

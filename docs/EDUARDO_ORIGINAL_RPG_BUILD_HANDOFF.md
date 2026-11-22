@@ -5,7 +5,7 @@
 ## Código y procedencia
 
 - Código real de la GUI, plugin RPG Maker, instalador, pruebas, worker y modelos: repositorio PRIVADO `eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build`.
-- Commit de esta prueba: `45fe914f21d1c09a2b49ae8f87529e9511bc643f` de `fix/tx770-rpg-foreground-cache-20261122` (rama privada, no rama principal).
+- Commit de esta prueba: `c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33` de `fix/tx770-rpg-foreground-cache-20261122` (rama privada, no rama principal).
 - Workflow original: `.github/workflows/tx758-clean-current-baseline.yml` del mismo commit (emplea la suite TX765).
 - Compilador público: `.github/workflows/eduardo-original-rpg-win64.yml` con `tools/replay_eduardo_original.py`.
 
@@ -81,8 +81,14 @@ Nuevo control bloqueante: `tests/js/test_tx769_sqlite_durable_restart.js`, ejecu
 
 El propietario sigue viendo japonés pese a que V95 ya dispone de traducciones. El complemento real está activo y cargado al final de plugins.js. El único diagnóstico disponible era un ENOENT de snapshot; esto no demuestra que el worker carezca de traducciones. El análisis comparó el mecanismo del TX203-RC histórico con el adaptador RPG Maker de Ultra, sin adquirir ni copiar su motor de pago.
 
-**Código fuente privado del mismo titular:** \`fix/tx770-rpg-foreground-cache-20261122\`, SHA exacto \`45fe914f21d1c09a2b49ae8f87529e9511bc643f\`. Corrige un fallo probado: \`add()\` TX769 consultaba \`retryAfter\` ANTES de cargar desde disco una traducción guardada. TX770 siempre carga la entrada primero y limita a un reintento visible cada 30 segundos si faltó el resultado. Reconoce SOLO variaciones de espacio validadas en mensajes sin controles o nombres, evita colisiones y conserva la nueva variante en su propia entrada exacta. Registra \`runtime_bootstrap\`, \`native_adapter_installed\`, \`v95_sqlite_feed_unavailable\` y mantiene los diagnósticos existentes, sin texto ni secretos.
+**Código fuente privado del mismo titular:** \`fix/tx770-rpg-foreground-cache-20261122\`, SHA exacto \`c6ed1b08d1140eec5f1e7fa6f46de86b0072ac33\`. Corrige un fallo probado: \`add()\` TX769 consultaba \`retryAfter\` ANTES de cargar desde disco una traducción guardada. TX770 siempre carga la entrada primero y limita a un reintento visible cada 30 segundos si faltó el resultado. Reconoce SOLO variaciones de espacio validadas en mensajes sin controles o nombres, evita colisiones y conserva la nueva variante en su propia entrada exacta. Registra \`runtime_bootstrap\`, \`native_adapter_installed\`, \`v95_sqlite_feed_unavailable\` y mantiene los diagnósticos existentes, sin texto ni secretos.
 
 Los gates públicos nuevos deben aprobar \`test_tx770_foreground_cache_before_cooldown.js\` y \`test_tx770_sqlite_whitespace_recovery.js\` **antes** de los 26 controles privados originales. Los fixtures de pruebas no son el juego comercial ni demuestran que sus efectos de texto personalizados ya sean compatibles; no desactivar controles de nombres, opciones y no-superposición para aumentar artificialmente los contadores. El EXE incorpora el modelo local OPUS/Argos verificado, sin conexión a API de pago ni software adicional.
 
 El artefacto se publica **solo cifrado** y sus archivos de código/modelos originales no aparecen en el repositorio público.
+
+## TX770 — compatibilidad de actualizaciones in situ desde TX769 del propietario
+
+**Hallazgo adicional revisado antes de entregar:** la cadena TX769 de JavaScript realmente instalada por el propietario tiene SHA-256 `bd4bbbbde3e9151ed40aef1cd75d3e7b7175da833efa5bffa4083fb1b82edd1e`. Al revertir únicamente el hash fijado del trabajador V95, reproduce byte por byte el blob oficial de plantilla TX769 `28417712f079c9a2fa836aa7641153d6872bc9cf`. El Go `rpgOwnedPluginHash` de anteriores versiones no reconocía ese SHA concreto, por lo que la nueva aplicación podía rechazar su actualización con `TX395_JOURNAL_OR_SOURCE_MISMATCH`.
+
+Se añadió **sólo ese hash único y revisado**, sin copiar archivos ajenos ni debilitar la protección contra modificaciones arbitrarias. El nuevo gate público `TX770_OWNER_TX769_PREDECESSOR_HASH_PASS` exige un test Go que apruebe ese SHA y rechace archivos modificados, **además** de los dos controles JavaScript y los 26 controles originales Windows. El paquete sigue cifrado y contiene el motor local original, sin API comercial.
