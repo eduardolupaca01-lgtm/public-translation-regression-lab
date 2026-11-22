@@ -5,7 +5,7 @@
 ## Código y procedencia
 
 - Código real de la GUI, plugin RPG Maker, instalador, pruebas, worker y modelos: repositorio PRIVADO `eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build`.
-- Commit de esta prueba: `08a181052f9c5eaa7ef6c71bb11eed487b7f97c0` de `fix/tx769-rpg-sqlite-durable-restore-20261122` (rama privada, no rama principal).
+- Commit de esta prueba: `45fe914f21d1c09a2b49ae8f87529e9511bc643f` de `fix/tx770-rpg-foreground-cache-20261122` (rama privada, no rama principal).
 - Workflow original: `.github/workflows/tx758-clean-current-baseline.yml` del mismo commit (emplea la suite TX765).
 - Compilador público: `.github/workflows/eduardo-original-rpg-win64.yml` con `tools/replay_eduardo_original.py`.
 
@@ -24,7 +24,7 @@ Desde GitHub, abrir el repositorio público → **Settings → Secrets and varia
 2. Seleccionar **Run workflow** con la rama `build/eduardo-original-rpg-win64-20261121` (o volver a ejecutar los trabajos después de crear los dos secretos).
 3. El runner verifica el SHA exacto del repositorio privado y comprueba los **26 pasos** del workflow original: GUI, V95 original, repaquetado de 21 componentes, 10 traducciones reales y 6 diálogos RPG, SQLite, instalación, primer y segundo arranque, integridad SHA, rollback y código de los plugins.
 4. No ejecuta los dos pasos finales originales de modificación de la rama privada ni de creación de una release. El programa original se crea dentro del runner, se cifra con contraseña y solo el archivo cifrado y el recibo de hash pueden descargarse del artifact.
-5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX769-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX769-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
+5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX770-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX770-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
 
 ## Evidencia actualizada de TX765 (2026-11-22)
 
@@ -76,3 +76,13 @@ La captura F10 después de TX768 registra `Recibidos 7820/8591`, `Mostrados 8 ·
 La rama privada `fix/tx769-rpg-sqlite-durable-restore-20261122` (commit exacto `08a181052f9c5eaa7ef6c71bb11eed487b7f97c0`) repara dos fallos de fuente: (1) las traducciones que llegan por `/updates` no tenían espejo durable individual, por lo que se podía perder la recuperación si el snapshot general superaba 5 MiB o no se guardaba; (2) una entrada individual anterior podía sobreescribir una revisión SQLite más nueva. El espejo emplea E/S asíncrona, verifica el archivo previo y nunca modifica JSON, partidas o motor del juego. Además añade el evento `native_lookup_untranslated` limitado y sin texto de juego ni token para diagnosticar escenas que siguen en japonés.
 
 Nuevo control bloqueante: `tests/js/test_tx769_sqlite_durable_restart.js`, ejecutado sobre la plantilla real del complemento **antes** de reconstruir V95 en Windows. Simula un registro SQLite verificado, caché individual anterior incorrecta, snapshot general mayor de 5 MiB, reinicio con feed histórico vacío y ausencia de llamadas de traducción repetidas. El flujo público sigue exigiendo los 26 controles originales y cifra el único EXE con 7-Zip. Su PASS no sustituye la observación del juego real; queda pendiente la causa de todas las frases japonesas de formato personalizado y de los 711 rechazos por calidad. 
+
+## TX770: diálogo visible, reutilización de caché y compatibilidad acotada
+
+El propietario sigue viendo japonés pese a que V95 ya dispone de traducciones. El complemento real está activo y cargado al final de plugins.js. El único diagnóstico disponible era un ENOENT de snapshot; esto no demuestra que el worker carezca de traducciones. El análisis comparó el mecanismo del TX203-RC histórico con el adaptador RPG Maker de Ultra, sin adquirir ni copiar su motor de pago.
+
+**Código fuente privado del mismo titular:** \`fix/tx770-rpg-foreground-cache-20261122\`, SHA exacto \`45fe914f21d1c09a2b49ae8f87529e9511bc643f\`. Corrige un fallo probado: \`add()\` TX769 consultaba \`retryAfter\` ANTES de cargar desde disco una traducción guardada. TX770 siempre carga la entrada primero y limita a un reintento visible cada 30 segundos si faltó el resultado. Reconoce SOLO variaciones de espacio validadas en mensajes sin controles o nombres, evita colisiones y conserva la nueva variante en su propia entrada exacta. Registra \`runtime_bootstrap\`, \`native_adapter_installed\`, \`v95_sqlite_feed_unavailable\` y mantiene los diagnósticos existentes, sin texto ni secretos.
+
+Los gates públicos nuevos deben aprobar \`test_tx770_foreground_cache_before_cooldown.js\` y \`test_tx770_sqlite_whitespace_recovery.js\` **antes** de los 26 controles privados originales. Los fixtures de pruebas no son el juego comercial ni demuestran que sus efectos de texto personalizados ya sean compatibles; no desactivar controles de nombres, opciones y no-superposición para aumentar artificialmente los contadores. El EXE incorpora el modelo local OPUS/Argos verificado, sin conexión a API de pago ni software adicional.
+
+El artefacto se publica **solo cifrado** y sus archivos de código/modelos originales no aparecen en el repositorio público.

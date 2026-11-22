@@ -15,8 +15,8 @@ from pathlib import Path
 import subprocess
 
 SOURCE_REPO = "eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build"
-SOURCE_SHA = "08a181052f9c5eaa7ef6c71bb11eed487b7f97c0"
-SOURCE_BRANCH = "fix/tx769-rpg-sqlite-durable-restore-20261122"
+SOURCE_SHA = "45fe914f21d1c09a2b49ae8f87529e9511bc643f"
+SOURCE_BRANCH = "fix/tx770-rpg-foreground-cache-20261122"
 SOURCE_WORKFLOW = ".github/workflows/tx758-clean-current-baseline.yml"
 
 BUILD_STEPS = (
@@ -135,13 +135,17 @@ def execute(source_root, receipt_path):
     template = root / "reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js"
     native_go = root / "reference/tx331-clean-product-host/cmd/tenshixgame-ui/main_windows.go"
     for label, file, signatures in (
-        ("TX765_JS", template, ("tx765FirstNativePaint", "separateName", "nameVisible", "localNameBox", "_tx765FirstPaintSource", "dynamicSpeaker", "mirrorSqliteTranslation", "sqliteVerifiedKeys", "native_lookup_untranslated", "bridge_descriptor_located",
+        ("TX765_JS", template, ("tx765FirstNativePaint", "separateName", "nameVisible", "localNameBox", "_tx765FirstPaintSource", "dynamicSpeaker", "mirrorSqliteTranslation", "sqliteVerifiedKeys", "native_lookup_untranslated", "whitespaceAliasKey", "foregroundRetriedAt", "native_adapter_installed", "bridge_descriptor_located",
                                 "TenshigameTraduccion", "prefetch_read_summary")),
         ("TX765_WINDOWS", native_go, ("TenshigameTranduccion", "TenshigameTraduccion")),
         ("TX768_JS_TEST", root / "tests/js/test_tx765_no_overdraw_sync_custom_start.js",
          ("TX768 PASS", "pendingSpeaker", "inlineSpeaker")),
         ("TX769_SQLITE_PERSISTENCE_TEST", root / "tests/js/test_tx769_sqlite_durable_restart.js",
          ("TX769 SQLITE DURABLE RESTORE PASS", "awaitSavedSqliteMirror", "serveHistoricalSqlite=false")),
+        ("TX770_FOREGROUND_RECOVERY_TEST", root / "tests/js/test_tx770_foreground_cache_before_cooldown.js",
+         ("TX770 FOREGROUND CACHE BEFORE COOLDOWN PASS", "A failed background retry", "One bounded retry")),
+        ("TX770_WHITESPACE_RESTART_TEST", root / "tests/js/test_tx770_sqlite_whitespace_recovery.js",
+         ("TX770 SQLITE WHITESPACE RESTORE PASS", "paddedFile", "paddedRestartWindow")),
     ):
         if not file.is_file() or not all(p in file.read_text(encoding="utf-8") for p in signatures):
             raise RuntimeError(label + "_ORIGINAL_SOURCE_REPAIR_MISSING")
