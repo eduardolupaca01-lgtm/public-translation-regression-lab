@@ -1,0 +1,97 @@
+name: TX775 private pinned visual baseline vs dual guarded source
+
+on:
+  push:
+    branches:
+      - rebuild/tenshixgame-unificado-deteccion-20261122
+    paths:
+      - tools/tx775_dual_name_guard.py
+      - tools/tx775_real_core_probe.js
+      - .github/workflows/tx775-visual-baseline.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare-unmodified-source-to-guarded:
+    name: Exact V95 source baseline and TX775 JS regression without model upload
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
+          ref: aeb9ff9326e418fbabe2d53dff7891f4fb340c37
+          path: original
+          token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Compare the exact same TX768 test with and without the TX775 patch
+        shell: pwsh
+        run: |
+          $expected="aeb9ff9326e418fbabe2d53dff7891f4fb340c37"
+          $actual=(git -C original rev-parse HEAD).Trim()
+          if ($actual -ne $expected) { throw "TX775_PRIVATE_SHA_DIFFERENT" }
+          function Invoke-VisualRegression($label) {
+            $log=Join-Path $env:RUNNER_TEMP ("tx775-private-" + $label + ".txt")
+            node original/tests/js/test_tx765_no_overdraw_sync_custom_start.js *> $log
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host ("TX775_"+$label+"_VISUAL=PASS")
+              return $true
+            }
+            $message=Get-Content -LiteralPath $log -Raw
+            $state="UNCLASSIFIED_SYNTHETIC_REGRESSION"
+            $cases=@(
+              @{text="native state must be fully Spanish BEFORE";code="CUSTOM_NATIVE_FIRST_PAINT"},
+              @{text="cached Spanish must replace Japanese BEFORE";code="FIRST_PAINT_CACHE"},
+              @{text="only the Japanese spoken body";code="SPEAKER_FOREGROUND_REQUEST"},
+              @{text="independent visible speaker";code="SEPARATE_NAME_BITMAP"},
+              @{text="Japanese name box and Spanish spoken body";code="NATIVE_SPEAKER_BODY"},
+              @{text="Expect original clean core";code="CORE_SOURCE_LAYOUT"},
+              @{text="TX765 verified core";code="CORE_TEST_LOAD"}
+            )
+            foreach($case in $cases){ if($message.Contains($case.text)) { $state=$case.code;break } }
+            if($state -eq "UNCLASSIFIED_SYNTHETIC_REGRESSION") {
+              $assertion=[regex]::Match($message,'AssertionError \\[ERR_ASSERTION\\]:\\s*([^\\r\\n]{1,160})')
+              if($assertion.Success) {
+                $safeMessage= [regex]::Replace($assertion.Groups[1].Value,'[^A-Za-z0-9 _-]','_')
+                $state="ASSERT_"+$safeMessage.Substring(0,[Math]::Min(110,$safeMessage.Length))
+              } elseif($message -match "TypeError:") {$state="NODE_TYPE_ERROR"}
+              elseif($message -match "ReferenceError:") {$state="NODE_REFERENCE_ERROR"}
+              elseif($message -match "SyntaxError:") {$state="NODE_SYNTAX_ERROR"}
+              elseif($message -match "ERR_ASSERTION") {$state="UNMATCHED_ASSERTION"}
+            }
+            if($state -eq "UNMATCHED_ASSERTION" -or $state -eq "UNCLASSIFIED_SYNTHETIC_REGRESSION") {
+              $stack=[regex]::Match($message,'test_tx765_no_overdraw_sync_custom_start[.]js:([0-9]{1,4})')
+              if($stack.Success) {$state="SYNTHETIC_TEST_LINE_"+$stack.Groups[1].Value}
+            }
+            Write-Host ("TX775_"+$label+"_VISUAL=FAIL_"+$state)
+            return $false
+          }
+          $plugin="original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js"
+          node ci/tools/tx775_real_core_probe.js $plugin original
+          if ($LASTEXITCODE -ne 0) { throw "TX775_NATIVE_ORIGINAL_CORE_BASELINE_HOLD" }
+          $baseline=Invoke-VisualRegression "ORIGINAL"
+          python ci/tools/tx775_dual_name_guard.py --source-root original
+          if ($LASTEXITCODE -ne 0) { throw "TX775_EXACT_SOURCE_PATCH_HOLD" }
+          node --check $plugin
+          node ci/tools/tx775_real_core_probe.js $plugin patched
+          if ($LASTEXITCODE -ne 0) { throw "TX775_NATIVE_DUAL_GUARD_NOT_ACCEPTED" }
+          if ($LASTEXITCODE -ne 0) { throw "TX775_PATCHED_JS_SYNTAX_HOLD" }
+          $patched=Invoke-VisualRegression "PATCHED"
+          if (-not $baseline -or -not $patched) {
+            throw "TX775_VISUAL_BASELINE_OR_PATCHED_REGRESSION_UNRESOLVED"
+          }
+          Write-Host "TX775_VISUAL_SOURCE_DELTA_NO_REGRESSION_PASS"

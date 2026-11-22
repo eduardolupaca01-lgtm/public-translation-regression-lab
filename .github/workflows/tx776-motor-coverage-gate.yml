@@ -1,0 +1,34 @@
+name: TENSHIXGAME 17-family evidence and safe installation gate
+
+on:
+  push:
+    branches:
+      - rebuild/tenshixgame-unificado-deteccion-20261122
+    paths:
+      - tenshixgame-next/internal/engine/catalog.go
+      - tenshixgame-next/docs/TX776_MATRIZ_MOTORES_17_CONTRATO.json
+      - tenshixgame-next/tools/verify_17_family_matrix.py
+      - .github/workflows/tx776-motor-coverage-gate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-motor-inventory:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compare exact Go catalogue and seventeen family installation scope
+        shell: bash
+        run: |
+          python -m py_compile tenshixgame-next/tools/verify_17_family_matrix.py
+          python tenshixgame-next/tools/verify_17_family_matrix.py
+          echo "TX776_SOURCE_BOUND_FAMILY_SCOPE_GATE_PASS"

@@ -1,0 +1,36 @@
+name: TX775 double-gate Japanese actor and Spanish dialogue regression
+
+on:
+  push:
+    branches:
+      - rebuild/tenshixgame-unificado-deteccion-20261122
+    paths:
+      - tools/tx775_dual_name_guard.py
+      - .github/workflows/tx775-dual-native-guards.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-free:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    name: Python+JS protected actor test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Safe synthetic tests for both native controls
+        shell: bash
+        run: |
+          python -m py_compile tools/tx775_dual_name_guard.py
+          python tools/tx775_dual_name_guard.py --self-test
+          echo "TX775_BOTH_ACTOR_PROTECTION_LAYERS_GREEN"

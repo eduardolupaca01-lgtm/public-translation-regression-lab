@@ -1,0 +1,232 @@
+{
+  "schema": "tenshixgame-windows-family-acceptance-v1",
+  "as_of": "2026-11-22",
+  "product": "TENSHIXGAME",
+  "scope": "Windows native game-local V95 offline translation",
+  "evidence_levels": {
+    "E0": "Documented format or source; not proven working",
+    "E1": "Synthetic or source-bound automated tests",
+    "E2": "Original Windows V95 binary built and model/integrity tests passed",
+    "E3": "Owner's real game visibly translated, including choices and native speaker",
+    "E4": "Owner's game moved to another clean Windows machine and used offline"
+  },
+  "catalog_family_count": 17,
+  "installed_in_unified_R1": false,
+  "physically_certified_game_families": 0,
+  "source_notes": [
+    "Historical TX354 reported 0 of 52 physical Windows10 scenarios at its own date; this is not a claim that physical tests could never be completed later.",
+    "17 menu families are not 17 TX207 resource profiles and not five launcher variants.",
+    "The TX775 V95 package applies only to MV/MZ and is not part of unified R1 detector EXE.",
+    "Every adaptation must be validated before install and revert correctly without touching unrelated data.",
+    "Source-backed TX200 real Windows QA includes Godot official engine, Chromium Tyrano/VNM, Java JAR and i18next runtime plus GUI fixture tests for LCF, KAG, Unity, Unreal, GameMaker and Light.vn; all remain NOT_IN_R1.",
+    "No release-level real user-game certification exists merely from recorded synthetic Windows CI success; each family stays disabled in the R1 detector for installation."
+  ],
+  "families": [
+    {
+      "id": "rpg-maker",
+      "name": "RPG Maker",
+      "evidence_status": "original-v95-mv-mz",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "RPG Maker MV/MZ tiene 26 pruebas originales con V95 y actualización local; 2000/2003 tuvo instalación/reversión GUI de LCF binario de proyectos desechables, NO integrado en el instalador nuevo.",
+      "historical_ci_runs": [
+        45049228765,
+        42602582533
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "renpy",
+      "name": "Ren'Py",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Variantes 6.x/7.x/8.x requieren bridge Windows y pruebas de saves, menus y escena"
+    },
+    {
+      "id": "godot",
+      "name": "Godot",
+      "evidence_status": "historical-engine-runtime",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Motor oficial Godot 4.3 para Windows descargado con SHA512, ejecutó proyecto propio EN/JA→ES con V95, F10/clic y restauración; no juego comercial.",
+      "historical_ci_runs": [
+        42715415876
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "tyrano",
+      "name": "TyranoScript",
+      "evidence_status": "historical-bounded-runtime",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Chromium real presentó EN/JA→ES, elecciones, F10 y pausa/reanudación con API Tyrano de muestra; no motor comercial completo.",
+      "historical_ci_runs": [
+        42666252946
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "kirikiri",
+      "name": "KiriKiri/KAG",
+      "evidence_status": "historical-binary-fixture-gui",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "EXE V95 GUI tradujo guiones KAG UTF16 y conservó órdenes/negación/F10, restauración SHA; sin motor ejecutable de juego.",
+      "historical_ci_runs": [
+        42660338480
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "html5",
+      "name": "HTML5/NW.js",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Evidencia NW.js y web UI, múltiples runtimes/plugins sin certificar"
+    },
+    {
+      "id": "lightvn",
+      "name": "Light.vn",
+      "evidence_status": "historical-binary-fixture-gui",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "EXE V95 GUI instaló guiones y F10 y restauró/rechazó colisión; LightApp.exe de fixture NO ejecutable.",
+      "historical_ci_runs": [
+        42655275676
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "flash",
+      "name": "Flash/SWF",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "SWF compilado/proyector bloqueado sin escritor reversible"
+    },
+    {
+      "id": "srpg",
+      "name": "SRPG Studio",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Solo exportaciones y lectura de recursos hasta demostrar texto nativo"
+    },
+    {
+      "id": "vnm",
+      "name": "Visual Novel Maker",
+      "evidence_status": "historical-bounded-runtime",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "V95 GUI creó textos ES y F10 y Chromium real mostró dos escenas autoelaboradas; no videojuego VNM comercial.",
+      "historical_ci_runs": [
+        42709905707,
+        42715423243
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "wolf",
+      "name": "WOLF RPG",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Lectores MPS/Data.wolf acotados; variantes packed no certificadas"
+    },
+    {
+      "id": "unity",
+      "name": "Unity",
+      "evidence_status": "historical-binary-fixture-gui",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "V95 EXE instaló componentes Mono/IL2CPP y verificó rollback SHA sobre carpetas sintéticas; no juego Unity ejecutable.",
+      "historical_ci_runs": [
+        42645706956
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "unreal",
+      "name": "Unreal Engine",
+      "evidence_status": "historical-binary-fixture-gui",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "V95 EXE tradujo LOCRES v2 binario de muestra y restauró SHA, rechazando IoStore; no juego Unreal ejecutable.",
+      "historical_ci_runs": [
+        42646864070
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "gamemaker",
+      "name": "GameMaker",
+      "evidence_status": "historical-binary-fixture-gui",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "V95 EXE tradujo cuatro cadenas STRG japonesas en data.win sintético conservando punteros y rollback SHA; no juego ejecutable.",
+      "historical_ci_runs": [
+        42658820993
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "java",
+      "name": "Java/JVM",
+      "evidence_status": "historical-bounded-runtime",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Java 17 ejecutó JAR propio tras instalación GUI+V95 y leyó ResourceBundle ES, restauró inglés; no videojuego comercial.",
+      "historical_ci_runs": [
+        42639074168
+      ],
+      "import_status": "NOT_IN_R1"
+    },
+    {
+      "id": "bakin",
+      "name": "RPG Developer Bakin",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Recursos autor y exportación; runtime real sin hook certificado"
+    },
+    {
+      "id": "node-i18next",
+      "name": "Node/i18next",
+      "evidence_status": "historical-bounded-runtime",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "La librería i18next@23 en Node ejecutó traducción ES creada por V95 GUI y restauró originales; no juego NW.js comercial.",
+      "historical_ci_runs": [
+        42647682867
+      ],
+      "import_status": "NOT_IN_R1"
+    }
+  ],
+  "pilot": {
+    "family": "rpg-maker",
+    "verified_subengines": [
+      "mv",
+      "mz"
+    ],
+    "original_v95_ci_run": 45044374825,
+    "original_v95_ci_gates": 26,
+    "real_game_visual_certified": false,
+    "copy_to_clean_windows_offline_certified": false
+  },
+  "prior_evidence_urls": [
+    "https://github.com/drimt902-netizen/tenshixgame-tx200/blob/ad77dccc763424428003377a53848ed311bd1e21/docs/TENSHIXGAME_TX200_MATRIZ_17_FAMILIAS_20261107.md",
+    "https://github.com/camachogomez791-byte/tenshixgame-tx20026/blob/e259a80801e0d3ef971c41d14db939b25730932b/audit/TX354_SEVENTEEN_FAMILIES_CONTRACT.json",
+    "https://github.com/eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build/blob/109fdc73a835e894b8804a27133e66360e4ba8c6/docs/TX590_RPG_SIX_ENGINE_REAL_V95_AUDIT.md"
+  ],
+  "evidence_status_definitions": {
+    "original-v95-mv-mz": "Actual owner encrypted Windows V95 production candidate and original regressions, not owner-game certification",
+    "historical-engine-runtime": "Windows original V95 GUI and genuinely launched official engine, but only with an authored disposable sample",
+    "historical-bounded-runtime": "Windows original V95 GUI and real browser, Java or i18next running an authored sample, not a whole commercial game",
+    "historical-binary-fixture-gui": "Windows original V95 GUI installed/recovered fixtures of real formats, no full engine play session",
+    "research-only": "Sources and candidate runtime proofs do not yet qualify under a verified Windows original V95 GUI path",
+    "read-only": "Only safe parsers, inventories or partial resources"
+  }
+}

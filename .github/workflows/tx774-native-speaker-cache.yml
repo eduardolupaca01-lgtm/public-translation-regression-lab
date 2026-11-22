@@ -1,0 +1,36 @@
+name: TX774 exact native speaker control and old cache recovery
+
+on:
+  push:
+    branches:
+      - rebuild/tenshixgame-unificado-deteccion-20261122
+    paths:
+      - tools/tx774_name_control_quality.py
+      - .github/workflows/tx774-native-speaker-cache.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  speaker-cache-guard:
+    name: Source-free Japanese speaker quality validation (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Python source and actual JavaScript semantics
+        shell: bash
+        run: |
+          python -m py_compile tools/tx774_name_control_quality.py
+          python tools/tx774_name_control_quality.py --self-test
+          echo "TX774_SOURCE_FREE_NATIVE_NAME_GUARD_PASS"
