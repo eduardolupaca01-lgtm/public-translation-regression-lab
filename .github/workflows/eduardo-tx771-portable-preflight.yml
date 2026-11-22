@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
-          ref: 8e58b693f049165aa8ec94cf29b1e9cb88f1a577
+          ref: e6d13e299459decce7d9d35de1af4863e4ad1f5c
           path: original
           token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
           persist-credentials: false
