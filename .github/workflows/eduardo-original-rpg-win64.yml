@@ -1,17 +1,20 @@
-name: Tenshixgame RPG original TX771 portable original V95 Windows build (encrypted owner test only)
+name: TENSHIXGAME RPG TX772 original V95 owner-verified portable upgrade (encrypted test)
 
 on:
   push:
     branches:
       - build/eduardo-original-rpg-tx771-portable-20261122
+      - build/eduardo-original-rpg-tx772-public-update-20261122
     paths:
       - "tools/replay_eduardo_original.py"
+      - "tools/tx772_public_portable_upgrade.py"
       - ".github/workflows/eduardo-original-rpg-win64.yml"
       - "docs/EDUARDO_ORIGINAL_RPG_BUILD_HANDOFF.md"
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: eduardo-original-rpg-public-windows-${{ github.ref }}
@@ -32,6 +35,7 @@ jobs:
         run: |
           python -m py_compile tools/replay_eduardo_original.py
           python tools/replay_eduardo_original.py --self-test
+          python tools/tx772_public_portable_upgrade.py --self-test
           python tools/publication_guard.py
           echo "EDUARDO_ORIGINAL_PUBLIC_ORCHESTRATION_ONLY_PASS"
 
@@ -79,6 +83,13 @@ jobs:
           fetch-depth: 1
           lfs: false
 
+      - name: TX772 patch only the disposable original checkout for owner-verified game-local upgrades
+        shell: pwsh
+        run: |
+          python ci/tools/tx772_public_portable_upgrade.py --source-root original
+          if ($LASTEXITCODE -ne 0) { throw "TX772_EPHEMERAL_GAME_LOCAL_UPDATE_OVERLAY_FAILED" }
+          Write-Host "TX772_PUBLIC_SOURCE_PINNED_OVERLAY_PASS"
+
       - name: Diagnose private V95 gate-06 contracts without leaking their test output
         shell: pwsh
         run: |
@@ -91,6 +102,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - name: TX772 ensure owner-verified upgrades reject altered workers and preserve cached data
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx541-rpg-onefile
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx772-owner-upgrade-regression.log"
+            go test . -run '^TestTX772' -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX772_OWNER_MARKER_AND_CACHE_SAFETY_REGRESSION_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX772_GAME_LOCAL_OWNER_AND_CACHE_SAFETY_PASS"
 
       - name: TX768 run speaker-consumed first-paint regression before model rebuild
         shell: pwsh
@@ -328,7 +350,7 @@ jobs:
           }
           $directory = Join-Path $env:RUNNER_TEMP "eduardo-encrypted-output"
           New-Item -ItemType Directory -Force $directory | Out-Null
-          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX771-PORTATIL-V95-PRUEBA.7z"
+          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX772-PORTATIL-V95-PRUEBA.7z"
           $passArgument = "-p" + $env:EDUARDO_RPG_ARCHIVE_PASSWORD
           & $sevenExe a -t7z -mhe=on -mx=0 $passArgument $ciphertext $exe | Out-Null
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ciphertext)) {
@@ -339,7 +361,7 @@ jobs:
           $receipt = Join-Path $env:RUNNER_TEMP "eduardo-original-rebuild-receipt.json"
           Copy-Item -LiteralPath $receipt -Destination (Join-Path $directory "eduardo-original-build-receipt.json")
           $hash = (Get-FileHash -LiteralPath $ciphertext -Algorithm SHA256).Hash.ToLowerInvariant()
-          ($hash + "  Tenshixgame-RPG-TX771-PORTATIL-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
+          ($hash + "  Tenshixgame-RPG-TX772-PORTATIL-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
           Write-Host "EDUARDO_ORIGINAL_ENCRYPTED_ARCHIVE_SHA256=$hash"
           Write-Host "EDUARDO_ORIGINAL_REAL_V95_ONEFILE_ENCRYPTED_OWNER_ONLY_NO_PUBLIC_PLAINTEXT"
           "Verified original V95 EXE. Encrypted with owner-held EDUARDO_RPG_ARCHIVE_PASSWORD. Extract with 7-Zip and test only on a copy of your game. This does not certify the user's own game or authorize public distribution." |
@@ -348,7 +370,7 @@ jobs:
       - name: Upload ONLY encrypted original EXE and nonsensitive provenance
         uses: actions/upload-artifact@v4
         with:
-          name: Eduardo-Tenshixgame-RPG-ORIGINAL-TX771-PORTABLE-V95-Windows-TEST-ENCRYPTED
+          name: Eduardo-Tenshixgame-RPG-ORIGINAL-TX772-PORTABLE-V95-Windows-TEST-ENCRYPTED
           retention-days: 14
           if-no-files-found: error
           path: ${{ runner.temp }}/eduardo-encrypted-output/
