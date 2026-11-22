@@ -1,0 +1,116 @@
+name: Public Tenshixgame RPG Windows EXE with authentic JA-ES model test
+
+on:
+  push:
+    branches:
+      - build/public-tenshixgame-rpg-trial-20261121
+    paths:
+      - ".github/workflows/public-tenshixgame-rpg-trial-win64.yml"
+      - "tools/public_rpg_trial.py"
+      - "tests/test_public_rpg_trial.py"
+      - "docs/PUBLIC_TENSHIXGAME_RPG_EXE_TEST.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-rpg-exe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-verify:
+    name: Windows x64 real neural and RPG Maker file test
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      ARGOS_CHUNK_TYPE: MINISBD
+      ARGOS_DEVICE_TYPE: cpu
+      PYTHONUTF8: "1"
+      OMP_NUM_THREADS: "2"
+      OPENBLAS_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Enforce public-only source boundary
+        shell: pwsh
+        run: |
+          python tools/publication_guard.py
+          if ($LASTEXITCODE -ne 0) { throw "PUBLICATION_GUARD_FAILED" }
+
+      - name: Python compilation and all offline RPG/cache regression tests
+        shell: pwsh
+        run: |
+          python -m compileall -q tools tests translation_lab
+          if ($LASTEXITCODE -ne 0) { throw "PYTHON_COMPILE_FAILED" }
+          python -m unittest discover -s tests -v
+          if ($LASTEXITCODE -ne 0) { throw "RPG_OFFLINE_REGRESSION_FAILED" }
+
+      - name: Install genuine open Argos and PyInstaller Windows dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --no-input --prefer-binary pyinstaller==6.17.0 argostranslate==1.11.0 ctranslate2==4.9.0 sentencepiece==0.2.3
+          if ($LASTEXITCODE -ne 0) { throw "ARGOS_PUBLIC_WINDOWS_DEPENDENCIES_FAILED" }
+          python -c "import argostranslate.package, argostranslate.translate, ctranslate2, sentencepiece; print('WINDOWS_PUBLIC_ARGOS_IMPORT_OK')"
+          if ($LASTEXITCODE -ne 0) { throw "ARGOS_WINDOWS_IMPORT_FAILED" }
+
+      - name: Build one-file GUI EXE with public sources and no model weights
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Tenshixgame-RPG-Prueba" --paths . --collect-all argostranslate --collect-all ctranslate2 --collect-all sentencepiece --collect-all minisbd tools/public_rpg_trial.py
+          if ($LASTEXITCODE -ne 0) { throw "WINDOWS_PUBLIC_ONEFILE_BUILD_FAILED" }
+          $exe = "dist\Tenshixgame-RPG-Prueba.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "WINDOWS_EXE_NOT_CREATED" }
+          $size = (Get-Item -LiteralPath $exe).Length
+          if ($size -lt 1000000) { throw "EXE_BUILD_TOO_SMALL" }
+          Write-Host "PUBLIC_RPG_EXE_SIZE_BYTES=$size"
+
+      - name: Execute new GUI-subsystem EXE with genuine public neural model inference
+        shell: pwsh
+        env:
+          LOCALAPPDATA: ${{ runner.temp }}/tenshixgame-public-rpg-appdata
+        run: |
+          $exe = Join-Path (Get-Location) "dist\Tenshixgame-RPG-Prueba.exe"
+          $receipt = Join-Path $env:RUNNER_TEMP "public-rpg-real-neural.json"
+          $cmdArgs = @("--smoke-test", "--receipt-out", ('"' + $receipt + '"'))
+          $p = Start-Process -FilePath $exe -ArgumentList $cmdArgs -Wait -PassThru
+          Write-Host "PUBLIC_RPG_NEURAL_EXE_EXIT=$($p.ExitCode)"
+          if (Test-Path -LiteralPath $receipt) { Get-Content -LiteralPath $receipt -Raw | Write-Host }
+          if ($p.ExitCode -ne 0) { throw "REAL_WINDOWS_EXE_NEURAL_INFERENCE_FAILED" }
+          if (-not (Test-Path -LiteralPath $receipt)) { throw "REAL_WINDOWS_NEURAL_EVIDENCE_MISSING" }
+          $r = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
+          if ($r.result -ne "PASS" -or -not $r.real_model_inference -or $r.sqlite_cache -ne "PASS" -or $r.rpg_maker_mv_mz_synthetic_event_export -ne "PASS" -or $r.original_game_modified -or $r.professional_bilingual_approval) { throw "INVALID_JA_ES_NEURAL_OR_RPG_TEST_RECEIPT" }
+          Write-Host "PUBLIC_RPG_REAL_JAPANESE_TO_SPANISH_NEURAL_AND_RPG_EXPORT_PASS"
+
+      - name: Record EXE SHA256 and public-trial scope
+        shell: pwsh
+        run: |
+          $exe = "dist\Tenshixgame-RPG-Prueba.exe"
+          $sha = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          ($sha + "  Tenshixgame-RPG-Prueba.exe") | Set-Content -LiteralPath "dist\SHA256.txt" -Encoding ascii
+          Copy-Item "docs\PUBLIC_TENSHIXGAME_RPG_EXE_TEST.md" -Destination "dist\LEER-PRUEBA.md"
+          Write-Host "PUBLIC_RPG_EXE_SHA256=$sha"
+
+      - name: Make validated public EXE downloadable as a GitHub Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tenshixgame-RPG-Prueba-Publica-Windows-x64
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            dist/Tenshixgame-RPG-Prueba.exe
+            dist/SHA256.txt
+            dist/LEER-PRUEBA.md
+
+      - name: Preserve failed neural receipt to diagnose errors
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tenshixgame-RPG-Prueba-diagnostico
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/public-rpg-real-neural.json
