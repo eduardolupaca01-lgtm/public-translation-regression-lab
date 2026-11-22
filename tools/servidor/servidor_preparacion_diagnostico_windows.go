@@ -31,10 +31,6 @@ func servidorClassifyPreparationFailure(err error)(string,string){
   return "TX778_RUTA_DEMASIADO_LARGA",
   "Windows rechazó una ruta demasiado larga. Prueba una copia del juego en una ruta sencilla y corta, sin modificar el original."
  }
- if errors.Is(err,os.ErrNotExist){
-  return "TX778_ARCHIVO_REQUERIDO_NO_ENCONTRADO",
-  "Falta un archivo requerido durante la preparación. No borres ni reemplaces manualmente modelos o archivos del juego."
- }
  code:=tx777StageCode.FindString(strings.ToUpper(err.Error()))
  switch code {
  case "TX778_CARPETA_PORTATIL_NO_DISPONIBLE":
@@ -61,6 +57,10 @@ func servidorClassifyPreparationFailure(err error)(string,string){
  if strings.HasPrefix(code,"TX541_")||strings.HasPrefix(code,"TX567_")||
     strings.HasPrefix(code,"TX771_"){
   return code,"Un control interno del paquete o del motor V95 rechazó la preparación. El identificador indica el paso que debe revisarse, sin divulgar archivos privados."
+ }
+ if errors.Is(err,os.ErrNotExist){
+  return "TX778_ARCHIVO_REQUERIDO_NO_ENCONTRADO",
+  "Falta un archivo requerido durante la preparación. No borres ni reemplaces manualmente modelos o archivos del juego."
  }
  return "TX778_FALLO_SIN_CLASIFICAR",
     "La preparación no terminó y el instalador aún no pudo identificar la causa. Conserva los archivos del juego y copia este código para continuar la investigación."

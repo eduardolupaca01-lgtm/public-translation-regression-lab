@@ -6,6 +6,7 @@ import (
  "errors"
  "fmt"
  "os"
+ "path/filepath"
  "strings"
  "syscall"
  "testing"
@@ -48,5 +49,24 @@ func TestServidorPreparacionNuncaFiltraRutaNiSecreto(t *testing.T){
   if strings.Contains(code,secret)||strings.Contains(detail,secret)||strings.Contains(detail,"token-PRIVADO"){
    t.Fatalf("private diagnostic leaked content in %q",code)
   }
+ }
+}
+
+func TestServidorPreparacionCarpetaAnteriorSinMarcadorNoSeBorra(t *testing.T){
+ game:=t.TempDir()
+ sidecar:=filepath.Join(game,tx771OnefileSidecar)
+ if err:=os.Mkdir(sidecar,0700);err!=nil{t.Fatal(err)}
+ sentinel:=filepath.Join(sidecar,"datos-usuario.txt")
+ if err:=os.WriteFile(sentinel,[]byte("conservar"),0600);err!=nil{t.Fatal(err)}
+ payload:=&appendedPayload{}
+ _,_,err:=tx771PreparePortableOnefile(payload,game)
+ if err==nil{t.Fatal("partial prior sidecar accepted without owner marker")}
+ code,detail:=servidorClassifyPreparationFailure(err)
+ if code!="TX778_CARPETA_EXISTENTE_SIN_PROPIETARIO"||detail==""{
+   t.Fatalf("unidentified old sidecar: %s",code)
+ }
+ observed,e:=os.ReadFile(sentinel)
+ if e!=nil || string(observed)!="conservar"{
+   t.Fatalf("old user data modified: %v",e)
  }
 }
