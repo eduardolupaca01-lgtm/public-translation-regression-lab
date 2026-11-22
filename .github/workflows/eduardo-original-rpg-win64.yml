@@ -72,7 +72,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
-          ref: afe1f62c93810d98d40391ca0cdaab114898cc08
+          ref: b69efbe13c02bc341f1443e46e5eee8d1b805f07
           path: original
           token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
           persist-credentials: false
@@ -146,6 +146,7 @@ jobs:
         env:
           TX771_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
           TX765_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+          TX771_SAFE_FAILURE_ONLY: "1"
         run: |
           $log = Join-Path $env:RUNNER_TEMP "tx771-portable-js.log"
           node --check $env:TX771_TEST_PLUGIN *> $log
@@ -166,12 +167,20 @@ jobs:
               @{match="EACCES";code="READ_PERMISSION"},
               @{match="ENOENT";code="FILE_NOT_FOUND"}
             )
-            $stage="OTHER_ASSERTION"
-            foreach($diagnostic in $diagnostics) {
-              if($text.Contains($diagnostic.match)) {
-                $stage=$diagnostic.code
-                break
-              }
+            $stage="UNCLASSIFIED_SAFE_ERROR"
+            # The current private test emits ONLY a fixed allowlisted code,
+            # never a JavaScript stack trace, game content, token or path.
+            $matchResult=[regex]::Match($text,'TX771_SAFE_TEST_FAILURE_CODE=([A-Z_]+)')
+            $safeCodes=@("WORKER_PATH","LEGACY_WORKER_PATH","SPAWN_SHELL",
+              "SPAWN_VISIBILITY","SPAWN_DETACHED","OWNED_SPAWN_TIMEOUT",
+              "LEGACY_SPAWN_TIMEOUT","OWNED_SPAWN_COUNT","WRONG_ENGINE_LOCATION",
+              "WRONG_CHILD_LOCALAPPDATA","WRONG_CHILD_TEMP","CACHE_NOT_FOUND",
+              "CACHE_WRITTEN_TO_PROFILE","FOREIGN_MARKER_ACCEPTED",
+              "LEGACY_SPAWN_COUNT","NON_LOCAL_HTTP","OTHER_EQUALITY_ASSERTION",
+              "MISSING_OBJECT_PROPERTY","MISSING_FILE","PERMISSION_DENIED",
+              "ACCESS_DENIED","LOCKED_FILE","UNKNOWN_ASSERTION","UNCLASSIFIED_EXCEPTION")
+            if($matchResult.Success -and $safeCodes.Contains($matchResult.Groups[1].Value)) {
+              $stage=$matchResult.Groups[1].Value
             }
             Write-Host "TX771_SAFE_PORTABLE_FAILURE_STAGE=$stage"
             throw "TX771_PORTABLE_JS_MODEL_AND_CACHE_HOLD"
@@ -213,7 +222,7 @@ jobs:
           python ci/tools/replay_eduardo_original.py --source-root original --receipt "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json"
           if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ORIGINAL_V95_BUILD_OR_TEST_HOLD" }
           $receipt = Get-Content "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json" -Raw | ConvertFrom-Json
-          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "afe1f62c93810d98d40391ca0cdaab114898cc08") {
+          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "b69efbe13c02bc341f1443e46e5eee8d1b805f07") {
             throw "EDUARDO_ORIGINAL_EXE_RECEIPT_INVALID"
           }
 
