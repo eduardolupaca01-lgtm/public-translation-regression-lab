@@ -2,6 +2,16 @@
 
 **Estado verificado a 22-11-2026.** Este repositorio contiene **dos entregables distintos** y no deben confundirse ni instalarse simultáneamente como si fueran el mismo programa.
 
+## TX777: por qué todavía aparecía «V95 portátil»
+
+La ventana con **«Bienvenido al traductor RPG. Pulsa Aceptar...»** provenía del `MessageBoxW` de `tx771Welcome()` en el arranque **EXTERIOR** del EXE único, antes de que se cargaran los ~650 MB de modelos y antes de abrir el instalador interior. TX776 añadió el diagnóstico solo al instalador interior; por tanto, la vieja bienvenida seguía apareciendo en TX776. **Ese popup no era un error de IA ni un fracaso de instalación.**
+
+TX777 sustituye el arranque exterior por una interfaz Win32 que se muestra inmediatamente: elegir Game.exe de una copia RPG Maker MV/MZ, preparar IA, visualizar progreso y copiar códigos seguros de error. Se conserva intacta la verificación original del bundle, la instalación y los modelos en el mismo disco, el journal, la caché y la protección del juego. El instalador interior TX776 hereda la ruta seleccionada para no pedirla dos veces.
+
+Código fuente aislado `tools/tx777/`, [causa y evidencia multimotor recuperada](docs/TX777_EVIDENCIA_REAL_MULTIMOTOR_Y_ARRANQUE.md). **No atribuirle un EXE aprobado hasta que Windows Actions publique exitosamente el paquete cifrado TX777.** Mientras tanto el EXE TX776 sigue siendo el archivo de prueba anterior.
+
+El análisis de once cuentas demuestra además adaptadores Windows históricos más avanzados (Godot 4.3 oficial, VNM/Tyrano Chromium, Java JAR, i18next, LCF, KAG, Unity, Unreal, GameMaker y Light.vn). Véase la [matriz de 17 familias con IDs exactos de CI](docs/TX776_MATRIZ_MOTORES_17_CONTRATO.json). La nueva R1 todavía NO contiene esos adaptadores: certificación de proyectos de muestra no se convierte automáticamente en compatibilidad universal.
+
 ## 1. Detector R1 (nuevo, solo lectura)
 
 `tenshixgame-next/` tiene una interfaz Win32 y CLI de catálogo de **17 familias** de motores. Identifica la familia, submotor y, cuando las firmas permiten comprobarla, la versión del juego seleccionado. RPG Maker se distingue entre 2000/2003, XP, VX, VX Ace, MV y MZ. La familia no demuestra compatibilidad del traductor: **el detector NO instala IA, NO ejecuta el juego y NO traduce**.
