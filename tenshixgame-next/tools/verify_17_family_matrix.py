@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 import re
 
-ROOT=Path(__file__).resolve().parents[2]
+ROOT=Path(__file__).resolve().parents[1]
 CATALOG=ROOT/"internal"/"engine"/"catalog.go"
 LEDGER=ROOT/"docs"/"TX776_MATRIZ_MOTORES_17_CONTRATO.json"
 
