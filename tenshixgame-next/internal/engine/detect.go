@@ -91,9 +91,9 @@ func gameLocation(value string)(root, selectedFile string, err error){
     return root,selectedFile,nil
 }
 var (
-    reRPGVersion=regexp.MustCompile(`(?i)Utils.RPGMAKER_VERSIONs*=s*['"]([0-9]+.[0-9]+(?:.[0-9]+)?)['"]`)
-    reRGSS=regexp.MustCompile(`(?im)^s*Librarys*=s*RGSS([123])d+[a-z]?(?:.dll)s*$`)
-    reRenpy=regexp.MustCompile(`(?m)version_tuples*=s*(s*(d+)s*,s*(d+)s*,s*(d+)`)
+    reRPGVersion=regexp.MustCompile(`(?i)Utils\.RPGMAKER_VERSION\s*=\s*['"]([0-9]+\.[0-9]+(?:\.[0-9]+)?)['"]`)
+    reRGSS=regexp.MustCompile(`(?im)^\s*Library\s*=\s*RGSS([123])\d+[a-z]?(?:\.dll)\s*$`)
+    reRenpy=regexp.MustCompile(`(?m)version_tuple\s*=\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)`)
 )
 func versionFromJS(root,rel string)string{
     b,e:=boundedRead(root,rel)
