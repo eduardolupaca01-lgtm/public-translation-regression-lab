@@ -104,7 +104,7 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
 def _normalize_concept_surface(value: str) -> str:
     """Normalize equivalent Spanish a. m./p. m. spellings for source checks."""
     folded = value.casefold().replace("\u00a0", " ")
-    return re.sub(r"(?<!\\w)([ap])\\s*\\.\\s*m\\s*\\.?(?!\\w)", r"\\1m", folded)
+    return re.sub(r"(?<!\w)([ap])\s*\.\s*m\s*\.?(?!\w)", r"\1m", folded)
 
 
 def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
