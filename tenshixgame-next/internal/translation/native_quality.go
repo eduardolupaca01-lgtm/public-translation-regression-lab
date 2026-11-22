@@ -11,12 +11,16 @@ import (
 
 var nativeSpeakerTag=regexp.MustCompile(`\\N<[^>\r\n]{1,128}>`)
 var rawJapanese=regexp.MustCompile(`[\x{3040}-\x{30ff}\x{3400}-\x{9fff}]`)
+// Use the same RPG escape-code family as the ORIGINAL V95 native bridge.
+// Actor tags are checked separately and then removed ONLY from scratch copies.
+var rpgEscapeCode=regexp.MustCompile(`\\(?:[A-Za-z]+\[[^\]\r\n]+\]|[A-Za-z{}.!^$<>\\|])`)
 
 const (
     QualityAccepted="NATIVE_PROTECTED_TEXT_CANDIDATE"
     QualityUnknown="SOURCE_OR_TRANSLATION_INVALID"
     QualityOriginal="NOT_TRANSLATED"
     QualityChangedSpeaker="ACTOR_CONTROL_CHANGED"
+    QualityControlChanged="RPG_CONTROL_CODE_CHANGED"
     QualityEmptyBody="EMPTY_SPOKEN_BODY"
     QualityRemainingJapanese="JAPANESE_REMAINS_IN_VISIBLE_BODY"
 )
@@ -45,6 +49,20 @@ func AssessNativeCandidate(source Source, translated string) (bool,string) {
     newBody:=nativeSpeakerTag.ReplaceAllString(translated,"")
     if strings.TrimSpace(oldBody)==""||strings.TrimSpace(newBody)=="" {
         return false,QualityEmptyBody
+    }
+    // A translation may not change the game's event-control semantics:
+    // variables, color, icons, wait, actor references and sequence matter.
+    // Matching only speaker names would wrongly accept changed \V[1] or
+    // dropped \C[0]. This mirrors TX710CleanCore.valid from original V95.
+    originalCodes:=rpgEscapeCode.FindAllString(oldBody,-1)
+    translatedCodes:=rpgEscapeCode.FindAllString(newBody,-1)
+    if len(originalCodes)!=len(translatedCodes) {
+        return false,QualityControlChanged
+    }
+    for i:=range originalCodes {
+        if originalCodes[i]!=translatedCodes[i] {
+            return false,QualityControlChanged
+        }
     }
     if rawJapanese.MatchString(newBody) {
         return false,QualityRemainingJapanese
