@@ -60,7 +60,7 @@ jobs:
       - name: Build one-file GUI EXE with public sources and no model weights
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Tenshixgame-RPG-Prueba" --paths . --collect-all argostranslate --collect-all ctranslate2 --collect-all sentencepiece --collect-all minisbd --collect-all stanza --collect-all spacy --hidden-import argostranslate.package --hidden-import argostranslate.translate tools/public_rpg_trial.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name "Tenshixgame-RPG-Prueba" --paths . --collect-all argostranslate --collect-all ctranslate2 --collect-all sentencepiece --collect-all minisbd --collect-all stanza --collect-all spacy --hidden-import argostranslate.package --hidden-import argostranslate.translate --runtime-hook tools/public_rpg_freeze_runtime.py tools/public_rpg_trial.py
           if ($LASTEXITCODE -ne 0) { throw "WINDOWS_PUBLIC_ONEFILE_BUILD_FAILED" }
           $exe = "dist\Tenshixgame-RPG-Prueba.exe"
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "WINDOWS_EXE_NOT_CREATED" }
