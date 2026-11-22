@@ -39,8 +39,16 @@ def main()->None:
     if [x["id"] for x in records if x["evidence_status"]=="original-v95-mv-mz"]!=["rpg-maker"]:
         raise AssertionError("TX776_V95_MV_MZ_WRONGLY_IMPORTED_INTO_ANOTHER_ENGINE")
     for r in records:
-        if r["evidence_status"] not in {"original-v95-mv-mz","research-only","read-only"}:
+        if r["evidence_status"] not in {"original-v95-mv-mz","historical-engine-runtime","historical-bounded-runtime","historical-binary-fixture-gui","research-only","read-only"}:
             raise AssertionError("TX776_UNKNOWN_EVIDENCE_CATEGORY")
+        # Historical Windows tests are source evidence, not authorization
+        # to install a package from the new R1 read-only detector.
+        if r["evidence_status"].startswith("historical-"):
+            run_ids=r.get("historical_ci_runs",[])
+            if not run_ids or not all(type(x) is int and x>0 for x in run_ids):
+                raise AssertionError("TX777_HISTORICAL_ENGINE_EVIDENCE_MISSING_RUN_ID")
+            if r.get("import_status")!="NOT_IN_R1":
+                raise AssertionError("TX777_LEGACY_ENGINE_FALSELY_REPORTED_IMPORTED")
         if not r["notes"].strip():
             raise AssertionError("TX776_EMPTY_EVIDENCE_LIMIT")
     print("TX776_17_FAMILY_READONLY_INSTALLATION_CONTRACT_PASS")
