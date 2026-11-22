@@ -212,6 +212,10 @@ func formatResult(item engine.Result,audit portable.Report)string{
     fmt.Fprintf(&b,"Caché: %d archivos; %d pares verificados; %d entradas verificadas; %d rechazadas\r\n",
         audit.CacheSnapshots,audit.SnapshotRecordsProven,
         audit.EntryRecordsProven,audit.CacheRecordsRejected)
+    if audit.OrphanInstallStages>0 {
+        fmt.Fprintf(&b,"Preparaciones incompletas del motor (NO borradas): %d\r\n",
+            audit.OrphanInstallStages)
+    }
     if len(audit.Issues)>0 {fmt.Fprintf(&b,"Avisos: %s\r\n",strings.Join(audit.Issues,", "))}
     b.WriteString("\r\nLa integridad básica NO prueba el español en pantalla ni el arranque offline.\r\n")
     b.WriteString("Este diagnóstico NO instala la IA ni modifica archivos.\r\n")
