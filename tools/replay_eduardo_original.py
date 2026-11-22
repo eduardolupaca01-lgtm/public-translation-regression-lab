@@ -187,6 +187,16 @@ def execute(source_root, receipt_path):
             finally:
                 script.unlink(missing_ok=True)
             if process.returncode:
+                # Only diagnostic *codes*, never private scripts/logs, games,
+                # model output, paths, bearer credentials or stack traces.
+                import re
+                safe_codes = sorted(set(re.findall(
+                    r"\\bTX[0-9]{3}_[A-Z][A-Z0-9_]{4,90}\\b",
+                    private_log.read_text(encoding="utf-8", errors="replace")[-25000:],
+                )))
+                result["safe_gate_error_codes"] = safe_codes[:12]
+                print("EDUARDO_ORIGINAL_SAFE_FAILURE_CODES:" +
+                      json.dumps(safe_codes[:12]), flush=True)
                 raise RuntimeError(f"ORIGINAL_GATE_{number:02d}_FAILED")
             result["steps_passed"] = number
             receipt_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

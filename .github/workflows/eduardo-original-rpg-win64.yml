@@ -79,6 +79,12 @@ jobs:
           fetch-depth: 1
           lfs: false
 
+      - name: Diagnose private V95 gate-06 contracts without leaking their test output
+        shell: pwsh
+        run: |
+          python ci/tools/diag_eduardo_v95_contracts.py --source-root original --runner-temp "$env:RUNNER_TEMP"
+          if ($LASTEXITCODE -ne 0) { throw "EDUARDO_PRIVATE_V95_GATE06_SOURCE_CONTRACT_FAILED" }
+
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23.x"
