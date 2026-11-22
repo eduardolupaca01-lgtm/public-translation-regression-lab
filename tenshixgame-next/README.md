@@ -22,6 +22,8 @@ Artifact: `Eduardo-TENSHIXGAME-TX775-V95-NOMBRES-PORTABLE-Windows-ENCRYPTED` (ca
 
 **Importante:** el resultado aprobado es un **candidato de prueba para RPG Maker MV/MZ**, no una afirmación de que cada videojuego compatible muestre todos sus textos en español. Se necesita una aceptación visual dentro de una copia real del juego, preferentemente sin conexión, con nombres, opciones, variables, menús, segundo arranque y cierre de procesos.
 
+**Actualización real TX772 → TX775 aprobada:** [Windows CI #45046277149](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45046277149). Descifró ambos EXE originales solo en Windows desechable, comprobó sus recibos SHA, conservó caché y paquetes App anteriores, no modificó Game.exe ni plugins.js, y verificó reinicio, traslado de carpeta y ausencia de motor global en el perfil. Solo se publicó un pequeño recibo de PASS sin modelos. No es una prueba visual en el juego real.
+
 ## 3. Cómo probar sin poner en riesgo el juego
 
 1. Conservar la carpeta original y sus partidas. Trabajar únicamente sobre una copia con el juego cerrado y el antiguo complemento no ejecutándose.
