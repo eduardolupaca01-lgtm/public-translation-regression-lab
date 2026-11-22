@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
-          ref: afe1f62c93810d98d40391ca0cdaab114898cc08
+          ref: b69efbe13c02bc341f1443e46e5eee8d1b805f07
           path: original
           token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
           persist-credentials: false
@@ -49,6 +49,7 @@ jobs:
         shell: pwsh
         env:
           TX771_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+          TX771_SAFE_FAILURE_ONLY: "1"
           TX765_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
         run: |
           node --check $env:TX771_TEST_PLUGIN
