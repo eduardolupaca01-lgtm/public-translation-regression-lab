@@ -6,12 +6,15 @@ package main
 // This is NOT the V95 translator installer. It NEVER starts a game or model.
 import (
     "fmt"
+    "os"
+    "path/filepath"
     "runtime"
     "strings"
     "syscall"
     "unsafe"
 
     "github.com/eduardolupaca01-lgtm/public-translation-regression-lab/tenshixgame-next/internal/engine"
+    "github.com/eduardolupaca01-lgtm/public-translation-regression-lab/tenshixgame-next/internal/portable"
 )
 const (
     wsVisible=0x10000000
@@ -133,6 +136,7 @@ var (
 )
 type inspectOutcome struct{
     result engine.Result
+    audit portable.Report
     err error
 }
 func ptr(s string)uintptr{
@@ -189,7 +193,7 @@ func pickFolder(owner uintptr)(string,error){
     if okay==0{return "",fmt.Errorf("Windows no pudo resolver la carpeta")}
     return syscall.UTF16ToString(b[:]),nil
 }
-func formatResult(item engine.Result)string{
+func formatResult(item engine.Result,audit portable.Report)string{
     var b strings.Builder
     fmt.Fprintf(&b,"Familia seleccionada: %s\r\n",item.FamilyName)
     fmt.Fprintf(&b,"Estado de inspección: %s\r\n",item.Status)
@@ -202,7 +206,15 @@ func formatResult(item engine.Result)string{
         for _,x:=range item.Evidence{fmt.Fprintf(&b,"  • %s\r\n",x)}
     }
     fmt.Fprintf(&b,"\r\n%s\r\n",item.Explanation)
-    b.WriteString("\r\nEste diagnóstico NO instala la IA ni modifica archivos.\r\n")
+    fmt.Fprintf(&b,"\r\nCarpeta portable: %s\r\n",audit.State)
+    fmt.Fprintf(&b,"Propietario válido: %t | Worker SHA coincide: %t\r\n",
+        audit.OwnerVerified,audit.WorkerHashMatched)
+    fmt.Fprintf(&b,"Caché: %d archivos; %d pares verificados; %d entradas verificadas; %d rechazadas\r\n",
+        audit.CacheSnapshots,audit.SnapshotRecordsProven,
+        audit.EntryRecordsProven,audit.CacheRecordsRejected)
+    if len(audit.Issues)>0 {fmt.Fprintf(&b,"Avisos: %s\r\n",strings.Join(audit.Issues,", "))}
+    b.WriteString("\r\nLa integridad básica NO prueba el español en pantalla ni el arranque offline.\r\n")
+    b.WriteString("Este diagnóstico NO instala la IA ni modifica archivos.\r\n")
     return b.String()
 }
 func inspectNow(hwnd uintptr){
@@ -221,7 +233,13 @@ func inspectNow(hwnd uintptr){
     selected:=families[index].ID
     go func(){
         res,err:=engine.Inspect(path,selected)
-        resultQueue<-inspectOutcome{result:res,err:err}
+        var audit portable.Report
+        if err==nil {
+            root:=path
+            if st,e:=os.Stat(path);e==nil&&!st.IsDir(){root=filepath.Dir(path)}
+            audit=portable.AuditRoot(root)
+        }
+        resultQueue<-inspectOutcome{result:res,audit:audit,err:err}
         pPost.Call(hwnd,wmResult,0,0)
     }()
 }
@@ -249,7 +267,7 @@ func wndProc(hwnd uintptr,message uint32,wparam,lparam uintptr)uintptr{
             inspectBusy=false
             pEnable.Call(wInspect,1)
             if completed.err!=nil{setText(wStatus,"INSPECCIÓN BLOQUEADA: "+completed.err.Error())}else{
-                setText(wStatus,formatResult(completed.result))
+                setText(wStatus,formatResult(completed.result,completed.audit))
             }
         default:
         }
