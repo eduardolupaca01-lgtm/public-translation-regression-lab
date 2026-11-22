@@ -212,6 +212,9 @@ func formatResult(item engine.Result,audit portable.Report)string{
     fmt.Fprintf(&b,"Caché: %d archivos; %d pares verificados; %d entradas verificadas; %d rechazadas\r\n",
         audit.CacheSnapshots,audit.SnapshotRecordsProven,
         audit.EntryRecordsProven,audit.CacheRecordsRejected)
+    if audit.PreservedAppVersions>0 {
+        fmt.Fprintf(&b,"Versiones App conservadas en el juego: %d\r\n",audit.PreservedAppVersions)
+    }
     if audit.OrphanInstallStages>0 {
         fmt.Fprintf(&b,"Preparaciones incompletas del motor (NO borradas): %d\r\n",
             audit.OrphanInstallStages)
