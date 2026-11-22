@@ -1,0 +1,176 @@
+{
+  "schema": "tenshixgame-windows-family-acceptance-v1",
+  "as_of": "2026-11-22",
+  "product": "TENSHIXGAME",
+  "scope": "Windows native game-local V95 offline translation",
+  "evidence_levels": {
+    "E0": "Documented format or source; not proven working",
+    "E1": "Synthetic or source-bound automated tests",
+    "E2": "Original Windows V95 binary built and model/integrity tests passed",
+    "E3": "Owner's real game visibly translated, including choices and native speaker",
+    "E4": "Owner's game moved to another clean Windows machine and used offline"
+  },
+  "catalog_family_count": 17,
+  "installed_in_unified_R1": false,
+  "physically_certified_game_families": 0,
+  "source_notes": [
+    "Historical TX354 reported 0 of 52 physical Windows10 scenarios at its own date; this is not a claim that physical tests could never be completed later.",
+    "17 menu families are not 17 TX207 resource profiles and not five launcher variants.",
+    "The TX775 V95 package applies only to MV/MZ and is not part of unified R1 detector EXE.",
+    "Every adaptation must be validated before install and revert correctly without touching unrelated data."
+  ],
+  "families": [
+    {
+      "id": "rpg-maker",
+      "name": "RPG Maker",
+      "evidence_status": "original-v95-mv-mz",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "MV y MZ probados en fixtures Windows con 26 gates; XP/VX/VX Ace/LCF son investigación o diagnóstico"
+    },
+    {
+      "id": "renpy",
+      "name": "Ren'Py",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Variantes 6.x/7.x/8.x requieren bridge Windows y pruebas de saves, menus y escena"
+    },
+    {
+      "id": "godot",
+      "name": "Godot",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "SDK controlados y evidencia de formatos; runtime y dibujo del juego real sin certificar"
+    },
+    {
+      "id": "tyrano",
+      "name": "TyranoScript",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Ensayos Chromium/KS; juego real y macros por verificar"
+    },
+    {
+      "id": "kirikiri",
+      "name": "KiriKiri/KAG",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Lectura de KS/TJS; macros y codificaciones de juego por verificar"
+    },
+    {
+      "id": "html5",
+      "name": "HTML5/NW.js",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Evidencia NW.js y web UI, múltiples runtimes/plugins sin certificar"
+    },
+    {
+      "id": "lightvn",
+      "name": "Light.vn",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Perfiles de guiones, sin certificación de render de runtime"
+    },
+    {
+      "id": "flash",
+      "name": "Flash/SWF",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "SWF compilado/proyector bloqueado sin escritor reversible"
+    },
+    {
+      "id": "srpg",
+      "name": "SRPG Studio",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Solo exportaciones y lectura de recursos hasta demostrar texto nativo"
+    },
+    {
+      "id": "vnm",
+      "name": "Visual Novel Maker",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Fixtures de proyecto/export, sin título real aceptado"
+    },
+    {
+      "id": "wolf",
+      "name": "WOLF RPG",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Lectores MPS/Data.wolf acotados; variantes packed no certificadas"
+    },
+    {
+      "id": "unity",
+      "name": "Unity",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "CSV/Mono/IL2CPP y loaders de pruebas; ABI y textos de título real sin certificar"
+    },
+    {
+      "id": "unreal",
+      "name": "Unreal Engine",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "LOCRES/PAK controlados; IoStore y firmas sin adaptador general"
+    },
+    {
+      "id": "gamemaker",
+      "name": "GameMaker",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "FORM/GEN8/STRG en data.win; no escritor general seguro"
+    },
+    {
+      "id": "java",
+      "name": "Java/JVM",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "JAR/ResourceBundle de prueba; aplicaciones firmadas sin certificar"
+    },
+    {
+      "id": "bakin",
+      "name": "RPG Developer Bakin",
+      "evidence_status": "read-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Recursos autor y exportación; runtime real sin hook certificado"
+    },
+    {
+      "id": "node-i18next",
+      "name": "Node/i18next",
+      "evidence_status": "research-only",
+      "unified_detector_installer_enabled": false,
+      "physical_game_certified": false,
+      "notes": "Catálogos/namespace i18next de prueba; ejecución real sin verificar"
+    }
+  ],
+  "pilot": {
+    "family": "rpg-maker",
+    "verified_subengines": [
+      "mv",
+      "mz"
+    ],
+    "original_v95_ci_run": 45044374825,
+    "original_v95_ci_gates": 26,
+    "real_game_visual_certified": false,
+    "copy_to_clean_windows_offline_certified": false
+  },
+  "prior_evidence_urls": [
+    "https://github.com/drimt902-netizen/tenshixgame-tx200/blob/ad77dccc763424428003377a53848ed311bd1e21/docs/TENSHIXGAME_TX200_MATRIZ_17_FAMILIAS_20261107.md",
+    "https://github.com/camachogomez791-byte/tenshixgame-tx20026/blob/e259a80801e0d3ef971c41d14db939b25730932b/audit/TX354_SEVENTEEN_FAMILIES_CONTRACT.json",
+    "https://github.com/eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build/blob/109fdc73a835e894b8804a27133e66360e4ba8c6/docs/TX590_RPG_SIX_ENGINE_REAL_V95_AUDIT.md"
+  ]
+}
