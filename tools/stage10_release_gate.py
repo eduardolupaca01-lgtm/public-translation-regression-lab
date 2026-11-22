@@ -12,7 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from tools.stage9_bilingual_review import EXPECTED, read_receipts, screen_case
+from tools.stage9_bilingual_review import EXPECTED, read_receipts, screen_case, review_flags
 
 REVIEWED_PACKET_PATH = "reviews/stage9-independent-reviewed-packet.json"
 FROZEN_RUNS = {"6": "44931094612", "7": "44942504944", "8": "44961618206"}
@@ -73,6 +73,9 @@ def _packet_integrity_blockers(reports: dict, packet: dict, hashes: dict) -> lis
                 or row.get("source_ja") != source
                 or (row.get("candidate_es_419") or "") != translated
                 or row.get("historical_rubric") != original.get("status")
+                or row.get("posthoc_screen_flags") != review_flags(
+                    stage, original["case"], translated, original.get("status", "unknown")
+                )
                 or row.get("raw_model_attempts") != original.get("raw_model_attempts", [])
                 or row.get("source_sha256") != hashlib.sha256(
                     source.encode("utf-8")

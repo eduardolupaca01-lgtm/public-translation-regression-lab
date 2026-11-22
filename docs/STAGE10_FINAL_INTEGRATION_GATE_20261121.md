@@ -16,7 +16,7 @@ El flujo Stage10 final integration technical preflight descarga los cuatro artef
 
 Esta prevalidación puede acabar correctamente mientras su dictamen interno sea HOLD: así distingue una preparación técnica satisfactoria de la falta real de aprobación humana. Nunca se realiza merge ni publicación automática.
 
-La puerta estricta manual se ejecuta desde .github/workflows/stage9-stage10-quality-gate.yml. Si existe reviews/stage9-independent-reviewed-packet.json, utiliza ese archivo redactado por la persona revisora; si no existe, toma la copia pendiente original de la etapa 9. Además obtiene el estado real de las revisiones de GitHub. Con --require-ready devuelve error si cualquiera de los criterios permanece sin satisfacer. Solo READY_FOR_MANUAL_PR_REVIEW habilita la consideración de una revisión manual adicional; no realiza merge.
+La puerta estricta se ejecuta automáticamente al subir reviews/stage9-independent-reviewed-packet.json a la rama experimental y admite una ejecución manual cuando GitHub la permita. Está definida en .github/workflows/stage9-stage10-quality-gate.yml. Si existe el JSON revisado, utiliza ese archivo redactado por la persona revisora; si no existe, toma la copia pendiente original de la etapa 9. Además obtiene el estado real de las revisiones de GitHub. Con --require-ready devuelve error si cualquiera de los criterios permanece sin satisfacer. Solo READY_FOR_MANUAL_PR_REVIEW habilita la consideración de una revisión manual adicional; no realiza merge.
 
 ## Procedimiento de aprobación bilingüe externa
 
@@ -25,7 +25,11 @@ La puerta estricta manual se ejecuta desde .github/workflows/stage9-stage10-qual
 3. Si detecta errores reales, proponga una corrección en la generación y una nueva evaluación. No cambie los recibos históricos, no reemplace una salida antes de computar la rúbrica y no firme el conjunto como completo.
 4. Una vez comprobados legítimamente todos los casos, indique human_review_completed=true y human_review_approved=true y agregue reviewer_attestation como objeto que contenga reviewer_github_login, reviewed_at_utc (ISO 8601 con zona horaria), independent_bilingual_review_confirmed=true, source_run_ids_by_stage y evidence_report_sha256_by_stage. Copie los dos últimos mapas idénticos a los del paquete original.
 5. Guarde el JSON sin cambios de evidencia como reviews/stage9-independent-reviewed-packet.json en la rama experimental. La persona revisora independiente del propietario deberá aprobar el último SHA de PR #4 en GitHub. Una aprobación de otro commit no sirve.
-6. Ejecute manualmente la puerta estricta de Stage10 en la rama experimental. Si todas las verificaciones pasan, el resultado es READY_FOR_MANUAL_PR_REVIEW; un responsable deberá decidir por separado si fusiona el PR.
+6. Subir el JSON revisado inicia automáticamente la puerta estricta, que puede quedar inicialmente en HOLD porque la revisión de GitHub aún no se ha aprobado sobre ese SHA. Una vez que la persona revisora independiente apruebe el commit actual del PR, utilice GitHub Actions > Re-run failed jobs sobre esa misma ejecución, sin agregar otro commit. Si entonces pasa y devuelve READY_FOR_MANUAL_PR_REVIEW, un responsable decidirá por separado si fusiona el PR.
+
+## Seguimiento público de la revisión
+
+La tarea de revisión independiente queda registrada en https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/issues/5. Nadie está asignado hasta que una persona cualificada se ofrezca y acepte efectivamente la revisión.
 
 ## Estado de seguridad
 

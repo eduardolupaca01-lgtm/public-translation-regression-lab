@@ -62,6 +62,17 @@ class TestStage9Stage10(unittest.TestCase):
         self.assertTrue(any("STAGE9_ORIGINAL_CASE_EVIDENCE_CHANGED" in b
                             for b in gate["blockers"]))
 
+    def test_final_gate_detects_tampering_with_review_alerts(self):
+        reports, proofs, hashes = self._mock_receipts()
+        packet = build_packet(reports, proofs, hashes)
+        packet["source_run_ids_by_stage"] = FROZEN_RUNS
+        packet["items"][0]["posthoc_screen_flags"] = ["FAKE_REVIEW_ALERT_REMOVED"]
+        gate = assess(reports, proofs, packet, hashes)
+        self.assertIn(
+            "STAGE9_ORIGINAL_CASE_EVIDENCE_CHANGED:stage6:mock_0",
+            gate["blockers"],
+        )
+
     def test_final_gate_detects_duplicate_case_and_missing_run_provenance(self):
         reports, proofs, hashes = self._mock_receipts()
         packet = build_packet(reports, proofs, hashes)
