@@ -5,7 +5,7 @@
 ## Código y procedencia
 
 - Código real de la GUI, plugin RPG Maker, instalador, pruebas, worker y modelos: repositorio PRIVADO `eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build`.
-- Commit de esta prueba: `579cb1570efb2889057f7f9f5e03fb3bb7156268` de `fix/tx768-rpg-namebox-body-firstpaint-20261122` (rama privada, no rama principal).
+- Commit de esta prueba: `08a181052f9c5eaa7ef6c71bb11eed487b7f97c0` de `fix/tx769-rpg-sqlite-durable-restore-20261122` (rama privada, no rama principal).
 - Workflow original: `.github/workflows/tx758-clean-current-baseline.yml` del mismo commit (emplea la suite TX765).
 - Compilador público: `.github/workflows/eduardo-original-rpg-win64.yml` con `tools/replay_eduardo_original.py`.
 
@@ -24,7 +24,7 @@ Desde GitHub, abrir el repositorio público → **Settings → Secrets and varia
 2. Seleccionar **Run workflow** con la rama `build/eduardo-original-rpg-win64-20261121` (o volver a ejecutar los trabajos después de crear los dos secretos).
 3. El runner verifica el SHA exacto del repositorio privado y comprueba los **26 pasos** del workflow original: GUI, V95 original, repaquetado de 21 componentes, 10 traducciones reales y 6 diálogos RPG, SQLite, instalación, primer y segundo arranque, integridad SHA, rollback y código de los plugins.
 4. No ejecuta los dos pasos finales originales de modificación de la rama privada ni de creación de una release. El programa original se crea dentro del runner, se cifra con contraseña y solo el archivo cifrado y el recibo de hash pueden descargarse del artifact.
-5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX768-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX768-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
+5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX769-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX769-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
 
 ## Evidencia actualizada de TX765 (2026-11-22)
 
@@ -68,3 +68,11 @@ Se descubrió una ruta sin probar por TX767: `request(text)` abandonaba mensajes
 La regresión `tests/js/test_tx765_no_overdraw_sync_custom_start.js` ahora comprueba marcadores dinámicos, actor con comillas, cuerpo separado, solicitudes únicas, bitmap propio, bitmap compartido, namebox ajeno, caché ausente y no-superposición. Un precontrol del workflow público ejecuta esa prueba sobre el código fuente privado descargado antes de reconstruir el motor V95. Luego se exigen los 26 controles originales sin omitir ninguna fase.
 
 **Límite:** incluso con PASS, no se certificará el arreglo de las escenas concretas del propietario sin reinstalar el plugin dentro de la copia del juego y comprobar F10 + logs `*.live.json.diagnostics.jsonl`. El EXE no reemplaza automáticamente el JS previamente instalado dentro del juego. No compartir el token GitHub ni la contraseña AES-256 en mensajes.
+
+## TX769 — persistencia SQLite y diagnóstico F10 de una sesión real
+
+La captura F10 después de TX768 registra `Recibidos 7820/8591`, `Mostrados 8 · caché 2968`, `Puente: sin traducción lista` y el archivo `embedded-v87-status.json` registra `previous=7801`, `new=19`, `failed=711`, `pending=60`, `scanThrottled=true`, `foregroundRequests=0`. No interpretar los 7.820 «recibidos» como 7.820 diálogos mostrados, ni el estado de reintento como motor desactivado.
+
+La rama privada `fix/tx769-rpg-sqlite-durable-restore-20261122` (commit exacto `08a181052f9c5eaa7ef6c71bb11eed487b7f97c0`) repara dos fallos de fuente: (1) las traducciones que llegan por `/updates` no tenían espejo durable individual, por lo que se podía perder la recuperación si el snapshot general superaba 5 MiB o no se guardaba; (2) una entrada individual anterior podía sobreescribir una revisión SQLite más nueva. El espejo emplea E/S asíncrona, verifica el archivo previo y nunca modifica JSON, partidas o motor del juego. Además añade el evento `native_lookup_untranslated` limitado y sin texto de juego ni token para diagnosticar escenas que siguen en japonés.
+
+Nuevo control bloqueante: `tests/js/test_tx769_sqlite_durable_restart.js`, ejecutado sobre la plantilla real del complemento **antes** de reconstruir V95 en Windows. Simula un registro SQLite verificado, caché individual anterior incorrecta, snapshot general mayor de 5 MiB, reinicio con feed histórico vacío y ausencia de llamadas de traducción repetidas. El flujo público sigue exigiendo los 26 controles originales y cifra el único EXE con 7-Zip. Su PASS no sustituye la observación del juego real; queda pendiente la causa de todas las frases japonesas de formato personalizado y de los 711 rechazos por calidad. 
