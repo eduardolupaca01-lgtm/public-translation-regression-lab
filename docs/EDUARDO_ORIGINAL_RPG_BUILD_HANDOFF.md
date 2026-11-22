@@ -26,6 +26,15 @@ Desde GitHub, abrir el repositorio público → **Settings → Secrets and varia
 4. No ejecuta los dos pasos finales originales de modificación de la rama privada ni de creación de una release. El programa original se crea dentro del runner, se cifra con contraseña y solo el archivo cifrado y el recibo de hash pueden descargarse del artifact.
 5. En caso de éxito, descargar el artifact **Eduardo-Tenshixgame-RPG-ORIGINAL-TX765-V95-Windows-TEST-ENCRYPTED**, extraer `Tenshixgame-RPG-TX765-V95-PRUEBA.7z` con 7-Zip y la contraseña propia, y ejecutar `Tenshixgame-RPG.exe` en Windows 10/11, primero sobre una copia del juego y de sus partidas.
 
+## Evidencia actualizada de TX765 (2026-11-22)
+
+- Fuente original congelada: `091f7326101a61b02ecaa7a447370102f7952328`, que incluye descubrimiento de las dos grafías históricas del puente, reemplazo en primer dibujo de Windows y diagnóstico de archivos.
+- El compilador público compara sus 26 pasos contra el workflow original de ese commit y **rechaza** nombres, orden, SHA o correcciones ausentes.
+- [Compilación pública #44973583953](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44973583953): la prevalidación del compilador terminó SUCCESS; la compilación Windows terminó con HOLD por `EDUARDO_PRIVATE_SOURCE_READ_ACCESS_REQUIRED`, antes de leer archivos privados, iniciar inferencia V95 o generar un EXE.
+- [Pruebas públicas TX765 #44973042111](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44973042111): Windows y Linux SUCCESS, solo reglas públicas de dibujo y lectura, no prueba del motor original.
+- [Regresiones generales #44973583898](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44973583898): SUCCESS en Windows y Linux.
+- Sin token autorizado, ninguna compilación pública puede descargar automáticamente el repositorio privado, su archivo V95 de 604 MB ni reconstruir la aplicación. No fabricar una actualización de prueba ni publicar el binario anterior como corregido.
+
 ## Estado / límites
 
 El preflight público no necesita secretos ni archivos privados. La compilación de la aplicación auténtica sí. Si el token o la contraseña no están configurados, GitHub genera **HOLD** y no finge disponer de un EXE probado.
