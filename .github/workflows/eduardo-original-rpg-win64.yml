@@ -151,7 +151,10 @@ jobs:
           node --check $env:TX771_TEST_PLUGIN *> $log
           if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_PRODUCTION_JS_SYNTAX_HOLD" }
           node original/tests/js/test_tx771_game_local_v95_portability.js *> $log
-          if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_JS_MODEL_AND_CACHE_HOLD" }
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content -LiteralPath $log | Where-Object { $_ -match 'TX771 PORTABLE GAME LOCAL V95 FAIL|AssertionError|Error:|code:|TX771_PORTABLE_WAIT_EXPIRED' } | Select-Object -First 8 | ForEach-Object { Write-Host $_ }
+            throw "TX771_PORTABLE_JS_MODEL_AND_CACHE_HOLD"
+          }
           node original/tests/js/test_tx771_custom_message_converter_first_paint.js *> $log
           if ($LASTEXITCODE -ne 0) { throw "TX771_CUSTOM_NATIVE_GLYPH_FIRST_PAINT_HOLD" }
           node original/tests/js/test_tx765_no_overdraw_sync_custom_start.js *> $log
