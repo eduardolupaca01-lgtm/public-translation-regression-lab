@@ -73,6 +73,10 @@ jobs:
               elseif($message -match "SyntaxError:") {$state="NODE_SYNTAX_ERROR"}
               elseif($message -match "ERR_ASSERTION") {$state="UNMATCHED_ASSERTION"}
             }
+            if($state -eq "UNMATCHED_ASSERTION" -or $state -eq "UNCLASSIFIED_SYNTHETIC_REGRESSION") {
+              $stack=[regex]::Match($message,'test_tx765_no_overdraw_sync_custom_start[.]js:([0-9]{1,4})')
+              if($stack.Success) {$state="SYNTHETIC_TEST_LINE_"+$stack.Groups[1].Value}
+            }
             Write-Host ("TX775_"+$label+"_VISUAL=FAIL_"+$state)
             return $false
           }
