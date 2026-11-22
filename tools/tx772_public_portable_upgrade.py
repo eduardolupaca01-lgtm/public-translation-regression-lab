@@ -200,11 +200,18 @@ def transformed(value: str) -> str:
                 "engineManifestMatches(appDir,engine)", "return appDir,runtime,nil")
     if not all(token in original for token in required):
         raise RuntimeError("TX772_UNRECOGNIZED_ORIGINAL_PORTABLE_FLOW")
-    return before + START + NEW_EXISTING_BODY + END + after
+    patched = before + START + NEW_EXISTING_BODY + END + after
+    # The original 'engine' local was read only by the replaced old-path
+    # branch. Keeping it would make the Windows Go compiler reject TX772.
+    obsolete = '    engine:=filepath.Join(runtime,"TENSHIXGAME-RPG","engine")\n'
+    if patched.count(obsolete) != 1:
+        raise RuntimeError("TX772_REPLACED_ENGINE_LOCAL_ANCHOR_CHANGED")
+    return patched.replace(obsolete, "")
+
 
 
 def self_test() -> None:
-    sample = START + ("        " + "\n        ".join((
+    sample = '    engine:=filepath.Join(runtime,"TENSHIXGAME-RPG","engine")\n' + START + ("        " + "\n        ".join((
         "tx771OwnerFile(marker)", "verifyDirectory(appDir,payload)",
         "engineManifestMatches(appDir,engine)", "return appDir,runtime,nil")) + "\n") + END
     patched = transformed(sample)
