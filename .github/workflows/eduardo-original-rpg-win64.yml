@@ -1,0 +1,409 @@
+name: TENSHIXGAME TX774 V95 protected speaker-name trial (encrypted owner test)
+
+on:
+  push:
+    branches:
+      - rebuild/tenshixgame-unificado-deteccion-20261122
+    paths:
+      - "tools/replay_eduardo_original.py"
+      - "tools/tx772_public_portable_upgrade.py"
+      - "tools/tx774_name_control_quality.py"
+      - ".github/workflows/eduardo-original-rpg-win64.yml"
+      - "docs/EDUARDO_ORIGINAL_RPG_BUILD_HANDOFF.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: eduardo-original-rpg-public-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-free-preflight:
+    name: Validate original build replay contract (no private access)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check reproducible source-free bridge code
+        shell: bash
+        run: |
+          python -m py_compile tools/replay_eduardo_original.py
+          python tools/replay_eduardo_original.py --self-test
+          python tools/tx772_public_portable_upgrade.py --self-test
+          python tools/tx774_name_control_quality.py --self-test
+          python tools/publication_guard.py
+          echo "EDUARDO_ORIGINAL_PUBLIC_ORCHESTRATION_ONLY_PASS"
+
+  rebuild-genuine-original-windows:
+    name: Eduardo ORIGINAL RPG EXE - 26 gates, encrypted owner-only output
+    needs: source-free-preflight
+    runs-on: windows-2022
+    timeout-minutes: 180
+    # The owner stated they saved the two secret VALUES under opposite names.
+    # Map by actual contents here; no values, tokens, or passwords in git.
+    env:
+      EDUARDO_RPG_SOURCE_TOKEN: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+      EDUARDO_RPG_ARCHIVE_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify secret values according to owner's reversed field placement (no disclosure)
+        shell: pwsh
+        run: |
+          if (-not $env:EDUARDO_RPG_SOURCE_TOKEN -or $env:EDUARDO_RPG_SOURCE_TOKEN.Length -lt 20 -or -not $env:EDUARDO_RPG_SOURCE_TOKEN.StartsWith('github_pat_')) {
+            Write-Host "HOLD: Set the public repo's EDUARDO_RPG_SOURCE_TOKEN Actions secret to a fine-grained read-only token for Eduardo's private source and releases."
+            throw "EDUARDO_PRIVATE_SOURCE_READ_ACCESS_REQUIRED"
+          }
+          if (-not $env:EDUARDO_RPG_ARCHIVE_PASSWORD -or $env:EDUARDO_RPG_ARCHIVE_PASSWORD.Length -lt 20 -or $env:EDUARDO_RPG_ARCHIVE_PASSWORD.StartsWith('github_pat_')) {
+            Write-Host "HOLD: Set EDUARDO_RPG_ARCHIVE_PASSWORD (20+ characters) to encrypt the private original EXE before public artifact upload."
+            throw "EDUARDO_OWNER_ONLY_ENCRYPTION_REQUIRED"
+          }
+          Write-Host "EDUARDO_BUILD_CREDENTIALS_PRESENT_AND_NOT_LOGGED"
+
+      - name: Fetch actual private original source from Eduardo at fixed TX765 commit
+        uses: actions/checkout@v4
+        with:
+          repository: eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build
+          ref: aeb9ff9326e418fbabe2d53dff7891f4fb340c37
+          path: original
+          token: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+          persist-credentials: false
+          fetch-depth: 1
+          lfs: false
+
+      - name: TX772 patch only the disposable original checkout for owner-verified game-local upgrades
+        shell: pwsh
+        run: |
+          python ci/tools/tx772_public_portable_upgrade.py --source-root original
+          if ($LASTEXITCODE -ne 0) { throw "TX772_EPHEMERAL_GAME_LOCAL_UPDATE_OVERLAY_FAILED" }
+          Write-Host "TX772_PUBLIC_SOURCE_PINNED_OVERLAY_PASS"
+
+      - name: TX774 verify protected NPC name guard in private disposable checkout
+        shell: pwsh
+        run: |
+          python ci/tools/tx774_name_control_quality.py --source-root original
+          if ($LASTEXITCODE -ne 0) { throw "TX774_ORIGINAL_V95_NAME_GUARD_HOLD" }
+          node --check original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+          if ($LASTEXITCODE -ne 0) { throw "TX774_JS_SYNTAX_HOLD" }
+          Write-Host "TX774_SOURCE_PINNED_NAME_CONTROL_FIX_PASS"
+
+      - name: Diagnose private V95 gate-06 contracts without leaking their test output
+        shell: pwsh
+        run: |
+          python ci/tools/diag_eduardo_v95_contracts.py --source-root original --runner-temp "$env:RUNNER_TEMP"
+          if ($LASTEXITCODE -ne 0) { throw "EDUARDO_PRIVATE_V95_GATE06_SOURCE_CONTRACT_FAILED" }
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: TX772 ensure owner-verified upgrades reject altered workers and preserve cached data
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx541-rpg-onefile
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx772-owner-upgrade-regression.log"
+            go test . -run '^TestTX772' -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX772_OWNER_MARKER_AND_CACHE_SAFETY_REGRESSION_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX772_GAME_LOCAL_OWNER_AND_CACHE_SAFETY_PASS"
+
+      - name: TX768 run speaker-consumed first-paint regression before model rebuild
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "tx768-visual-regression.log"
+          node original/tests/js/test_tx765_no_overdraw_sync_custom_start.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX768_NATIVE_NAMEBOX_REGRESSION_HOLD" }
+          Write-Host "TX768_NATIVE_NAMEBOX_REGRESSION_PASS"
+
+      - name: TX769 prove original SQLite translations persist across restart without stale overwrite
+        shell: pwsh
+        env:
+          TX765_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "tx769-sqlite-durable-restart.log"
+          node original/tests/js/test_tx769_sqlite_durable_restart.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX769_SQLITE_DURABLE_RESTART_REGRESSION_HOLD" }
+          Write-Host "TX769_SQLITE_DURABLE_RESTART_PASS"
+
+      - name: TX770 prove cached live dialogue wins over speculative retry cooldown
+        shell: pwsh
+        env:
+          TX770_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "tx770-foreground-cache.log"
+          node original/tests/js/test_tx770_foreground_cache_before_cooldown.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX770_FOREGROUND_CACHE_REGRESSION_HOLD" }
+          Write-Host "TX770_FOREGROUND_CACHE_BEFORE_COOLDOWN_PASS"
+
+      - name: TX770 prove safe whitespace match and durable restart without additional model
+        shell: pwsh
+        env:
+          TX765_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "tx770-sqlite-whitespace-restart.log"
+          node original/tests/js/test_tx770_sqlite_whitespace_recovery.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX770_SQLITE_WHITESPACE_RESTART_HOLD" }
+          Write-Host "TX770_SQLITE_WHITESPACE_RESTART_PASS"
+
+      - name: TX770 verify exact known TX769 plugin SHA before installing
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx331-clean-product-host
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx770-known-predecessor.log"
+            go test . -run TestTX770RecognizesOwnersExactTX769InstalledScriptForUpgrade -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX770_OWNER_TX769_PREDECESSOR_HASH_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX770_OWNER_TX769_PREDECESSOR_HASH_PASS"
+
+      - name: TX771 prove original plugin real JS with portable runtime and no Internet
+        shell: pwsh
+        env:
+          TX771_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+          TX765_TEST_PLUGIN: original/reference/tx331-clean-product-host/rpg_live_plugin/versions/tx757-patched-template.js
+          TX771_SAFE_FAILURE_ONLY: "1"
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "tx771-portable-js.log"
+          node --check $env:TX771_TEST_PLUGIN *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_PRODUCTION_JS_SYNTAX_HOLD" }
+          node original/tests/js/test_tx771_game_local_v95_portability.js *> $log
+          if ($LASTEXITCODE -ne 0) {
+            # Public workflow: never print raw private log lines or source paths.
+            $text = Get-Content -LiteralPath $log -Raw
+            $diagnostics = @(
+              @{match="TX771_PORTABLE_WAIT_EXPIRED_OWNED_WORKER_SPAWN";code="OWNED_SPAWN_TIMEOUT"},
+              @{match="TX771_PORTABLE_WAIT_EXPIRED_LEGACY_WORKER_SPAWN";code="LEGACY_SPAWN_TIMEOUT"},
+              @{match="portable game should spawn one original worker";code="OWNED_SPAWN_COUNT"},
+              @{match="only worker CHILD gets game-local LOCALAPPDATA";code="CHILD_ENV_MISMATCH"},
+              @{match="PyInstaller temporary extraction must stay within its own game";code="TEMP_ENV_MISMATCH"},
+              @{match="owner-marked portable game must store its cache";code="CACHE_NOT_CREATED"},
+              @{match="a marker for an unknown/faulty sidecar must NEVER";code="FOREIGN_SIDECAR_UNSAFE"},
+              @{match="known TX770 games without sidecars retain";code="LEGACY_SPAWN_COUNT"},
+              @{match="EACCES";code="READ_PERMISSION"},
+              @{match="ENOENT";code="FILE_NOT_FOUND"}
+            )
+            $stage="UNCLASSIFIED_SAFE_ERROR"
+            # The current private test emits ONLY a fixed allowlisted code,
+            # never a JavaScript stack trace, game content, token or path.
+            $matchResult=[regex]::Match($text,'TX771_SAFE_TEST_FAILURE_CODE=([A-Z_]+)')
+            $safeCodes=@("WORKER_PATH","LEGACY_WORKER_PATH","SPAWN_SHELL",
+              "SPAWN_VISIBILITY","SPAWN_DETACHED","OWNED_SPAWN_TIMEOUT",
+              "LEGACY_SPAWN_TIMEOUT","OWNED_SPAWN_COUNT","WRONG_ENGINE_LOCATION",
+              "WRONG_CHILD_LOCALAPPDATA","WRONG_CHILD_TEMP","CACHE_NOT_FOUND",
+              "CACHE_WRITTEN_TO_PROFILE","FOREIGN_MARKER_ACCEPTED",
+              "LEGACY_SPAWN_COUNT","NON_LOCAL_HTTP","OTHER_EQUALITY_ASSERTION",
+              "MISSING_OBJECT_PROPERTY","MISSING_FILE","PERMISSION_DENIED",
+              "ACCESS_DENIED","LOCKED_FILE","UNKNOWN_ASSERTION","UNCLASSIFIED_EXCEPTION")
+            if($matchResult.Success -and $safeCodes.Contains($matchResult.Groups[1].Value)) {
+              $stage=$matchResult.Groups[1].Value
+            }
+            Write-Host "TX771_SAFE_PORTABLE_FAILURE_STAGE=$stage"
+            throw "TX771_PORTABLE_JS_MODEL_AND_CACHE_HOLD"
+          }
+          node original/tests/js/test_tx771_custom_message_converter_first_paint.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_CUSTOM_NATIVE_GLYPH_FIRST_PAINT_HOLD" }
+          node original/tests/js/test_tx765_no_overdraw_sync_custom_start.js *> $log
+          if ($LASTEXITCODE -ne 0) { throw "TX771_PREVIOUS_MESSAGE_NO_OVERDRAW_HOLD" }
+          Write-Host "TX771_PORTABLE_AND_CUSTOM_FIRST_PAINT_REGRESSION_PASS"
+
+      - name: TX771 prove portable Go bootstrap, private V95 model installer and missing journal recovery
+        shell: pwsh
+        run: |
+          Push-Location original/reference/tx541-rpg-onefile
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx771-portable-onefile.log"
+            go test . -run TestTX771 -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_ONEFILE_GO_TEST_HOLD" }
+          } finally { Pop-Location }
+          Push-Location original/reference/tx331-clean-product-host
+          try {
+            $log = Join-Path $env:RUNNER_TEMP "tx771-portable-journal.log"
+            go test . -run TestTX771 -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_JOURNAL_ADOPTION_GO_TEST_HOLD" }
+            go test ./cmd/tenshixgame-ui -run TestTX771 -count=1 *> $log
+            if ($LASTEXITCODE -ne 0) { throw "TX771_PORTABLE_GAME_MODEL_INSTALL_GO_TEST_HOLD" }
+          } finally { Pop-Location }
+          Write-Host "TX771_PORTABLE_GO_MODEL_AND_SAFE_JOURNAL_PASS"
+
+      - name: Install build-orchestrator YAML parser
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --no-input "PyYAML==6.0.2"
+          if ($LASTEXITCODE -ne 0) { throw "BUILD_REPLAY_YAML_PARSER_MISSING" }
+
+      - name: Run the EXACT original source-pinned GUI and V95 chain on Windows
+        shell: pwsh
+        run: |
+          python ci/tools/replay_eduardo_original.py --source-root original --receipt "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json"
+          if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ORIGINAL_V95_BUILD_OR_TEST_HOLD" }
+          $receipt = Get-Content "$env:RUNNER_TEMP/eduardo-original-rebuild-receipt.json" -Raw | ConvertFrom-Json
+          if ($receipt.status -ne "ORIGINAL_EXE_BUILT_AND_REAL_NEURAL_TESTS_PASS" -or -not $receipt.tx765_private_repair_source_verified -or $receipt.steps_passed -ne 26 -or $receipt.source_commit -ne "aeb9ff9326e418fbabe2d53dff7891f4fb340c37") {
+            throw "EDUARDO_ORIGINAL_EXE_RECEIPT_INVALID"
+          }
+
+      - name: TX774 prove patched name guard survives original V95 JS packaging
+        shell: pwsh
+        run: |
+          $plugin = "original/reference/tx331-clean-product-host/rpg_live_plugin/TenshixgameRPGLive.js"
+          if (-not (Test-Path -LiteralPath $plugin -PathType Leaf)) { throw "TX774_ORIGINAL_PACKAGED_PLUGIN_MISSING" }
+          $content=Get-Content -LiteralPath $plugin -Raw
+          if (-not $content.Contains("TX774: unchanged native speaker metadata")) {
+            throw "TX774_NATIVE_NAME_GUARD_NOT_IN_FINAL_JS"
+          }
+          Write-Host "TX774_FINAL_NATIVE_V95_PLUGIN_GUARD_PASS"
+
+      - name: TX771 verify rebuilt real V95 portable EXE on game volume and repeat after copied game relocation
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "Tenshixgame-RPG.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "TX771_PORTABLE_FULL_EXE_MISSING" }
+          # The single EXE has a Windows GUI subsystem. PowerShell's direct &
+          # invocation can return before the GUI process and its neural child
+          # have exited. This step MUST wait for the real exit code; never
+          # accept stale $LASTEXITCODE or an asynchronous launch as a test.
+          function Invoke-TX771PortableSmoke {
+            param([string]$TargetExe,[string]$SelectedGame,[string]$CaseName)
+            $env:TX771_PORTABLE_GAME_EXE=$SelectedGame
+            $diag=Join-Path $env:RUNNER_TEMP ("tx771-onefile-" + $CaseName + "-private-diagnostic.txt")
+            $stdout=Join-Path $env:RUNNER_TEMP ("tx771-onefile-" + $CaseName + "-stdout.txt")
+            $stderr=Join-Path $env:RUNNER_TEMP ("tx771-onefile-" + $CaseName + "-stderr.txt")
+            $env:TX541_RPG_DIAGNOSTIC_FILE=$diag
+            try {
+              $proc=Start-Process -FilePath $TargetExe -ArgumentList "--rpg-onefile-portable-smoke" -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ErrorAction Stop
+            } catch {
+              throw "TX771_PORTABLE_START_PROCESS_FAILED"
+            }
+            if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+              # Only emit a fixed, sanitized category to a PUBLIC runner.
+              # The actual Go exception remains solely in RUNNER_TEMP.
+              $raw=""
+              if (Test-Path -LiteralPath $diag -PathType Leaf) {
+                $raw=Get-Content -LiteralPath $diag -Raw
+              }
+              $safe=@("TX771_SELECT_ORDINARY_GAME_EXE",
+                "TX771_MV_MZ_GAME_LAYOUT_REQUIRED",
+                "TX771_GAME_ROOT_REPARSE_REFUSED",
+                "TX771_GAME_ROOT_LINKED_OR_MISSING",
+                "TX771_PORTABLE_ENGINE_MANIFEST_MISMATCH",
+                "TX771_PORTABLE_WORKER_MISMATCH",
+                "TX771_FOREIGN_PORTABLE_FOLDER",
+                "TX541_PAYLOAD_REQUIRED_FILES_MISSING",
+                "TX541_RPG_HOST_VALIDATION_OR_INSTALL_FAILED",
+                "TX541_EMBEDDED_PAYLOAD_SHA256_MISMATCH",
+                "TX541_INSTALLED_APP_FILES_NOT_EXACT",
+                "TX541_EXISTING_ENGINE_CORRUPT_OR_FOREIGN",
+                "TX541_INSTALLED_V95_MODEL_MANIFEST_DRIFT")
+              $code="UNCLASSIFIED_ONEFILE_ERROR"
+              foreach($item in $safe){ if($raw.Contains($item)){$code=$item;break} }
+              Write-Host ("TX771_SAFE_ONEFILE_FAILURE_CODE="+$code)
+              throw "TX771_PORTABLE_ONEFILE_SMOKE_NONZERO"
+            }
+            # The actual GUI-subsystem main writes this witness before any
+            # extraction. It is not sufficient without a verified exit code.
+            if (-not (Test-Path -LiteralPath $diag -PathType Leaf) -or
+                -not ((Get-Content -LiteralPath $diag -Raw).Contains("TX541_WINDOWS_MAIN_ENTERED"))) {
+              throw "TX771_PORTABLE_ONEFILE_MAIN_NOT_OBSERVED"
+            }
+          }
+          $game = Join-Path $env:RUNNER_TEMP "tx771-owner-test-game"
+          $data = Join-Path $game "www\data"
+          $js = Join-Path $game "www\js"
+          New-Item -ItemType Directory -Force -Path $data,$js | Out-Null
+          $gameExe = Join-Path $game "Game.exe"
+          [System.IO.File]::WriteAllBytes($gameExe,[byte[]]@(77,90,0,0))
+          '{}' | Set-Content -LiteralPath (Join-Path $data 'System.json') -Encoding UTF8
+          'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js 'plugins.js') -Encoding UTF8
+          Invoke-TX771PortableSmoke -TargetExe $exe -SelectedGame $gameExe -CaseName "cold"
+          $folder = Join-Path $game "Tenshixgame-IA"
+          $worker = Join-Path $folder ".local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
+          $marker = Join-Path $folder "portable-owner-v1.json"
+          if (-not (Test-Path -LiteralPath $worker -PathType Leaf) -or -not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+            throw "TX771_COLD_PORTABLE_WORKER_AND_OWNER_MISSING"
+          }
+          $markerJSON = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+          $hash = (Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($markerJSON.schema -ne "tenshixgame-rpg-portable-owner-v1" -or $markerJSON.worker_sha256 -ne $hash) {
+            throw "TX771_ORIGINAL_PORTABLE_MODEL_SHA_MISMATCH"
+          }
+          Write-Host "TX771_PORTABLE_ORIGINAL_V95_INSTALL_GAME_VOLUME_PASS"
+          $copy = Join-Path $env:RUNNER_TEMP "tx771-relocated-full-game"
+          Copy-Item -LiteralPath $game -Destination $copy -Recurse
+          Invoke-TX771PortableSmoke -TargetExe $exe -SelectedGame (Join-Path $copy "Game.exe") -CaseName "relocated"
+          $copyWorker=Join-Path $copy "Tenshixgame-IA\.local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
+          if ((Get-FileHash -LiteralPath $copyWorker -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) {
+            throw "TX771_PORTABLE_RELOCATED_MODEL_DRIFT"
+          }
+          Write-Host "TX771_PORTABLE_RELOCATED_ORIGINAL_V95_SHA_PASS"
+          Remove-Item Env:TX771_PORTABLE_GAME_EXE -ErrorAction SilentlyContinue
+          Remove-Item Env:TX541_RPG_DIAGNOSTIC_FILE -ErrorAction SilentlyContinue
+
+      - name: Encrypt private original EXE so public Actions never exposes the underlying binary
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP "Tenshixgame-RPG.exe"
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "ORIGINAL_EXE_NOT_FOUND"
+          }
+          $seven = Get-Command 7z.exe -ErrorAction SilentlyContinue
+          if ($null -eq $seven -and (Test-Path "C:\Program Files\7-Zip\7z.exe")) {
+            $sevenExe = "C:\Program Files\7-Zip\7z.exe"
+          } elseif ($null -ne $seven) {
+            $sevenExe = $seven.Source
+          } else {
+            throw "7ZIP_AES256_REQUIRED_FOR_PROTECTED_ARTIFACT"
+          }
+          $directory = Join-Path $env:RUNNER_TEMP "eduardo-encrypted-output"
+          New-Item -ItemType Directory -Force $directory | Out-Null
+          $ciphertext = Join-Path $directory "Tenshixgame-RPG-TX774-NOMBRES-V95-PRUEBA.7z"
+          $passArgument = "-p" + $env:EDUARDO_RPG_ARCHIVE_PASSWORD
+          & $sevenExe a -t7z -mhe=on -mx=0 $passArgument $ciphertext $exe | Out-Null
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $ciphertext)) {
+            throw "EDUARDO_PRIVATE_EXE_ENCRYPTION_FAILED"
+          }
+          & $sevenExe t $passArgument $ciphertext | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "EDUARDO_ENCRYPTED_ARCHIVE_INTEGRITY_FAILED" }
+          $receipt = Join-Path $env:RUNNER_TEMP "eduardo-original-rebuild-receipt.json"
+          Copy-Item -LiteralPath $receipt -Destination (Join-Path $directory "eduardo-original-build-receipt.json")
+          $hash = (Get-FileHash -LiteralPath $ciphertext -Algorithm SHA256).Hash.ToLowerInvariant()
+          ($hash + "  Tenshixgame-RPG-TX774-NOMBRES-V95-PRUEBA.7z") | Set-Content -LiteralPath (Join-Path $directory "SHA256.txt") -Encoding ascii
+          Write-Host "EDUARDO_ORIGINAL_ENCRYPTED_ARCHIVE_SHA256=$hash"
+          Write-Host "EDUARDO_ORIGINAL_REAL_V95_ONEFILE_ENCRYPTED_OWNER_ONLY_NO_PUBLIC_PLAINTEXT"
+          "TX774 protected-name quality candidate built with original V95. Encrypted with owner-held EDUARDO_RPG_ARCHIVE_PASSWORD. Extract with 7-Zip and test only on a copy of your game. This does not certify the user's own game or authorize public distribution." |
+            Set-Content -LiteralPath (Join-Path $directory "LEER-ORIGINAL.txt") -Encoding utf8
+
+      - name: Upload ONLY encrypted original EXE and nonsensitive provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eduardo-TENSHIXGAME-TX774-V95-NOMBRES-PORTABLE-Windows-ENCRYPTED
+          retention-days: 14
+          if-no-files-found: error
+          path: ${{ runner.temp }}/eduardo-encrypted-output/
+
+      - name: Keep only nonsensitive HOLD receipt on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eduardo-Original-RPG-Windows-HOLD
+          retention-days: 7
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/eduardo-original-rebuild-receipt.json
