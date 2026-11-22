@@ -5,7 +5,7 @@
 ## Código y procedencia
 
 - Código real de la GUI, plugin RPG Maker, instalador, pruebas, worker y modelos: repositorio PRIVADO `eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build`.
-- Commit exacto: `091f7326101a61b02ecaa7a447370102f7952328` de `fix/tx765-rpg-live-bridge-native-paint-20261121`.
+- Commit exacto: `20d750f931b8cbda6b468b0f403c2eb779e99a60` de `fix/tx765-rpg-live-bridge-native-paint-20261121`.
 - Workflow original: `.github/workflows/tx758-clean-current-baseline.yml` del mismo commit (emplea la suite TX765).
 - Compilador público: `.github/workflows/eduardo-original-rpg-win64.yml` con `tools/replay_eduardo_original.py`.
 
@@ -28,9 +28,9 @@ Desde GitHub, abrir el repositorio público → **Settings → Secrets and varia
 
 ## Evidencia actualizada de TX765 (2026-11-22)
 
-- Fuente original congelada: `091f7326101a61b02ecaa7a447370102f7952328`, que incluye descubrimiento de las dos grafías históricas del puente, reemplazo en primer dibujo de Windows y diagnóstico de archivos.
+- Fuente original congelada: `20d750f931b8cbda6b468b0f403c2eb779e99a60`, que incluye descubrimiento de las dos grafías históricas del puente, reemplazo en primer dibujo de Windows y diagnóstico de archivos.
 - El compilador público compara sus 26 pasos contra el workflow original de ese commit y **rechaza** nombres, orden, SHA o correcciones ausentes.
-- [Compilación pública #44973583953](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44973583953): la prevalidación del compilador terminó SUCCESS; la compilación Windows terminó con HOLD por `EDUARDO_PRIVATE_SOURCE_READ_ACCESS_REQUIRED`, antes de leer archivos privados, iniciar inferencia V95 o generar un EXE.
+- [Compilación pública #44973583953](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44973583953): la prevalidación del compilador terminó SUCCESS; esa compilación Windows anterior terminó con HOLD por `EDUARDO_PRIVATE_SOURCE_READ_ACCESS_REQUIRED`, antes de leer archivos privados, iniciar inferencia V95 o generar un EXE.
 - [Pruebas públicas TX765 #44973042111](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44973042111): Windows y Linux SUCCESS, solo reglas públicas de dibujo y lectura, no prueba del motor original.
 - [Regresiones generales #44973583898](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/44973583898): SUCCESS en Windows y Linux.
 - Sin token autorizado, ninguna compilación pública puede descargar automáticamente el repositorio privado, su archivo V95 de 604 MB ni reconstruir la aplicación. No fabricar una actualización de prueba ni publicar el binario anterior como corregido.
@@ -40,3 +40,7 @@ Desde GitHub, abrir el repositorio público → **Settings → Secrets and varia
 El preflight público no necesita secretos ni archivos privados. La compilación de la aplicación auténtica sí. Si el token o la contraseña no están configurados, GitHub genera **HOLD** y no finge disponer de un EXE probado.
 
 El resultado no debe publicarse sin cifrar ni fusionarse a `main` automáticamente. El modelo real puede fallar en alguna comprobación; ese fallo debe diagnosticarse y corregirse en la fuente original, jamás eludirse creando traducciones simuladas o sustituyendo el motor por el del prototipo.
+
+## Corrección TX766 de la autoprueba de V95
+
+La ejecución 44974646131 llegó a superar las primeras cinco verificaciones originales y falló en el control 6. Una comprobación aislada en el servidor público, run 44975204310, localizó el fallo en TX760_SOURCE_SELFTEST. Al revisar el código privado se detectó que se leía `greeting_map` antes de inicializarlo. El commit `20d750f931b8cbda6b468b0f403c2eb779e99a60` mueve la inicialización a su posición correcta, sin cambiar los pesos del motor ni debilitar la comprobación de texto. Esta compilación nueva exige ese commit exacto. No declarar PASS del autodiagnóstico hasta confirmarlo en CI.

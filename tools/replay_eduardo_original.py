@@ -15,7 +15,7 @@ from pathlib import Path
 import subprocess
 
 SOURCE_REPO = "eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build"
-SOURCE_SHA = "091f7326101a61b02ecaa7a447370102f7952328"
+SOURCE_SHA = "20d750f931b8cbda6b468b0f403c2eb779e99a60"
 SOURCE_BRANCH = "fix/tx765-rpg-live-bridge-native-paint-20261121"
 SOURCE_WORKFLOW = ".github/workflows/tx758-clean-current-baseline.yml"
 
