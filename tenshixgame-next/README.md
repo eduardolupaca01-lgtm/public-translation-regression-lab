@@ -24,6 +24,14 @@ Artifact: `Eduardo-TENSHIXGAME-TX775-V95-NOMBRES-PORTABLE-Windows-ENCRYPTED` (ca
 
 **Actualización real TX772 → TX775 aprobada:** [Windows CI #45046277149](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45046277149). Descifró ambos EXE originales solo en Windows desechable, comprobó sus recibos SHA, conservó caché y paquetes App anteriores, no modificó Game.exe ni plugins.js, y verificó reinicio, traslado de carpeta y ausencia de motor global en el perfil. Solo se publicó un pequeño recibo de PASS sin modelos. No es una prueba visual en el juego real.
 
+## 2a. Versión de prueba actual: TX776 original V95 con diagnóstico
+
+**Última compilación original comprobada:** [GitHub Actions #45049228765](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45049228765) — **SUCCESS**. Ejecutó los 26 gates originales, Go Windows de diagnósticos acumulados, cache/journal, modelo auténtico V95, pruebas del complemento TX775 y validación portable; el EXE se distribuye cifrado.
+
+**Descarga:** artifact `Eduardo-TENSHIXGAME-TX776-V95-DIAGNOSTICO-PORTABLE-Windows-ENCRYPTED`, válido hasta el **6 de diciembre de 2026**. El ZIP contiene el archivo AES `Tenshixgame-RPG-TX776-DIAGNOSTICO-V95-PRUEBA.7z` (SHA-256 de este archivo cifrado: `693f4a619e5a560f25736a89bc0fad9733f3c6065ad3a347488ad4fc4da80f94`). Usar la contraseña que el propietario configuró; no se publica por GitHub. Una copia desprotegida del EXE o los modelos nunca se adjunta a este repositorio.
+
+El nuevo panel conserva el histórico, comunica pasos y permite copiar un informe de error privado sin eliminar archivos ni iniciarse en segundo plano. **Todavía falta ver el español en una copia del juego real y confirmar un segundo PC Windows sin Internet.** No se debe declarar compatible un título solo porque Actions sea verde. La versión TX775 permanece como artefacto histórico anterior; no es el instalador con botón copiar TX776.
+
 ## Diagnóstico nuevo TX776 (instalador original de Windows)
 
 El área de **Estado de instalación** conserva los eventos anteriores en vez de reemplazarlos. El botón **COPIAR DIAGNÓSTICO PARA ENVIAR** recoge códigos, etapa y recomendaciones sin enviar nada por Internet ni copiar rutas personales, contraseñas ni textos privados del juego. Hay pruebas Go de Windows para la acumulación y seguridad del informe.
@@ -35,8 +43,8 @@ El overlay de instalación se aplica **únicamente** a la copia temporal del có
 ## 3. Cómo probar sin poner en riesgo el juego
 
 1. Conservar la carpeta original y sus partidas. Trabajar únicamente sobre una copia con el juego cerrado y el antiguo complemento no ejecutándose.
-2. Descargar el artifact cifrado TX775 desde la ejecución enlazada y verificar el SHA-256 del `.7z` antes de extraerlo con la contraseña del titular.
-3. Usar el EXE TX775 para seleccionar el `Game.exe` de la copia y realizar la opción propia de **instalar/actualizar traducción**. No manipular `plugins.js` ni cambiar los marcadores SHA a mano.
+2. Descargar el artifact cifrado TX776 desde la ejecución enlazada y verificar el SHA-256 del `.7z` antes de extraerlo con la contraseña del titular.
+3. Usar el EXE TX776 para seleccionar el `Game.exe` de la copia y realizar la opción propia de **instalar/actualizar traducción**. No manipular `plugins.js` ni cambiar los marcadores SHA a mano.
 4. Cerrar el instalador, iniciar el `Game.exe` de esa misma copia y comprobar diálogo, nombre NPC, decisiones y F10. Reiniciar el juego y volver a observar el mismo diálogo para verificar reutilización del caché.
 5. Para comprobar portabilidad, cerrar el juego y todos los trabajadores, trasladar **la carpeta completa** a otro disco/Windows sin reinstalar y volver a iniciar. Si el instalador indica archivo desconocido o cambiado, no borrar ni forzar una reparación.
 
