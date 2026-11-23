@@ -1,0 +1,200 @@
+name: Servidor v2 - modelo OPUS real - Windows propietario cifrado
+on:
+  push:
+    branches:
+      - feature/servidor-v2-identidad-rpg-mv-20261123
+    paths:
+      - "servidor_v2/**"
+      - ".github/workflows/servidor-v2-real-ia-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-real-ia:
+    name: Reconstruir motor propio desde modelos verificados y probar español real
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      IA_PASSWORD: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.2"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Bloqueo si no se dispone de origen privado cifrado
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:IA_PASSWORD) -or $env:IA_PASSWORD.Length -lt 20) {
+            throw "IA_MODELOS_FIRMADOS_CIFRADOS_NO_AUTORIZADOS_HOLD"
+          }
+          if ([string]::IsNullOrEmpty($env:GH_TOKEN)) {
+            throw "IA_CREDENCIAL_ARTIFACT_ORIGINAL_FALTANTE_HOLD"
+          }
+      - name: Descargar origen de modelos OPUS ya verificado - NUNCA instalar antiguo programa en la entrega
+        shell: pwsh
+        run: |
+          $location=Join-Path $env:RUNNER_TEMP "ia-v2-old-verified-source"
+          New-Item -ItemType Directory -Force -Path $location | Out-Null
+          gh run download 45117163135 --repo eduardolupaca01-lgtm/public-translation-regression-lab --name SERVIDOR-RPG-MV-WIN10-V95-CIFRADO --dir $location | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "IA_CI_ORIGINAL_VERIFIED_MODELS_UNAVAILABLE" }
+          $archives=@(Get-ChildItem -LiteralPath $location -Filter '*.7z' -File)
+          if ($archives.Count -ne 1) { throw "IA_CI_ORIGINAL_ARCHIVE_AMBIGUOUS" }
+          $sha=(Get-FileHash -LiteralPath $archives[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne "74848905ad3313c08f8af7781c73234338de293e3a08fc2b06fb89b7b3971c57") {
+            throw "IA_CI_ORIGINAL_ARCHIVE_PIN_INVALID"
+          }
+          $env:IA_CIPHER=$archives[0].FullName
+          $seven="C:\Program Files\7-Zip\7z.exe"
+          if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
+          $destination=Join-Path $env:RUNNER_TEMP "ia-v2-decoded-source"
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          & $seven x "-p$env:IA_PASSWORD" "-o$destination" -y $archives[0].FullName | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "IA_MODELOS_ORIGINALES_NO_DESCIFRADOS" }
+          $old=Join-Path $destination "Servidor.exe"
+          if (!(Test-Path -LiteralPath $old -PathType Leaf)) { throw "IA_FUENTE_ORIGINAL_AUSENTE" }
+          Write-Host "IA_MODELOS_ORIGINALES_VERIFICADOS_SOLO_COMO_FUENTE_DE_BUILD"
+      - name: Extraer los pesos verificados mediante un juego MV SINTÉTICO, sin datos del jugador
+        shell: pwsh
+        run: |
+          $old=Join-Path $env:RUNNER_TEMP "ia-v2-decoded-source\Servidor.exe"
+          $game=Join-Path $env:RUNNER_TEMP "ia-v2-verified-model-source-日本語"
+          $js=Join-Path $game "www\js"
+          $data=Join-Path $game "www\data"
+          New-Item -ItemType Directory -Force -Path (Join-Path $js "plugins"),$data | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $game 'Game.exe'),[byte[]]@(77,90,0,0))
+          'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js 'plugins.js') -Encoding UTF8
+          '// MV synthetic fixture - not executed' | Set-Content -LiteralPath (Join-Path $js 'rpg_core.js') -Encoding UTF8
+          '// MV synthetic fixture - not executed' | Set-Content -LiteralPath (Join-Path $js 'rpg_managers.js') -Encoding UTF8
+          '{}' | Set-Content -LiteralPath (Join-Path $data 'System.json') -Encoding UTF8
+          $env:TX771_PORTABLE_GAME_EXE=Join-Path $game "Game.exe"
+          $env:TX541_RPG_DIAGNOSTIC_FILE=Join-Path $env:RUNNER_TEMP "ia-v2-old-private-diagnostic.txt"
+          $output=Join-Path $env:RUNNER_TEMP "ia-v2-old-private-output.txt"
+          $errors=Join-Path $env:RUNNER_TEMP "ia-v2-old-private-errors.txt"
+          $p=Start-Process -FilePath $old -ArgumentList "--rpg-onefile-portable-smoke" -Wait -PassThru -RedirectStandardOutput $output -RedirectStandardError $errors -ErrorAction Stop
+          if ($null -eq $p -or $p.ExitCode -ne 0) {
+            throw "IA_FUENTE_VERIFICADA_NO_EXTRAE_MODELOS_HOLD"
+          }
+          $engine=Join-Path $game "Tenshixgame-IA\.local\TENSHIXGAME-RPG\engine\engine"
+          $owner=Join-Path $game "Tenshixgame-IA\portable-owner-v1.json"
+          $worker=Join-Path $engine "TenshixgameAI.exe"
+          if (!(Test-Path -LiteralPath $worker -PathType Leaf) -or !(Test-Path -LiteralPath $owner -PathType Leaf)) {
+            throw "IA_MODELO_ORIGINAL_Y_PROPIEDAD_NO_VERIFICABLE"
+          }
+          $ownerData=Get-Content -LiteralPath $owner -Raw | ConvertFrom-Json
+          $sha=(Get-FileHash -LiteralPath $worker -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($ownerData.worker_sha256 -ne $sha -or $ownerData.schema -ne "tenshixgame-rpg-portable-owner-v1") {
+            throw "IA_FIRMA_DEL_MODELO_ORIGINAL_INVALIDA"
+          }
+          if (!(Test-Path -LiteralPath (Join-Path $engine "bundle_manifest.json"))) {
+            throw "IA_MODELOS_ORIGINALES_SIN_MANIFIESTO"
+          }
+          $dest=Join-Path $env:RUNNER_TEMP "ia-v2-models"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          foreach($name in @("opus_ja_es","opus_en_es")) {
+            Copy-Item -LiteralPath (Join-Path $engine "models\$name") -Destination (Join-Path $dest $name) -Recurse -ErrorAction Stop
+            $model=Join-Path $dest "$name\model.bin"
+            if (!(Test-Path $model) -or (Get-Item -LiteralPath $model).Length -lt 50000000) {
+              throw "IA_MODELO_OPUS_PESO_INVALIDO"
+            }
+            if (!(Test-Path -LiteralPath (Join-Path $dest "$name\OPUS_LICENSE.txt"))) {
+              throw "IA_LICENCIA_OPUS_FALTANTE"
+            }
+          }
+          Write-Host "IA_DOS_MODELOS_OPUS_FIRMADOS_LISTOS_PARA_NUEVO_RUNTIME"
+      - name: Congelar el NUEVO motor Python CT2 con nombre propio y sin ventanas secundarias
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller==6.16.0 ctranslate2==4.6.0 sentencepiece==0.2.1
+          if ($LASTEXITCODE -ne 0) { throw "IA_DEPENDENCIAS_INFERENCIA_NUEVA_NO_DISPONIBLES" }
+          python -m PyInstaller --noconfirm --clean --onefile --noconsole --name IATraductora --collect-all ctranslate2 --collect-all sentencepiece servidor_v2/worker/IATraductora.py
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath "dist/IATraductora.exe")) {
+            throw "IA_MOTOR_PROPIO_NO_COMPILA"
+          }
+          Write-Host "IA_WORKER_BINARIO_NUEVO_NO_EJECUTA_GUI_ANTIGUA"
+      - name: Crear un único Servidor.exe con los pesos OPUS originales y el instalador NUEVO
+        shell: pwsh
+        run: |
+          Push-Location servidor_v2
+          try {
+            go test ./...
+            if ($LASTEXITCODE -ne 0) { throw "IA_INSTALADOR_INDEPENDIENTE_REGRESION" }
+            go build -trimpath -ldflags "-H=windowsgui" -o (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") ./cmd/servidor
+            if ($LASTEXITCODE -ne 0) { throw "IA_SERVIDOR_EXE_NO_COMPILA" }
+          } finally { Pop-Location }
+          $out=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/assets/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --out $out
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $out)) {
+            throw "IA_SERVIDOR_PROPIO_PAQUETE_INVALIDO"
+          }
+          Write-Host "IA_SERVIDOR_UNICO_EXE_CON_MODELOS_Y_PLUGIN_PROPIOS_CREADO"
+      - name: Instalar desde Servidor.exe propio en MV sintético y verificar nuevo puente con traducción neuronal REAL
+        shell: pwsh
+        run: |
+          $game=Join-Path $env:RUNNER_TEMP "ia-v2-acceptance-juego-日本語"
+          $js=Join-Path $game "www\js"
+          $data=Join-Path $game "www\data"
+          New-Item -ItemType Directory -Force -Path (Join-Path $js "plugins"),$data | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $game "Game.exe"),[byte[]]@(77,90,0,0))
+          'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js 'plugins.js') -Encoding UTF8
+          '// MV synthetic fixture' | Set-Content -LiteralPath (Join-Path $js 'rpg_core.js') -Encoding UTF8
+          '{}' | Set-Content -LiteralPath (Join-Path $data 'System.json') -Encoding UTF8
+          $exe=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          $output=Join-Path $env:RUNNER_TEMP "ia-v2-new-private-output.txt"
+          $errors=Join-Path $env:RUNNER_TEMP "ia-v2-new-private-errors.txt"
+          $arg='--game "'+(Join-Path $game "Game.exe")+'"'
+          $p=Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru -RedirectStandardOutput $output -RedirectStandardError $errors -ErrorAction Stop
+          if ($null -eq $p -or $p.ExitCode -ne 0) {
+            throw "IA_SERVIDOR_UNICO_NO_INSTALO_MV"
+          }
+          $worker=Join-Path $game "IA Traductora\.local\Rpg\engine\IATraductora.exe"
+          $plugin=Join-Path $js "plugins\IATraductora.js"
+          if (!(Test-Path -LiteralPath $worker -PathType Leaf) -or !(Test-Path -LiteralPath $plugin -PathType Leaf)) {
+            throw "IA_COMPONENTES_PROPIOS_NO_INSTALADOS"
+          }
+          if (Test-Path -LiteralPath (Join-Path $game "Tenshixgame-IA")) {
+            throw "IA_IDENTIDAD_FISICA_ANTIGUA_EN_NUEVA_INSTALACION"
+          }
+          $list=Get-Content -LiteralPath (Join-Path $js "plugins.js") -Raw
+          if (-not $list.Contains('"name":"IATraductora"')) {
+            throw "IA_PLUGIN_NO_REGISTRADO"
+          }
+          $proc=Start-Process -FilePath $worker -ArgumentList ('--game-root "'+$game+'" --parent-pid '+$PID) -PassThru -WindowStyle Hidden -ErrorAction Stop
+          try {
+            python servidor_v2/tools/probe_new_worker.py --game-root $game
+            if ($LASTEXITCODE -ne 0) {
+              throw "IA_SERVICIO_PROPIO_NO_ENTREGA_ESPANOL_REAL"
+            }
+          } finally {
+            if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+          }
+          Write-Host "SERVIDOR_V2_RPG_MV_PROPIO_EXE_INSTALACION_Y_OPUS_REAL_PASS"
+      - name: Cifrar siempre la versión final antes de publicarla en GitHub
+        shell: pwsh
+        run: |
+          $seven="C:\Program Files\7-Zip\7z.exe"
+          if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
+          $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MV-Prueba.7z"
+          & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
+          & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
+          $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  Servidor-IA-Traductora-RPG-MV-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          'Servidor v2: modelo propio CT2 OPUS; solo MV, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
+          Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
+      - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
+        uses: actions/upload-artifact@v4
+        with:
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MV-CIFRADO
+          path: ${{ runner.temp }}/IA-Traductora-Cifrado/
+          retention-days: 7
+          if-no-files-found: error
