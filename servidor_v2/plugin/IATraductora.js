@@ -269,54 +269,30 @@ function translatePreservingControls(source,text){
         return updated;
     });
 }
+// Native, cache-first bridge. Never block or restart a message event.
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var original=Window_Message.prototype.startMessage;
+    if(typeof original!=="function")return;
     Window_Message.prototype.startMessage=function(){
-        if(this._iaWaiting)return;
-        // If the engine is unavailable, show the game's original dialogue
-        // immediately instead of freezing the entire message window.
-        if(!state.connected)return original.apply(this,arguments);
         try{
-            if(!$gameMessage||!$gameMessage.hasText())return original.apply(this,arguments);
-            var text=$gameMessage.allText();
-            var source=languageFor(text);
-            if(!source)return original.apply(this,arguments);
-            if(cache.has(source+"\u0000"+text)){
-                $gameMessage._texts=cache.get(source+"\u0000"+text).split("\n");state.shown++;
-                return original.apply(this,arguments);
-            }
-            var instance=this;
-            instance._iaWaiting={text:text,at:Date.now(),done:false,translated:null};
-            translatePreservingControls(source,text).then(function(out){
-                if(!instance._iaWaiting||instance._iaWaiting.text!==text)return;
-                instance._iaWaiting.done=true;
-                instance._iaWaiting.translated=out;
-            }).catch(function(){
-                state.errors++;
-                if(instance._iaWaiting&&instance._iaWaiting.text===text){
-                    instance._iaWaiting.done=true;
+            if(typeof $gameMessage!=="undefined"&&$gameMessage&&
+               $gameMessage.hasText&&$gameMessage.hasText()){
+                var text=$gameMessage.allText(),source=languageFor(text);
+                if(source){
+                    var old=cache.get(source+"\u0000"+text);
+                    if(typeof old==="string"&&old!==text){
+                        $gameMessage._texts=old.split("\n");
+                        state.shown++;
+                    }else if(state.connected){
+                        translatePreservingControls(source,text).catch(function(){
+                            state.errors++;
+                        });
+                    }
                 }
-            });
-        }catch(_){
-            this._iaWaiting=null;state.errors++;
-            return original.apply(this,arguments);
-        }
-    };
-    var update=Window_Message.prototype.update;
-    Window_Message.prototype.update=function(){
-        if(this._iaWaiting){
-            var w=this._iaWaiting;
-            if(!w.done&&Date.now()-w.at<messageWait)return;
-            this._iaWaiting=null;
-            // A custom dialogue plugin can advance/change text during async inference.
-            // Never paste an old translation over the next scene or speaker.
-            if($gameMessage && $gameMessage.hasText() && $gameMessage.allText()===w.text){
-                if(w.translated){$gameMessage._texts=w.translated.split("\n");state.shown++;}
-                original.call(this);
             }
-        }
-        return update.apply(this,arguments);
+        }catch(_){state.errors++;}
+        return original.apply(this,arguments);
     };
 }
 function hookChoices(){
@@ -324,33 +300,86 @@ function hookChoices(){
        typeof Game_Message.prototype.setChoices!=="function")return;
     var original=Game_Message.prototype.setChoices;
     Game_Message.prototype.setChoices=function(choices){
-        var result=original.apply(this,arguments);
-        if(!Array.isArray(choices)||choices.length===0||choices.length>12)return result;
-        var message=this,sourceChoices=choices.slice();
-        var ticket=(message._iaChoiceTicket||0)+1;
-        message._iaChoiceTicket=ticket;
-        Promise.all(sourceChoices.map(function(choice){
-            var source=languageFor(choice);
-            return source?translatePreservingControls(source,choice):Promise.resolve(null);
-        })).then(function(outputs){
-            if(message._iaChoiceTicket!==ticket||
-               !Array.isArray(message._choices)||
-               message._choices.length!==sourceChoices.length)return;
-            for(var i=0;i<sourceChoices.length;i++)
-                if(message._choices[i]!==sourceChoices[i])return;
-            var changed=false,translated=sourceChoices.slice();
-            for(var j=0;j<outputs.length;j++)
-                if(outputs[j]){translated[j]=outputs[j];changed=true;}
-            if(!changed)return;
-            message._choices=translated;state.shown++;
-            // Change only the existing choice list; never draw an overlay.
-            var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
-            var windowMessage=scene&&scene._messageWindow;
-            var choicesWindow=windowMessage&&windowMessage._choiceWindow;
-            if(choicesWindow&&typeof choicesWindow.refresh==="function")choicesWindow.refresh();
-        }).catch(function(){state.errors++;});
-        return result;
+        if(!Array.isArray(choices)||!choices.length||choices.length>12)
+            return original.apply(this,arguments);
+        var translated=choices.slice(),changed=false;
+        try{
+            for(var i=0;i<choices.length;i++){
+                var source=languageFor(choices[i]);
+                if(!source)continue;
+                var cached=cache.get(source+"\u0000"+choices[i]);
+                if(typeof cached==="string"&&cached!==choices[i]){
+                    translated[i]=cached;changed=true;
+                }else if(state.connected){
+                    // A live choice belongs to the author's native UI.
+                    translatePreservingControls(source,choices[i]).catch(function(){
+                        state.errors++;
+                    });
+                }
+            }
+        }catch(_){state.errors++;}
+        var args=Array.prototype.slice.call(arguments);
+        if(changed){args[0]=translated;state.shown++;}
+        return original.apply(this,args);
     };
+}
+// Read-only, bounded text discovery. Never run game events or parse maps
+// synchronously from disk; $dataMap is already loaded by the original engine.
+var prefetchedMap=null,prefetchQueue=[],prefetchBusy=false;
+function addPrefetch(text){
+    var source=languageFor(text);
+    if(!source||prefetchQueue.length>=320||
+       cache.has(source+"\u0000"+text))return;
+    prefetchQueue.push({source:source,text:text});
+}
+function collectMapText(){
+    if(typeof $dataMap==="undefined"||!$dataMap||
+       prefetchedMap===$dataMap)return;
+    prefetchedMap=$dataMap;prefetchQueue=[];
+    var events=$dataMap.events;
+    if(!Array.isArray(events))return;
+    var count=0;
+    for(var i=0;i<events.length&&count<320;i++){
+        var event=events[i];
+        if(!event||!Array.isArray(event.pages))continue;
+        for(var j=0;j<event.pages.length&&count<320;j++){
+            var list=event.pages[j].list;
+            if(!Array.isArray(list))continue;
+            for(var k=0;k<list.length&&count<320;k++){
+                var cmd=list[k];
+                if(!cmd||!Array.isArray(cmd.parameters))continue;
+                if(cmd.code===401){
+                    var parts=[String(cmd.parameters[0]||"")];
+                    while(k+1<list.length&&list[k+1]&&
+                          list[k+1].code===401&&parts.length<16){
+                        k++;parts.push(String((list[k].parameters||[])[0]||""));
+                    }
+                    addPrefetch(parts.join("\n"));count++;
+                }else if(cmd.code===102&&Array.isArray(cmd.parameters[0])){
+                    var options=cmd.parameters[0];
+                    for(var n=0;n<options.length&&count<320;n++){
+                        addPrefetch(options[n]);count++;
+                    }
+                }
+            }
+        }
+    }
+    nextPrefetch();
+}
+function nextPrefetch(){
+    if(prefetchBusy||!state.connected||!prefetchQueue.length)return;
+    prefetchBusy=true;
+    setTimeout(function(){
+        if(!state.connected||!prefetchQueue.length){
+            prefetchBusy=false;return;
+        }
+        var item=prefetchQueue.shift();
+        translatePreservingControls(item.source,item.text).then(function(){
+            prefetchBusy=false;setTimeout(nextPrefetch,45);
+        },function(){
+            state.errors++;prefetchBusy=false;setTimeout(nextPrefetch,150);
+        });
+    },30);
 }
 function setupHud(){
     if(typeof Window_Base==="undefined"||typeof Scene_Map==="undefined")return;
@@ -417,6 +446,9 @@ function setupHud(){
         if(!runtimeActivated){
             runtimeActivated=true;
             try{refreshConnection();}catch(_){state.errors++;}
+        }
+        if(state.connected){
+            try{collectMapText();}catch(_){state.errors++;}
         }
         if(Input.isTriggered("ia-traductora")&&this._iaPanel){
             this._iaPanel.visible=!this._iaPanel.visible;
