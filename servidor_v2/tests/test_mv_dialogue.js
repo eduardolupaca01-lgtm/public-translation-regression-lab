@@ -201,6 +201,15 @@ async function testFullNativeMenusAndNameOnlyText(){
     bitmap.drawText("夏実",0,0,100,30);
     assert.equal(bitmap.lastText,"Natsumi",
         "approved exact name label may render in native bitmap");
+    bitmap.drawText("保林 隼人",0,0,160,30);
+    assert.equal(bitmap.lastText,"Hobayashi Hayato",
+        "pilot nameplate should display a consistent Latin reading");
+    bitmap.drawText("08月 24日 (金)",0,0,180,30);
+    assert.equal(bitmap.lastText,"24/08 (vie.)");
+    bitmap.drawText("午前07時00分",0,0,180,30);
+    assert.equal(bitmap.lastText,"07:00 a. m.");
+    w.drawText("タスク手帳",0,0,160,"left");
+    assert.equal(w.lastText,"Agenda de tareas");
     f.context.SceneManager._scene=new f.context.Scene_Name();
     bitmap.drawText("夏実",0,0,100,30);
     assert.equal(bitmap.lastText,"夏実",
