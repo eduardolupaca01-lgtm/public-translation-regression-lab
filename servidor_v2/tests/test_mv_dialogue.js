@@ -582,6 +582,62 @@ async function testR3PatchRepairsStandardNoticeAndKeepsColor(){
     assert.equal(online.$gameMessage.allText(),
         "Esta historia es ficticia y\nBuenos días.\nAdemás, esta obra incluye elementos de tipo \\C[6]ＡＢＣ\\C[0]. Tenlo en cuenta.");
 }
+async function testR3P2NoticeVariantsOnFirstNativeDraw(){
+    const first="この物語はフィクションであり、";
+    const second="実在する人物・団体・その他法律等とは一切関係ありません。";
+    const forms=[
+        ["\\C[6]ＡＢＣ\\C[0]","\\C[6]ＡＢＣ\\C[0]"],
+        ["\\c[6]ＡＢＣ\\c[0]","\\c[6]ＡＢＣ\\c[0]"],
+        ["ＡＢＣ","ＡＢＣ"],
+        ["\\c[27]Ａ　Ｂ　Ｃ\\C[0]","\\c[27]Ａ　Ｂ　Ｃ\\C[0]"],
+        ["\x1bC[6]ABC\x1bc[0]","\x1bC[6]ABC\x1bc[0]"]
+    ];
+    for(const form of forms){
+        const f=fixture(1,{disconnected:true});await wait(20);
+        const last="また、本作では"+form[0]+"要素が含まれております。予めご了承下さい。";
+        f.$gameMessage._texts=[first,second,last];
+        const win=new f.context.Window_Message();win.startMessage();
+        assert.equal(win.originalStarts,1);
+        assert.equal(f.$gameMessage.allText(),
+            "Esta historia es ficticia y\nno tiene relación con personas, organizaciones ni leyes reales.\nAdemás, esta obra incluye elementos de tipo "+form[1]+". Tenlo en cuenta.",
+            "full notice must render even offline; no return to menu required");
+        assert.equal(f.posts.length,0);
+    }
+}
+async function testR3P2KnownLinesNotHiddenByOnePendingLine(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語",
+        "IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const first="おはようございます。",missing="明日は雨が降ります。";
+    const original=[first,missing];
+    const record=JSON.stringify({schema:"ia-traductora-cache-v2",source:"ja",
+        original:first,translated:"Buenos días.",composed:false})+"\n";
+    const shared={files:{[journal]:record},dirs:{[folder]:true}};
+    const f=fixture(1,{fsState:shared,disconnected:true});await wait(35);
+    const win=new f.context.Window_Message();
+    f.$gameMessage._texts=original.slice();win.startMessage();
+    assert.equal(win.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),"Buenos días.\n"+missing,
+        "one pending line must not hide a validated ordinary line");
+    assert.equal(shared.files[journal],record,"mixed output is not persisted");
+    // Name/variable and timing-bearing messages retain R3's safe fallback.
+    const dynamic="\\N[2]"+missing;
+    f.$gameMessage._texts=[first,dynamic];win.startMessage();
+    assert.equal(f.$gameMessage.allText(),first+"\n"+dynamic);
+    const online=fixture(20,{fsState:shared});await wait(35);
+    const second=new online.context.Window_Message();
+    online.$gameMessage._texts=original.slice();second.startMessage();
+    assert.equal(online.$gameMessage.allText(),"Buenos días.\n"+missing);
+    await wait(65);
+    assert.deepEqual(online.posts.map(x=>x.text),[missing],
+        "only missing Japanese line reaches the model");
+    assert.equal(online.$gameMessage.allText(),"Buenos días.\n"+missing,
+        "late response does not restart or alter the active message");
+    online.$gameMessage._texts=original.slice();second.startMessage();
+    assert.equal(online.$gameMessage.allText(),"Buenos días.\nBuenos días.");
+    assert.equal(second.originalStarts,2);
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -625,6 +681,8 @@ async function testBoundedMapPrefetchAndPressure(){
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testR3PatchRepairsStandardNoticeAndKeepsColor();
+    await testR3P2NoticeVariantsOnFirstNativeDraw();
+    await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();
     await testApprovedBilingualCorrectionsOverridePreviousNeuralCache();

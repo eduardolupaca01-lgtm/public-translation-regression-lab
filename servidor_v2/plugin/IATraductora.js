@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R3P1-20261123"; // also checked against the installed package SHA
+var BUILD_ID="MV-R3P2-20261123"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -588,12 +588,21 @@ function spuriousApplause(original,result){
 // title-specific data or whole-dialogue replacement dictionaries.
 // Match complete segments rather than replacing words inside other prose.
 function standardNotice(text){
-    if(text==="この物語はフィクションであり、")return "Esta historia es ficticia y";
-    // Keep both native color tokens and the acronym's original width.
-    // Applies only to the exact conventional notice grammar and a short
-    // Latin acronym. No general change to the name or control lexer.
-    var m=/^また、本作では(\\C\[\d{1,3}\])([A-ZＡ-Ｚ]{2,10})(\\C\[\d{1,3}\])要素が含まれております。予めご了承下さい。$/.exec(text);
-    if(m)return "Además, esta obra incluye elementos de tipo "+m[1]+m[2]+m[3]+". Tenlo en cuenta.";
+    // Match complete conventional notices, not arbitrary prose. Outer
+    // indentation and exact native color controls remain untouched.
+    var lead=(text.match(/^[ \t\u3000]*/)||[""])[0];
+    var tail=(text.match(/[ \t\u3000]*$/)||[""])[0];
+    if(lead.length+tail.length>=text.length)return null;
+    var body=text.slice(lead.length,text.length-tail.length);
+    if(body==="この物語はフィクションであり、")return lead+"Esta historia es ficticia y"+tail;
+    if(body==="実在する人物・団体・その他法律等とは一切関係ありません。")
+        return lead+"no tiene relación con personas, organizaciones ni leyes reales."+tail;
+    // Native MV accepts lower-case c and ESC-prefixed color controls.
+    // Also accept a plain acronym, fullwidth Latin letters, and spacing.
+    // Only paired colors (or neither) are permitted; no code is invented.
+    var m=/^また、本作では([ \t\u3000]*)((?:\\|\x1b)[Cc]\[\d{1,3}\])?([A-ZＡ-Ｚ](?:[ \t\u3000]*[A-ZＡ-Ｚ]){1,9})((?:\\|\x1b)[Cc]\[\d{1,3}\])?([ \t\u3000]*)要素が含まれております。予めご了承下さい。$/.exec(body);
+    if(m&&!!m[2]===!!m[4])
+        return lead+"Además, esta obra incluye elementos de tipo "+m[1]+(m[2]||"")+m[3]+(m[4]||"")+m[5]+". Tenlo en cuenta."+tail;
     return null;
 }
 function translatePreservingControls(source,text){
@@ -975,6 +984,25 @@ function hookNativeSurface(){
     }
 }
 
+function readyIndependentLines(source,text){
+    if(source!=="ja"||text.indexOf("\n")<0||speakerHeader(text))return null;
+    // This narrow fallback is for ordinary prose and color formatting only.
+    // Do not touch identity, variable, icon, timing or plugin control blocks.
+    if(protectedParts(text).some(function(part){
+        return part.locked&&!part.literal&&
+            !/^(?:\r?\n|(?:\\|\x1b)[Cc]\[\d{1,3}\])$/.test(part.value);
+    }))return null;
+    var lines=text.split(/(\r?\n)/),changed=false,missing=false;
+    for(var i=0;i<lines.length;i+=2){
+        var original=lines[i];
+        if(!hasJapaneseProse(original))continue;
+        var result=readyText(source,original);
+        if(result!==null&&result!==original&&validTranslation(source,original,result,true)){
+            lines[i]=result;changed=true;
+        }else missing=true;
+    }
+    return changed&&missing?lines.join(""):null;
+}
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var original=Window_Message.prototype.startMessage;
@@ -990,8 +1018,12 @@ function hookMessages(){
                         $gameMessage._texts=old.split("\n");
                         state.shown++;
                     }else{
+                        // Submit the original Japanese, never the partially
+                        // localized presentation. Do not restart this event.
                         if(state.connected)translatePreservingControls(source,text).catch(function(){state.errors++;});
                         else addPrefetch(text,true);
+                        var partial=readyIndependentLines(source,text);
+                        if(partial!==null)$gameMessage._texts=partial.split("\n");
                     }
                 }
             }
