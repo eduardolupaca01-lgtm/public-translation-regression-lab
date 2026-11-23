@@ -351,7 +351,7 @@ function collectMapText(){
                 if(cmd.code===401){
                     var parts=[String(cmd.parameters[0]||"")];
                     while(k+1<list.length&&list[k+1]&&
-                          list[k+1].code===401&&parts.length<16){
+                          list[k+1].code===401&&parts.length<4){
                         k++;parts.push(String((list[k].parameters||[])[0]||""));
                     }
                     addPrefetch(parts.join("\n"));count++;
