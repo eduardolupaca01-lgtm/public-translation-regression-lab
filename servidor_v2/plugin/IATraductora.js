@@ -611,6 +611,29 @@ function translatePreservingControls(source,text){
             return acceptCache(source,text,joint,true,true)?joint:null;
         });
     }
+    if(source==="ja"&&text.indexOf("\n")>=0){
+        var lines=text.split(/(\r?\n)/);
+        // Prefer complete line keys so reviewed text and color spans
+        // remain available even when another line needs neural inference.
+        return Promise.all(lines.map(function(line,index){
+            return index%2||!hasJapaneseProse(line)?Promise.resolve(line):
+                translatePreservingControls(source,line);
+        })).then(function(parts){
+            if(parts.some(function(part){return part===null;})){
+                var retryAt=0;
+                for(var i=0;i<parts.length;i++){
+                    if(parts[i]!==null)continue;
+                    var until=rejectedKeys.get(source+"\u0000"+lines[i]);
+                    if(until&&until!==Infinity&&until>Date.now())retryAt=Math.max(retryAt,until);
+                }
+                if(retryAt)rejectedKeys.set(key,retryAt);
+                return null;
+            }
+            var merged=parts.join("");
+            if(merged===text||!acceptCache(source,text,merged,true,true))return null;
+            return cache.get(key);
+        });
+    }
     var chunks=protectedParts(text);
     if(chunks.length===0)return Promise.resolve(null);
     // Reject malformed/unrecognized escapes instead of letting the model change them.
@@ -765,9 +788,31 @@ function cachedPart(source,text){
     }
     return null;
 }
+function hasJapaneseProse(text){
+    return protectedParts(text).some(function(part){
+        return !part.locked&&isJapanese(part.value);
+    });
+}
 function readyText(source,text){
     var exact=cachedPart(source,text);
     if(exact!==null)return exact;
+    // The scanner stores native full lines as well as message blocks.
+    // Reuse a translated whole line (including inline colors) before
+    // splitting it into shorter fragments. Existing exact hits win.
+    if(source==="ja"&&text.indexOf("\n")>=0){
+        var lines=text.split(/(\r?\n)/),complete=true,translatedAny=false;
+        for(var n=0;n<lines.length;n+=2){
+            if(!hasJapaneseProse(lines[n]))continue;
+            var line=readyText(source,lines[n]);
+            if(line===null){complete=false;break;}
+            if(line!==lines[n])translatedAny=true;
+            lines[n]=line;
+        }
+        if(complete&&translatedAny){
+            var whole=lines.join("");
+            if(acceptCache(source,text,whole,true,true))return cache.get(source+"\u0000"+text);
+        }
+    }
     var chunks=protectedParts(text);
     if(chunks.length<=1)return null;
     var changed=false,parts=[];

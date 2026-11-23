@@ -572,6 +572,15 @@ async function testR3PatchRepairsStandardNoticeAndKeepsColor(){
     assert.equal(f.posts.length,0,"known repaired notice works offline without new inference");
     assert.ok(state.files[journal].includes("Es un personaje ficticio."),
         "unaffected old cache is preserved");
+    const online=fixture(1);await wait(25);
+    online.$gameMessage._texts=lines.slice();
+    const m=new online.context.Window_Message();m.startMessage();
+    await wait(45);
+    assert.deepEqual(online.posts.map(v=>v.text),["これは架空の人物です。"],
+        "a missing ordinary line cannot force already reviewed colored lines through the neural model");
+    online.$gameMessage._texts=lines.slice();m.startMessage();
+    assert.equal(online.$gameMessage.allText(),
+        "Esta historia es ficticia y\nBuenos días.\nAdemás, esta obra incluye elementos de tipo \\C[6]ＡＢＣ\\C[0]. Tenlo en cuenta.");
 }
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
