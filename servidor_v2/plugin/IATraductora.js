@@ -206,18 +206,51 @@ function refreshConnection(){
         startWorker();
     });
 }
+function prepareNamedDialogue(text,source){
+    var output={text:text,needed:[]};
+    if(source!=="ja"||!isJapanese(text))return output;
+    // Only known, owner-editable readings are used. NEVER ask OPUS to guess
+    // the semantic meaning of 夏実 or 保林 隼人 as ordinary sentence words.
+    var keys=Object.keys(knownNames).sort(function(a,b){return b.length-a.length;});
+    var rewritten=text,used=[];
+    keys.forEach(function(name){
+        if(!isJapanese(name)||rewritten.indexOf(name)<0)return;
+        var reading=knownNames[name];
+        if(!reading||used.indexOf(reading)!==-1)return;
+        rewritten=rewritten.split(name).join(" "+reading+" ");
+        used.push(reading);
+    });
+    if(used.length){
+        output.text=rewritten.replace(/[ \t]{2,}/g," ");
+        output.needed=used;
+    }
+    return output;
+}
+function containsNames(output,expected){
+    if(!expected.length)return true;
+    var t=String(output||"").toLowerCase();
+    for(var i=0;i<expected.length;i++){
+        var parts=expected[i].toLowerCase().split(/\s+/);
+        for(var j=0;j<parts.length;j++){
+            if(parts[j]&&t.indexOf(parts[j])<0)return false;
+        }
+    }
+    return true;
+}
 function translate(source,text){
     if(cache.has(source+"\u0000"+text))return Promise.resolve(cache.get(source+"\u0000"+text));
     if(pending.has(source+"\u0000"+text))return pending.get(source+"\u0000"+text);
     state.requested++;
+    var prepared=prepareNamedDialogue(text,source);
     var raw=new Promise(function(resolve){
         var beginning=Date.now(),done=false;
         function attempt(){
             if(done)return;
             if(Date.now()-beginning>maxWait){done=true;state.errors++;resolve(null);return;}
             if(!state.connected){setTimeout(attempt,600);return;}
-            request("/translate",{source:source,target:"es",text:text},30000).then(function(r){
-                if(r && acceptCache(source,text,r.translated,false,true)){
+            request("/translate",{source:source,target:"es",text:prepared.text},30000).then(function(r){
+                if(r && containsNames(r.translated,prepared.needed)&&
+                   acceptCache(source,text,r.translated,false,true)){
                     state.received++;done=true;
                     resolve(cache.get(source+"\u0000"+text));
                 }else{done=true;state.errors++;resolve(null);}
