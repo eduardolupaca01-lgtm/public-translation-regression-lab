@@ -144,12 +144,56 @@ def run(service):
             if state.get("token")==service.token:dest.unlink()
         except (OSError,ValueError):pass
 
+def safe_startup_code(error):
+    # Neither a raw exception, a model path nor game dialogue may leave
+    # the private worker through this diagnostic.
+    raw = str(error).lower()
+    if "version" in raw and ("model" in raw or "binary" in raw):
+        return "IA_MODELO_VERSION_INCOMPATIBLE"
+    if "sentencepiece" in raw or "ctranslate2" in raw:
+        return "IA_LIBRERIA_NEURONAL_FALTANTE"
+    if "model" in raw and ("path" in raw or "file" in raw):
+        return "IA_ARCHIVOS_OPUS_INCOMPLETOS"
+    if isinstance(error, (FileNotFoundError, PermissionError, OSError)):
+        return "IA_MODELO_INACCESIBLE"
+    if "out of memory" in raw or "bad_alloc" in raw:
+        return "IA_MEMORIA_INSUFICIENTE"
+    return "IA_MOTOR_ERROR_NO_CLASIFICADO"
+
+def write_startup_code(filename, code):
+    if filename is None:
+        return
+    if len(code) > 90 or not code.startswith("IA_"):
+        return
+    try:
+        file = Path(filename)
+        if file.is_symlink() or not file.parent.is_dir():
+            return
+        file.write_text(json.dumps({"schema": "ia-traductora-startup-v1", "code": code})+"\n",
+                        encoding="utf8")
+    except OSError:
+        pass
+
 def main():
     p=argparse.ArgumentParser()
-    p.add_argument("--game-root",type=Path,required=True)
+    p.add_argument("--game-root",type=Path)
     p.add_argument("--parent-pid",type=int,default=0)
+    p.add_argument("--check-models",action="store_true")
+    p.add_argument("--diagnostic-file",type=Path)
     args=p.parse_args()
-    path=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
-    run(Service(args.game_root,path))
+    engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
+    try:
+        if args.check_models:
+            NeuralOPUS(engine)
+            write_startup_code(args.diagnostic_file,"IA_MODELOS_REALES_CT2_LISTOS")
+            return
+        if args.game_root is None:
+            raise ValueError("IA_GAME_ROOT_FALTANTE")
+        service=Service(args.game_root,engine)
+        write_startup_code(args.diagnostic_file,"IA_MODELOS_CARGADOS_SERVICIO_INICIANDO")
+        run(service)
+    except Exception as exc:
+        write_startup_code(args.diagnostic_file,safe_startup_code(exc))
+        raise SystemExit(1)
 
 if __name__=="__main__":main()
