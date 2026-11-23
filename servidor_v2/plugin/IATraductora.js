@@ -19,7 +19,7 @@ var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var runtimeActivated=false;
-var cache=new Map(),pending=new Map(),maxWait=45000,messageWait=4500;
+var cache=new Map(),approvedKeys=new Map(),pending=new Map(),maxWait=45000,messageWait=4500;
 var cacheDir="",cacheFile="",diskReady=false,diskBusy=false,diskQueue=[];
 var diskStats={loaded:0,saved:0,rejected:0,errors:0};
 // A cache never includes game assets or saves. The schema is versioned to
@@ -218,7 +218,8 @@ function translate(source,text){
             if(!state.connected){setTimeout(attempt,600);return;}
             request("/translate",{source:source,target:"es",text:text},30000).then(function(r){
                 if(r && acceptCache(source,text,r.translated,false,true)){
-                    state.received++;done=true;resolve(r.translated);
+                    state.received++;done=true;
+                    resolve(cache.get(source+"\u0000"+text));
                 }else{done=true;state.errors++;resolve(null);}
             }).catch(function(){setTimeout(attempt,1200);});
         }
@@ -287,6 +288,9 @@ function acceptCache(source,original,result,composed,persist){
         diskStats.rejected++;return false;
     }
     var key=source+"\u0000"+original;
+    if(approvedKeys.has(key)){
+        cache.set(key,approvedKeys.get(key));return true;
+    }
     if(cache.has(key)&&cache.get(key)===result)return true;
     cache.set(key,result);
     if(cache.size>9000){cache.delete(cache.keys().next().value);}
@@ -333,6 +337,7 @@ function startPersistentCache(){
     function onReady(){
         if(!safeCachePath()){diskStats.errors++;return;}
         loadNameGlossary();
+        loadApprovedTranslations();
         fs.readFile(cacheFile,"utf8",function(err,data){
             if(err&&err.code!=="ENOENT"){diskStats.errors++;return;}
             if(!err&&typeof data==="string"){
@@ -435,7 +440,7 @@ function translatePreservingControls(source,text){
         var updated=parts.join("");
         if(updated===text)return null;
         if(!acceptCache(source,text,updated,true,true))return null;
-        return updated;
+        return cache.get(key);
     });
 }
 // Native, cache-first bridge. Never block or restart a message event.
@@ -461,6 +466,31 @@ var knownNames={"夏実":"Natsumi","隼人":"Hayato",
 function nameInSpanish(name){
     return Object.prototype.hasOwnProperty.call(knownNames,name)?
         knownNames[name]:null;
+}
+function loadApprovedTranslations(){
+    // Exact, owner-reviewed sentences can repair ambiguous OPUS phrasing.
+    // Optional file stays inside this game's private cache directory.
+    var filename=path.join(cacheDir,"traducciones_aprobadas_es.json");
+    try{
+        var info=fs.lstatSync(filename);
+        if(!info.isFile()||info.isSymbolicLink()||info.size>131072)return;
+    }catch(_){return;}
+    fs.readFile(filename,"utf8",function(err,body){
+        if(err||!body||body.length>131072)return;
+        try{
+            var values=JSON.parse(body);
+            if(!values||typeof values!=="object"||Array.isArray(values))return;
+            var keys=Object.keys(values);
+            if(keys.length>1400)return;
+            keys.forEach(function(original){
+                var translated=values[original],lang=languageFor(original);
+                if(!lang||!validTranslation(lang,original,translated,true))return;
+                var key=lang+"\u0000"+original;
+                approvedKeys.set(key,translated);
+                cache.set(key,translated);
+            });
+        }catch(_){diskStats.errors++;}
+    });
 }
 function loadNameGlossary(){
     var namesFile=path.join(cacheDir,"nombres_es.json");
