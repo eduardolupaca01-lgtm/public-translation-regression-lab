@@ -69,6 +69,11 @@ func TestServidorIntegratedRealV95MVInstallAndRestore(t *testing.T){
     for _,needed:=range []string{
         owner.WorkerSHA256,
         "tx771PortableRuntime",
+        "IA Traductora · V95",
+        "◆ IA Traductora · F10",
+        "worker_exited_before_bridge",
+        "worker_bridge_missing_after_start",
+        "IA: conexión local verificada",
         "TenshigameTranduccion",
         "TenshigameTraduccion",
         "embedded-v87-bridge.json",
