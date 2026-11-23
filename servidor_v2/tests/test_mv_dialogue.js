@@ -68,8 +68,13 @@ function fixture(translationDelay=0){
     Scene_Map.prototype.createAllWindows=function(){};
     Scene_Map.prototype.update=function(){};
     Scene_Map.prototype.addWindow=function(win){this.windows.push(win)};
-    const $gameMessage={_texts:[],hasText(){return this._texts.length>0;},
-        allText(){return this._texts.join("\n")}};
+    function Game_Message(){this._texts=[];this._choices=[];}
+    Game_Message.prototype.hasText=function(){return this._texts.length>0;};
+    Game_Message.prototype.allText=function(){return this._texts.join("\n");};
+    Game_Message.prototype.setChoices=function(choices){
+        this._choices=choices.slice();
+    };
+    const $gameMessage=new Game_Message();
     const context={
         window:{location:{pathname:path.join(root,"www","index.html")}},
         Utils:{isNwjs:()=>true},
@@ -86,9 +91,10 @@ function fixture(translationDelay=0){
         },
         Buffer,Promise,process,Date,Map,Number,Error,
         setTimeout,clearTimeout,setInterval(){return 1},
-        Window_Base,Window_Message,Scene_Map,
+        Window_Base,Window_Message,Scene_Map,Game_Message,
         Graphics:{boxWidth:1280},
         Input:{keyMapper:{},isTriggered(){return false}},
+        SceneManager:{_scene:null},
         $gameMessage
     };
     vm.runInNewContext(source,context,{filename:"IATraductora.js"});
@@ -118,6 +124,11 @@ async function testJapaneseDialogAndF10(){
     assert.equal(scene.windows.length,2,"single mini badge and one hidden panel");
     assert.equal(scene.windows[0].lastText,"◆ IA Traductora · F10");
     assert.equal(scene.windows[1].visible,false);
+    f.context.Input.isTriggered=()=>true;
+    scene.update();
+    assert.equal(scene.windows[1].visible,true,"F10 shows native state panel");
+    scene.update();
+    assert.equal(scene.windows[1].visible,false,"F10 closes native panel");
     assert.equal(f.spawnCount(),0,"single application; no child GUI when connected");
 }
 async function testAutomaticEnglishAndSpanishExclusion(){
@@ -138,8 +149,14 @@ async function testProtectedCommandsAndMovingDialog(){
     f.$gameMessage._texts=["\\V[1] おはようございます。"];
     const protectedMessage=new f.context.Window_Message();
     protectedMessage.startMessage();
-    assert.equal(protectedMessage.originalStarts,1,"do not corrupt MV control codes");
-    assert.equal(f.posts.length,0);
+    assert.equal(protectedMessage.originalStarts,0,"wait for safely masked translation");
+    await wait(12);protectedMessage.update();
+    assert.equal(f.$gameMessage.allText(),"\\V[1] Buenos días.",
+        "RPG variable must be preserved while natural text is translated");
+    assert.equal(protectedMessage.originalStarts,1);
+    assert.equal(f.posts.length,1,"control sequence must not block translation");
+    assert.equal(f.posts[0].text,"おはようございます。",
+        "neural model must never receive the RPG variable token");
     const msg=new f.context.Window_Message();
     f.$gameMessage._texts=["さようなら。"];
     msg.startMessage();
@@ -150,9 +167,25 @@ async function testProtectedCommandsAndMovingDialog(){
     assert.equal(msg.originalStarts,0,"stale text must not be displayed");
     assert.equal(msg._iaWaiting,null,"stale async state must be cleared");
 }
+async function testNativeChoiceTranslationAndNoStaleChoiceOverwrite(){
+    const f=fixture(1);await wait(12);
+    f.$gameMessage.setChoices(["はい","いいえ"],0,1);
+    await wait(12);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),
+        ["Buenos días.","Buenos días."],
+        "choices should be updated natively without changing indices");
+    assert.equal(f.posts.length,2);
+    const late=fixture(24);await wait(12);
+    late.$gameMessage.setChoices(["はい"],0,0);
+    late.$gameMessage.setChoices(["No, gracias."],0,0);
+    await wait(35);
+    assert.deepEqual(Array.from(late.$gameMessage._choices),["No, gracias."],
+        "late translation must never overwrite a new choice list");
+}
 (async()=>{
     await testJapaneseDialogAndF10();
     await testAutomaticEnglishAndSpanishExclusion();
     await testProtectedCommandsAndMovingDialog();
+    await testNativeChoiceTranslationAndNoStaleChoiceOverwrite();
     console.log("SERVIDOR_V2_MV_NATIVE_DIALOGUE_AUTOSOURCE_AND_NO_STALE_OVERWRITE_PASS");
 })().catch(e=>{console.error(e.stack);process.exitCode=1});
