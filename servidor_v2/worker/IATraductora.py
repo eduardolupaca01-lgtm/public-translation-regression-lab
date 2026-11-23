@@ -20,7 +20,7 @@ def quality_reason(lang, original, output):
         return "IA_QUALITY_CORRUPT"
     if len(output)>max(120,min(5400,len(original)*5+80)):
         return "IA_QUALITY_LENGTH_EXCESS"
-    digits=lambda text:sorted(unicodedata.normalize("NFKC",x) for x in
+    digits=lambda text:sorted(str(int(unicodedata.normalize("NFKC",x))) for x in
          re.findall(r"[0-9０-９]+",text))
     if digits(original)!=digits(output):
         return "IA_QUALITY_NUMBER_MISSING"
