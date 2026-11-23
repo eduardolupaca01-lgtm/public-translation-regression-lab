@@ -37,6 +37,7 @@ const(
     iaCmdBrowse=100
     iaCmdInstall=101
     iaCmdClose=102
+    iaCmdCopy=103
 )
 var(
     iaUser32=syscall.NewLazyDLL("user32.dll")
@@ -113,6 +114,7 @@ type iaUI struct{
     input uintptr
     browse uintptr
     closeBtn uintptr
+    copyBtn uintptr
     titleLabel uintptr
     sectionLabel uintptr
     statusLabel uintptr
@@ -142,8 +144,46 @@ func iaLog(line string){
     if iaCurrentUI.logText!=""{iaCurrentUI.logText+="\r\n"}
     iaCurrentUI.logText+=line
     iaSet(iaCurrentUI.logs,iaCurrentUI.logText)
+    // Preserve easy reading of the newest diagnostic without a separate window.
+    iaSendMessage.Call(iaCurrentUI.logs,0x00B1,^uintptr(0),^uintptr(0)) // EM_SETSEL
+    iaSendMessage.Call(iaCurrentUI.logs,0x00B7,0,0) // EM_SCROLLCARET
 }
+func iaSafeInstallCode(message string)string{
+    if !strings.HasPrefix(message,"IA_"){return "IA_ERROR_NO_CLASIFICADO"}
+    end:=0
+    for i:=0;i<len(message);i++{
+        c:=message[i]
+        if !((c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'){break}
+        end=i+1
+    }
+    if end<6||end>110{return "IA_ERROR_NO_CLASIFICADO"}
+    return message[:end]
+}
+func iaFriendlyInstall(code string)string{
+    switch code{
+    case "IA_DESTINO_CREACION_DENEGADA":
+        return "Windows bloqueó la creación de IA Traductora. No se modificó el registro."
+    case "IA_DESTINO_SIN_PERMISO":
+        return "Windows no permite inspeccionar la carpeta de destino."
+    case "IA_DESTINO_AJENO_NO_MODIFICADO","IA_DESTINO_EXISTENTE_NO_SOBRESCRITO":
+        return "Ya hay una carpeta distinta en el destino. No se ha sobrescrito."
+    case "IA_PUBLICACION_CAMBIO_NOMBRE_FALLIDO":
+        return "Windows no permitió publicar los modelos. Se conservaron para reintentar."
+    case "IA_ESCRITURA_BLOQUEADA","IA_ETAPA_ESCRITURA_BLOQUEADA":
+        return "Windows bloqueó la escritura de modelos. Cierra el juego y revisa permisos."
+    case "IA_INSTALACION_EXISTENTE_REVISAR":
+        return "Existe una instalación previa. No se han sobrescrito sus archivos."
+    case "IA_PROPIEDAD_O_VERSION_DIFERENTE":
+        return "La carpeta contiene archivos de otra versión. No se han sobrescrito."
+    case "IA_MODELO_SHA_NO_COINCIDE":
+        return "El modelo no coincide con su firma. No se continuará."
+    default:
+        return "Instalación detenida. Pulsa Copiar diagnóstico para enviar el código."
+    }
+}
+
 var iaSelectFile=iaChooseEXE
+var iaCopyDiagnostics=iaClipboardText
 func iaChooseEXE(owner uintptr)(selected string,err error){
     defer func(){
         if recover()!=nil{
@@ -251,6 +291,15 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             }
         case iaCmdInstall:
             if lparam==ui.install {iaStartInstall()}
+        case iaCmdCopy:
+            if lparam==ui.copyBtn{
+                if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{
+                    iaLog("[IA_COPIAR_ERROR] "+iaSafeInstallCode(err.Error()))
+                    iaSet(ui.status,"No se pudo copiar. Revisa el diagnóstico en pantalla.")
+                }else{
+                    iaSet(ui.status,"Diagnóstico copiado. Puedes pegarlo en el chat.")
+                }
+            }
         case iaCmdClose:
             if lparam==ui.closeBtn && !ui.busy{iaDestroyWindow.Call(hwnd)}
         }
@@ -259,11 +308,14 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         ui.mu.Lock();result:=ui.result;ui.mu.Unlock()
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
-        iaLog("["+result+"]")
-        if strings.HasPrefix(result,"IA_INSTALACION_COMPLETADA"){
-            iaSet(ui.status,"Instalación finalizada. Reinicia el juego para probar.")
+        code:=iaSafeInstallCode(result)
+        if code=="IA_INSTALACION_COMPLETADA_VERIFICADA"{
+            iaLog("[IA_INSTALACION_COMPLETADA_VERIFICADA] Listo para iniciar la copia del juego.")
+            iaSet(ui.status,"Instalación completa. Reinicia la copia del juego y prueba F10.")
         }else{
-            iaSet(ui.status,"No se completó la instalación: "+result)
+            text:=iaFriendlyInstall(code)
+            iaLog("["+code+"] "+text)
+            iaSet(ui.status,text)
             iaEnableWindow.Call(ui.install,1)
         }
         return 0
@@ -303,6 +355,7 @@ func runUI(){
         iaESReadOnly|iaESAutoVScroll,230,414,782,236,0)
     ui.statusLabel=iaControl(hwnd,"STATIC","Listo para instalar el traductor.",0,230,664,773,39,0)
     ui.status=ui.statusLabel
+    ui.copyBtn=iaControl(hwnd,"BUTTON","Copiar diagnóstico",0,230,710,534,36,iaCmdCopy)
     ui.closeBtn=iaControl(hwnd,"BUTTON","Cerrar",0,792,710,218,36,iaCmdClose)
     iaLog("[IA_TRADUCTORA_LISTA] Selecciona una copia MV. El motor es local y propio.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
