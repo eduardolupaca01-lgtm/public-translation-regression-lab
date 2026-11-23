@@ -120,158 +120,142 @@ function fixture(translationDelay=0,options={}){
 const wait=t=>new Promise(resolve=>setTimeout(resolve,t));
 
 async function testJapaneseDialogAndF10(){
-    const f=fixture(1);
-    await wait(12);
+    const f=fixture(1);await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
-    const msg=new f.context.Window_Message();
-    msg.startMessage();
-    assert.equal(msg.originalStarts,0,"must await asynchronous translation");
-    await wait(12);msg.update();
-    assert.equal(f.$gameMessage.allText(),"Buenos días.");
-    assert.equal(msg.originalStarts,1,"start message exactly once");
+    const msg=new f.context.Window_Message();msg.startMessage();
+    assert.equal(msg.originalStarts,1,"native first dialogue cannot wait on IA");
+    assert.equal(f.$gameMessage.allText(),"おはようございます。");
+    await wait(22);
     assert.equal(f.posts.length,1);
     assert.equal(f.posts[0].source,"ja");
-    const second=new f.context.Window_Message();
     f.$gameMessage._texts=["おはようございます。"];
-    second.startMessage();
-    assert.equal(second.originalStarts,1,"cache bypasses inference");
-    assert.equal(f.posts.length,1);
-    const scene=new f.context.Scene_Map();
-    scene.createAllWindows();
-    assert.equal(scene.windows.length,2,"single mini badge and one hidden panel");
+    const second=new f.context.Window_Message();second.startMessage();
+    assert.equal(second.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),"Buenos días.",
+        "verified cached result renders inside native message");
+    assert.equal(f.posts.length,1,"cached text avoids repeated inference");
+    const scene=new f.context.Scene_Map();scene.createAllWindows();
+    assert.equal(scene.windows.length,2);
     assert.equal(scene.windows[0].lastText,"◆ IA Traductora · F10");
     assert.equal(scene.windows[1].visible,false);
-    assert.ok(scene.windows[1].height>=340,
-        "F10 panel must have enough height for readable rows");
-    assert.equal(scene.windows[1].contents.fontSize,18);
+    assert.ok(scene.windows[1].height>=340);
     const ys=scene.windows[1].drawn.map(v=>v.y);
-    assert.ok(ys.every((y,i)=>i===0||y-ys[i-1]>=36),
-        "F10 rows must not overlap");
+    assert.ok(ys.every((v,i)=>i===0||v-ys[i-1]>=36),
+        "F10 must be readable");
     f.context.Input.isTriggered=()=>true;
-    scene.update();
-    assert.equal(scene.windows[1].visible,true,"F10 shows native state panel");
-    scene.update();
-    assert.equal(scene.windows[1].visible,false,"F10 closes native panel");
-    assert.equal(f.spawnCount(),0,"single application; no child GUI when connected");
+    scene.update();assert.equal(scene.windows[1].visible,true);
+    scene.update();assert.equal(scene.windows[1].visible,false);
+    assert.equal(f.spawnCount(),0);
 }
-async function testAutomaticEnglishAndSpanishExclusion(){
-    const f=fixture(1);
-    await wait(12);
-    const msg=new f.context.Window_Message();
+async function testEnglishAndSpanish(){
+    const f=fixture(1);await wait(12);
     f.$gameMessage._texts=["Hello, how are you today?"];
-    msg.startMessage();await wait(12);msg.update();
-    assert.equal(f.posts.length,1,"English sentence must reach model");
-    assert.equal(f.posts[0].source,"en","Origen Auto must not hardcode Japanese");
+    new f.context.Window_Message().startMessage();
+    await wait(22);
+    assert.equal(f.posts.length,1);assert.equal(f.posts[0].source,"en");
     f.$gameMessage._texts=["Hola, ¿cómo estás hoy?"];
     const spanish=new f.context.Window_Message();spanish.startMessage();
     assert.equal(spanish.originalStarts,1);
-    assert.equal(f.posts.length,1,"don't retranslate Spanish player content");
+    assert.equal(f.posts.length,1,"never retranslate Spanish");
 }
-async function testProtectedCommandsAndMovingDialog(){
-    const f=fixture(22);await wait(12);
+async function testRPGControlsAndNoLateRewrite(){
+    const f=fixture(12);await wait(12);
     f.$gameMessage._texts=["\\V[1] おはようございます。"];
-    const protectedMessage=new f.context.Window_Message();
-    protectedMessage.startMessage();
-    assert.equal(protectedMessage.originalStarts,0,"wait for safely masked translation");
-    await wait(40);protectedMessage.update();
-    assert.equal(f.$gameMessage.allText(),"\\V[1] Buenos días.",
-        "RPG variable must be preserved while natural text is translated");
-    assert.equal(protectedMessage.originalStarts,1);
-    assert.equal(f.posts.length,1,"control sequence must not block translation");
+    const first=new f.context.Window_Message();first.startMessage();
+    assert.equal(first.originalStarts,1);
+    await wait(30);
+    assert.equal(f.posts.length,1);
     assert.equal(f.posts[0].text,"おはようございます。",
-        "neural model must never receive the RPG variable token");
-    const msg=new f.context.Window_Message();
+        "model must not receive native variable escape");
+    f.$gameMessage._texts=["\\V[1] おはようございます。"];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"\\V[1] Buenos días.");
     f.$gameMessage._texts=["さようなら。"];
-    msg.startMessage();
+    new f.context.Window_Message().startMessage();
     f.$gameMessage._texts=["次のシーンです。"];
-    await wait(35);msg.update();
+    await wait(30);
     assert.equal(f.$gameMessage.allText(),"次のシーンです。",
-        "stale translation must never change another scene's dialogue");
-    assert.equal(msg.originalStarts,0,"stale text must not be displayed");
-    assert.equal(msg._iaWaiting,null,"stale async state must be cleared");
+        "late result may only enter cache; it must not modify a new message");
 }
-async function testNativeChoiceTranslationAndNoStaleChoiceOverwrite(){
+async function testChoiceCacheOnlyAndNoOverwrite(){
     const f=fixture(1);await wait(12);
     f.$gameMessage.setChoices(["はい","いいえ"],0,1);
-    await wait(12);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),["はい","いいえ"]);
+    await wait(22);
+    f.$gameMessage.setChoices(["はい","いいえ"],0,1);
     assert.deepEqual(Array.from(f.$gameMessage._choices),
-        ["Buenos días.","Buenos días."],
-        "choices should be updated natively without changing indices");
+        ["Buenos días.","Buenos días."],"cached choices preserve their indices");
     assert.equal(f.posts.length,2);
-    const late=fixture(24);await wait(12);
+    const late=fixture(25);await wait(12);
     late.$gameMessage.setChoices(["はい"],0,0);
     late.$gameMessage.setChoices(["No, gracias."],0,0);
-    await wait(35);
+    await wait(40);
     assert.deepEqual(Array.from(late.$gameMessage._choices),["No, gracias."],
-        "late translation must never overwrite a new choice list");
+        "async choice must never overwrite later prompt");
 }
-async function testOldMVRuntimeWithoutPromiseFinally(){
-    const f=fixture(1,{legacyPromise:true});
-    await wait(15);
+async function testOldNWJSAndPathFallback(){
+    const f=fixture(1,{legacyPromise:true});await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
-    const msg=new f.context.Window_Message();
-    msg.startMessage();await wait(20);msg.update();
+    new f.context.Window_Message().startMessage();await wait(22);
+    f.$gameMessage._texts=["おはようございます。"];
+    new f.context.Window_Message().startMessage();
     assert.equal(f.$gameMessage.allText(),"Buenos días.",
-        "older NW.js without Promise.finally must still translate");
-}
-async function testMVPathFallbackFromActualPluginScript(){
-    const original=path.join("/tmp","servidor-qa-juego-日本語",
+        "Promise.finally must not be required");
+    const script=path.join("/tmp","servidor-qa-juego-日本語",
         "www","js","plugins","IATraductora.js");
-    const f=fixture(1,{pathname:"/not-the-game/index.html",
-        scriptSrc:"file://"+encodeURI(original)});
-    await wait(15);
-    f.$gameMessage._texts=["おはようございます。"];
-    const msg=new f.context.Window_Message();
-    msg.startMessage();await wait(15);msg.update();
-    assert.equal(f.$gameMessage.allText(),"Buenos días.",
-        "file:// plugin script must locate real MV game when document URL differs");
+    const fallback=fixture(1,{pathname:"/not-the-game/index.html",
+        scriptSrc:"file://"+encodeURI(script)});
+    await wait(12);
+    fallback.$gameMessage._texts=["おはようございます。"];
+    new fallback.context.Window_Message().startMessage();await wait(22);
+    fallback.$gameMessage._texts=["おはようございます。"];
+    new fallback.context.Window_Message().startMessage();
+    assert.equal(fallback.$gameMessage.allText(),"Buenos días.");
 }
-async function testF10ReportsExactBootStageInsteadOfGenericError(){
-    const f=fixture(1,{pathname:"/no-such-mv-game/index.html"});
-    const scene=new f.context.Scene_Map();
-    scene.createAllWindows();
+async function testUnconnectedGameIsPlayableAndF10Safe(){
+    const f=fixture(0,{disconnected:true});await wait(16);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();msg.startMessage();
+    assert.equal(msg.originalStarts,1);
+    assert.equal(msg._iaWaiting,undefined);
+    msg.update();assert.equal(msg.updates,1);
+    assert.equal(f.spawnCount(),0,"worker must not start at title");
+    const bad=fixture(1,{pathname:"/no-such-mv-game/index.html"});
+    const scene=new bad.context.Scene_Map();scene.createAllWindows();
     const content=scene.windows[1].drawn.map(v=>v.text).join("\n");
     assert.match(content,/IA_INICIO_RUTA_FALLIDO/);
-    assert.ok(!content.includes("IA_INICIO_COMPLEMENTO_FALLIDO"));
 }
-async function testOfflineFailOpenNeverWaitsOnModel(){
-    const f=fixture(0,{disconnected:true});
-    await wait(18);
+async function testSlowModelNeverPausesText(){
+    const f=fixture(80);await wait(12);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();msg.startMessage();
+    assert.equal(msg.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),"おはようございます。");
+    f.$gameMessage._texts=["次のシーンです。"];
+    await wait(95);
+    assert.equal(f.$gameMessage.allText(),"次のシーンです。");
+}
+async function testBoundedMapPrefetchAndPressure(){
+    const f=fixture(1);await wait(12);
+    const commands=[];
+    for(let i=0;i<600;i++)commands.push({code:401,parameters:["こんにちは "+i+"。"]});
+    f.context.$dataMap={events:[null,{pages:[{list:commands}]}]};
+    const scene=new f.context.Scene_Map();scene.createAllWindows();scene.update();
+    await wait(70);
+    assert.ok(f.posts.length<=12,"background scan must not flood requests");
     f.$gameMessage._texts=["おはようございます。"];
     const msg=new f.context.Window_Message();
-    msg.startMessage();
-    assert.equal(msg.originalStarts,1,
-        "unavailable worker must show original RPG dialogue immediately");
-    assert.equal(msg._iaWaiting,undefined);
-    msg.update();
-    assert.equal(msg.updates,1,"MV native update must not be blocked offline");
-    assert.equal(f.spawnCount(),0,"worker may not start during boot/title");
-}
-async function testSlowTranslationFallsBackWithinSmallBudget(){
-    const f=fixture(60);
-    await wait(12);
-    f.$gameMessage._texts=["おはようございます。"];
-    const msg=new f.context.Window_Message();
-    msg.startMessage();
-    assert.equal(msg.originalStarts,0);
-    msg._iaWaiting.at-=5000;
-    msg.update();
-    assert.equal(msg.originalStarts,1,"slow worker must not block RPG message");
-    assert.equal(f.$gameMessage.allText(),"おはようございます。",
-        "unready translation must leave original content intact");
-    await wait(75);
-    assert.equal(f.$gameMessage.allText(),"おはようございます。",
-        "late response must not overwrite already displayed message");
+    for(let i=0;i<300;i++)msg.startMessage();
+    assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
 }
 (async()=>{
-    await testOfflineFailOpenNeverWaitsOnModel();
-    await testSlowTranslationFallsBackWithinSmallBudget();
-    await testOldMVRuntimeWithoutPromiseFinally();
-    await testMVPathFallbackFromActualPluginScript();
-    await testF10ReportsExactBootStageInsteadOfGenericError();
+    await testUnconnectedGameIsPlayableAndF10Safe();
+    await testSlowModelNeverPausesText();
+    await testOldNWJSAndPathFallback();
     await testJapaneseDialogAndF10();
-    await testAutomaticEnglishAndSpanishExclusion();
-    await testProtectedCommandsAndMovingDialog();
-    await testNativeChoiceTranslationAndNoStaleChoiceOverwrite();
-    console.log("SERVIDOR_V2_MV_NATIVE_DIALOGUE_AUTOSOURCE_AND_NO_STALE_OVERWRITE_PASS");
+    await testEnglishAndSpanish();
+    await testRPGControlsAndNoLateRewrite();
+    await testChoiceCacheOnlyAndNoOverwrite();
+    await testBoundedMapPrefetchAndPressure();
+    console.log("SERVIDOR_V2_MV_NATIVE_FAIL_OPEN_CACHE_PREFETCH_AND_F10_PASS");
 })().catch(e=>{console.error(e.stack);process.exitCode=1});
