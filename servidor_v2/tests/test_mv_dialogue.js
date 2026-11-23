@@ -229,6 +229,30 @@ async function testSpeakerHeadersAreNotMixedWithSpanish(){
     assert.equal(f.$gameMessage.allText(),"Natsumi\nBuenos días.",
         "speaker and speech must never be glued together");
 }
+async function testNativeControlsNeverReachNeuralOrChangeOnScreen(){
+    const samples=[
+        {src:"\\C[6]おはようございます。\\C[0]",
+            expected:"\\C[6]Buenos días.\\C[0]"},
+        {src:"おはようございます。%1",
+            expected:"Buenos días.%1"},
+        {src:"おはようございます。\${actor}",
+            expected:"Buenos días.\${actor}"},
+        {src:"\\N[2] おはようございます。",
+            expected:"\\N[2] Buenos días."}
+    ];
+    for(const sample of samples){
+        const f=fixture(1);await wait(22);
+        f.$gameMessage._texts=[sample.src];
+        new f.context.Window_Message().startMessage();
+        await wait(28);
+        assert.deepEqual(f.posts.map(x=>x.text),["おはようございます。"],
+            "control codes must never reach the neural model");
+        f.$gameMessage._texts=[sample.src];
+        new f.context.Window_Message().startMessage();
+        assert.equal(f.$gameMessage.allText(),sample.expected,
+            "result must contain every exact RPG/format control");
+    }
+}
 async function testJapaneseDialogAndF10(){
     const f=fixture(1);await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
@@ -374,6 +398,7 @@ async function testBoundedMapPrefetchAndPressure(){
 (async()=>{
     await testFullNativeMenusAndNameOnlyText();
     await testSpeakerHeadersAreNotMixedWithSpanish();
+    await testNativeControlsNeverReachNeuralOrChangeOnScreen();
     await testPersistentCacheAfterRestartWithoutWorker();
     await testRejectDamagedOutputBeforeDiskOrRender();
     await testUnconnectedGameIsPlayableAndF10Safe();
