@@ -49,7 +49,7 @@ func hash(b []byte)string{h:=sha256.Sum256(b);return hex.EncodeToString(h[:])}
 func ordinary(file string)bool{st,err:=os.Lstat(file);return err==nil&&st.Mode().IsRegular()&&st.Mode()&os.ModeSymlink==0}
 func safeFile(name string)bool{
  return name!=""&&name==path.Clean(name)&&!strings.HasPrefix(name,"/")&&
- !strings.Contains(name,"\")&&!strings.HasPrefix(name,"../")&&name!=".."&&
+ !strings.Contains(name,"\\")&&!strings.HasPrefix(name,"../")&&name!=".."&&
  !strings.HasPrefix(name,"./")&& !strings.Contains(name,":")
 }
 func readPackage(filename string)(*packageReader,error){
@@ -146,7 +146,7 @@ func parseRegistry(reg []byte)(int,[]map[string]json.RawMessage,error){
  for i:=start;i<len(text);i++{
   c:=text[i]
   if quoted{
-   if escaped{escaped=false}else if c=='\'{escaped=true}else if c=='"'{quoted=false}
+   if escaped{escaped=false}else if c=='\\'{escaped=true}else if c=='"'{quoted=false}
    continue
   }
   if c=='"'{quoted=true}else if c=='['{depth++}else if c==']'{
@@ -182,9 +182,7 @@ func appendRegistry(reg []byte)([]byte,error){
  // Insert exactly before closing bracket. The original bytes are kept intact.
  prefix:=reg[:finish-1];suffix:=reg[finish-1:]
  sep:="";if len(entries)>0{sep=","}
- return append(append(append([]byte{},prefix...),[]byte(sep+"
-"+string(raw)+"
-")...),suffix...),nil
+ return append(append(append([]byte{},prefix...),[]byte(sep+"\n"+string(raw)+"\n")...),suffix...),nil
 }
 func writeAtomic(filename string,b []byte)error{
  parent:=filepath.Dir(filename)
