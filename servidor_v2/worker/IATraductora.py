@@ -198,7 +198,12 @@ class Service:
                 self.cache[key]=disk
                 while len(self.cache)>3000:self.cache.popitem(last=False)
             return disk
-        output=self.neural.translate(lang,text)
+        try:
+            output=self.neural.translate(lang,text)
+        except RuntimeError as err:
+            if "IA_QUALITY_" in str(err):
+                with self.lock:self.quality_rejected+=1
+            raise
         reason=quality_reason(lang,text,output)
         if reason is not None:
             with self.lock:self.quality_rejected+=1
