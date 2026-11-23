@@ -253,6 +253,30 @@ async function testNativeControlsNeverReachNeuralOrChangeOnScreen(){
             "result must contain every exact RPG/format control");
     }
 }
+async function testApprovedBilingualCorrectionsOverridePreviousNeuralCache(){
+    const shared={files:{},dirs:{}};
+    const original="おはようございます。";
+    const first=fixture(1,{fsState:shared});await wait(35);
+    first.$gameMessage._texts=[original];
+    new first.context.Window_Message().startMessage();
+    await wait(35);
+    const folder=path.join("/tmp","servidor-qa-juego-日本語",
+        "IA Traductora",".local","Rpg","cache");
+    shared.files[path.join(folder,"traducciones_aprobadas_es.json")]=
+        JSON.stringify({[original]:"Buen día."});
+    shared.files[path.join(folder,"nombres_es.json")]=
+        JSON.stringify({"保林 隼人":"Hayato Hobayashi (revisado)"});
+    const reopened=fixture(1,{fsState:shared,disconnected:true});await wait(40);
+    reopened.$gameMessage._texts=[original];
+    new reopened.context.Window_Message().startMessage();
+    assert.equal(reopened.$gameMessage.allText(),"Buen día.",
+        "owner-approved phrase must supersede an old persisted result");
+    assert.equal(reopened.posts.length,0,"approved phrase never calls neural model");
+    const w=new reopened.context.Window_Base();w.initialize(0,0,300,90);
+    w.drawText("保林 隼人",0,0,240);
+    assert.equal(w.lastText,"Hayato Hobayashi (revisado)",
+        "owner-approved name reading must supersede pilot default");
+}
 async function testJapaneseDialogAndF10(){
     const f=fixture(1);await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
@@ -396,6 +420,7 @@ async function testBoundedMapPrefetchAndPressure(){
     assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
 }
 (async()=>{
+    await testApprovedBilingualCorrectionsOverridePreviousNeuralCache();
     await testFullNativeMenusAndNameOnlyText();
     await testSpeakerHeadersAreNotMixedWithSpanish();
     await testNativeControlsNeverReachNeuralOrChangeOnScreen();
