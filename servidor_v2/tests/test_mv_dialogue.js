@@ -86,11 +86,17 @@ function fixture(translationDelay=0,options={}){
         this.contents={fontSize:12,outlineWidth:1,clear(){}};
     };
     Window_Base.prototype.contentsWidth=function(){return this.width-20};
+    Window_Base.prototype.drawTextEx=function(t){
+        this.lastTextEx=t;return String(t).length;
+    };
     Window_Base.prototype.drawText=function(t,x,y){
         this.lastText=t;
         if(!this.drawn)this.drawn=[];
         this.drawn.push({text:t,y:y});
     };
+    function Bitmap(){}
+    Bitmap.prototype.drawText=function(t){this.lastText=String(t);return t;};
+    function Scene_Name(){}
     function Window_Message(){this.originalStarts=0;this.updates=0}
     Window_Message.prototype.startMessage=function(){this.originalStarts++};
     Window_Message.prototype.update=function(){this.updates++};
@@ -137,7 +143,7 @@ function fixture(translationDelay=0,options={}){
         Promise:options.legacyPromise?LegacyPromise:Promise,process,Date,Map,
         Number:options.legacyBuffer?LegacyNumber:Number,Error,
         setTimeout,clearTimeout,setInterval(){return 1},
-        Window_Base,Window_Message,Scene_Map,Game_Message,
+        Window_Base,Window_Message,Scene_Map,Game_Message,Bitmap,Scene_Name,
         Graphics:{boxWidth:1280},
         Input:{keyMapper:{},isTriggered(){return false}},
         SceneManager:{_scene:null},
@@ -180,6 +186,39 @@ async function testRejectDamagedOutputBeforeDiskOrRender(){
     new f.context.Window_Message().startMessage();
     assert.equal(f.$gameMessage.allText(),"今日は08月24日です。",
         "missing dates must not be accepted just because response is Spanish");
+}
+async function testFullNativeMenusAndNameOnlyText(){
+    const f=fixture(1);await wait(24);
+    const w=new f.context.Window_Base();
+    w.initialize(0,0,500,100);
+    w.drawText("持ち物",0,0,160,"left");
+    assert.equal(w.lastText,"Objetos");
+    w.drawText("オプション",0,0,160,"left");
+    assert.equal(w.lastText,"Opciones");
+    w.drawTextEx("大事なもの",0,0);
+    assert.equal(w.lastTextEx,"Objetos importantes");
+    const bitmap=new f.context.Bitmap();
+    bitmap.drawText("夏実",0,0,100,30);
+    assert.equal(bitmap.lastText,"Natsumi",
+        "approved exact name label may render in native bitmap");
+    f.context.SceneManager._scene=new f.context.Scene_Name();
+    bitmap.drawText("夏実",0,0,100,30);
+    assert.equal(bitmap.lastText,"夏実",
+        "name editing must preserve original player data");
+}
+async function testSpeakerHeadersAreNotMixedWithSpanish(){
+    const f=fixture(1);await wait(24);
+    const source="夏実\nおはようございます。";
+    f.$gameMessage._texts=source.split("\n");
+    const message=new f.context.Window_Message();message.startMessage();
+    assert.equal(message.originalStarts,1);
+    await wait(42);
+    assert.equal(f.posts.length,1,"only spoken line can reach neural engine");
+    assert.equal(f.posts[0].text,"おはようございます。");
+    f.$gameMessage._texts=source.split("\n");
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"Natsumi\nBuenos días.",
+        "speaker and speech must never be glued together");
 }
 async function testJapaneseDialogAndF10(){
     const f=fixture(1);await wait(12);
@@ -324,6 +363,8 @@ async function testBoundedMapPrefetchAndPressure(){
     assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
 }
 (async()=>{
+    await testFullNativeMenusAndNameOnlyText();
+    await testSpeakerHeadersAreNotMixedWithSpanish();
     await testPersistentCacheAfterRestartWithoutWorker();
     await testRejectDamagedOutputBeforeDiskOrRender();
     await testUnconnectedGameIsPlayableAndF10Safe();
