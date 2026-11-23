@@ -92,7 +92,7 @@ function fixture(translationDelay=0,options={}){
     LegacyPromise.resolve=Promise.resolve.bind(Promise);
     LegacyPromise.all=Promise.all.bind(Promise);
     const context={
-        window:{location:{pathname:requestOptions.pathname||path.join(root,"www","index.html")}},
+        window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
         document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
         Utils:{isNwjs:()=>true},
         require(name){
