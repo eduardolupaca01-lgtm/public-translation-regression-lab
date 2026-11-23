@@ -245,7 +245,23 @@ function validTranslation(source,original,result,composed){
        result.length>Math.max(100,Math.min(5400,original.length*5+80))||
        /\uFFFD|\u0000/.test(result)||numbersIn(original)!==numbersIn(result))
         return false;
-    if(source==="ja"&&!composed&&isJapanese(result))return false;
+    if(source==="ja"){
+        var withoutHeader=result;
+        if(composed){
+            var prefix=speakerHeader(original);
+            if(prefix){
+                var name=nameInSpanish(prefix.name)||prefix.name;
+                var start=name+prefix.separator;
+                if(withoutHeader.indexOf(start)===0){
+                    withoutHeader=withoutHeader.slice(start.length);
+                }
+            }
+        }
+        var visible=protectedParts(withoutHeader).filter(function(c){
+            return !c.locked;
+        }).map(function(c){return c.value;}).join("");
+        if(isJapanese(visible))return false;
+    }
     // A replayed cache is data, not code. Reject generated RPG escapes that
     // weren't in the original. Also protect carriage returns and line count.
     if((result.match(/\n/g)||[]).length!==(original.match(/\n/g)||[]).length)
@@ -314,6 +330,7 @@ function startPersistentCache(){
     cacheFile=path.join(cacheDir,"translations-ja-en-es-v2.jsonl");
     function onReady(){
         if(!safeCachePath()){diskStats.errors++;return;}
+        loadNameGlossary();
         fs.readFile(cacheFile,"utf8",function(err,data){
             if(err&&err.code!=="ENOENT"){diskStats.errors++;return;}
             if(!err&&typeof data==="string"){
@@ -384,6 +401,17 @@ function protectedParts(text){
 function translatePreservingControls(source,text){
     var key=source+"\u0000"+text;
     if(cache.has(key))return Promise.resolve(cache.get(key));
+    // Separate a native speaker header before OPUS sees any dialogue body.
+    // No variable codes, name-entry values or event state are rewritten.
+    var speaker=source==="ja"?speakerHeader(text):null;
+    if(speaker){
+        return translatePreservingControls(source,speaker.body).then(function(out){
+            if(!out)return null;
+            var name=nameInSpanish(speaker.name)||speaker.name;
+            var joint=name+speaker.separator+out;
+            return acceptCache(source,text,joint,true,true)?joint:null;
+        });
+    }
     var chunks=protectedParts(text);
     if(chunks.length===0)return Promise.resolve(null);
     // Reject malformed/unrecognized escapes instead of letting the model change them.
@@ -409,6 +437,111 @@ function translatePreservingControls(source,text){
     });
 }
 // Native, cache-first bridge. Never block or restart a message event.
+// Short, deterministic RPG UI labels should not require neural inference.
+// Game-specific actor readings can be overridden in cache/nombres_es.json;
+// do not modify the game's actor database or player-entered name.
+var knownUi={
+    "持ち物":"Objetos","オプション":"Opciones","セーブ":"Guardar",
+    "ゲーム終了":"Salir del juego","キャンセル":"Cancelar",
+    "決定":"Aceptar","大事なもの":"Objetos importantes",
+    "ニューゲーム":"Nueva partida","コンティニュー":"Continuar",
+    "戻る":"Volver","はい":"Sí","いいえ":"No"
+};
+var knownNames={"夏実":"Natsumi","隼人":"Hayato"};
+function nameInSpanish(name){
+    return Object.prototype.hasOwnProperty.call(knownNames,name)?
+        knownNames[name]:null;
+}
+function loadNameGlossary(){
+    var namesFile=path.join(cacheDir,"nombres_es.json");
+    try{
+        var info=fs.lstatSync(namesFile);
+        if(!info.isFile()||info.isSymbolicLink()||info.size>65536)return;
+    }catch(_){return;}
+    fs.readFile(namesFile,"utf8",function(err,body){
+        if(err||!body||body.length>65536)return;
+        try{
+            var values=JSON.parse(body);
+            if(!values||typeof values!=="object"||Array.isArray(values))return;
+            Object.keys(values).forEach(function(k){
+                var v=values[k];
+                if(k.length>=2&&k.length<=36&&isJapanese(k)&&
+                   typeof v==="string"&&v.length>=2&&v.length<=64&&
+                   !isJapanese(v)&&!/[\r\n\\<>]/.test(v)){
+                    knownNames[k]=v;
+                }
+            });
+        }catch(_){diskStats.errors++;}
+    });
+}
+function speakerHeader(text){
+    if(typeof text!=="string"||text.length<5)return null;
+    var m=/^([\u3400-\u9fff々\u30a0-\u30ff・ー ]{2,20})(\r?\n)([\s\S]+)$/.exec(text);
+    if(m&&isJapanese(m[1])&&isJapanese(m[3]))
+        return {name:m[1],separator:m[2],body:m[3]};
+    m=/^([\u3400-\u9fff々\u30a0-\u30ff・ー ]{2,20})([「『])([\s\S]+)$/.exec(text);
+    if(m&&isJapanese(m[1])&&isJapanese(m[3]))
+        return {name:m[1],separator:" "+m[2],body:m[3],
+                oldSeparator:m[2]};
+    return null;
+}
+function translatedNativeLabel(text){
+    if(typeof text!=="string"||text.length>450||text.length<2||
+       !isJapanese(text))return text;
+    if(typeof SceneManager!=="undefined"&&SceneManager._scene){
+        var current=SceneManager._scene;
+        // Name entry edits the player's save data: never localize that value.
+        if(typeof Scene_Name!=="undefined"&&current instanceof Scene_Name)
+            return text;
+    }
+    if(Object.prototype.hasOwnProperty.call(knownUi,text))
+        return knownUi[text];
+    var name=nameInSpanish(text);
+    if(name)return name;
+    var source=languageFor(text);
+    if(!source)return text;
+    var found=cache.get(source+"\u0000"+text);
+    if(typeof found==="string")return found;
+    if(state.connected&&pending.size<18){
+        translatePreservingControls(source,text).catch(function(){
+            state.errors++;
+        });
+    }
+    return text;
+}
+function hookNativeSurface(){
+    if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
+        var originalDraw=Window_Base.prototype.drawText;
+        if(typeof originalDraw==="function"){
+            Window_Base.prototype.drawText=function(){
+                var args=Array.prototype.slice.call(arguments);
+                if(typeof args[0]==="string")args[0]=translatedNativeLabel(args[0]);
+                return originalDraw.apply(this,args);
+            };
+        }
+        var originalEx=Window_Base.prototype.drawTextEx;
+        if(typeof originalEx==="function"){
+            Window_Base.prototype.drawTextEx=function(){
+                var args=Array.prototype.slice.call(arguments);
+                if(typeof args[0]==="string")args[0]=translatedNativeLabel(args[0]);
+                return originalEx.apply(this,args);
+            };
+        }
+    }
+    // Custom windows often bypass Window_Base and draw directly on a Bitmap.
+    // Ignore single glyphs from MV's typewriter and never repaint an active UI.
+    if(typeof Bitmap!=="undefined"&&Bitmap.prototype&&
+       typeof Bitmap.prototype.drawText==="function"){
+        var bitmapDraw=Bitmap.prototype.drawText;
+        Bitmap.prototype.drawText=function(){
+            var args=Array.prototype.slice.call(arguments);
+            if(typeof args[0]==="string"&&args[0].length>=2)
+                args[0]=translatedNativeLabel(args[0]);
+            return bitmapDraw.apply(this,args);
+        };
+    }
+}
+
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var original=Window_Message.prototype.startMessage;
@@ -610,6 +743,7 @@ try{
         throw Error("IA_NUCLEO_MV_NO_ENCONTRADO");
     state.phase="MENSAJES";hookMessages();
     state.phase="OPCIONES";hookChoices();
+    state.phase="INTERFAZ";hookNativeSurface();
     state.phase="CONEXION";refreshConnection();setInterval(refreshConnection,4500);
     state.phase="ACTIVO";
 }catch(_){
