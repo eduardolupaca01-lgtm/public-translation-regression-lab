@@ -445,9 +445,17 @@ var knownUi={
     "ゲーム終了":"Salir del juego","キャンセル":"Cancelar",
     "決定":"Aceptar","大事なもの":"Objetos importantes",
     "ニューゲーム":"Nueva partida","コンティニュー":"Continuar",
-    "戻る":"Volver","はい":"Sí","いいえ":"No"
+    "戻る":"Volver","はい":"Sí","いいえ":"No",
+    // Exact labels observed in the current MV pilot, never game scripts.
+    "商店街へ行こう":"Ir a la zona comercial",
+    "タスク手帳":"Agenda de tareas",
+    "各キャラのタスクレベルと夏実の心情が確認出来ます。":
+        "Consulta las tareas de cada personaje y el estado de ánimo de Natsumi."
 };
-var knownNames={"夏実":"Natsumi","隼人":"Hayato"};
+var knownNames={"夏実":"Natsumi","隼人":"Hayato",
+    // Provisional reading for the nameplate in this MV test. Game-local
+    // nombres_es.json overrides it without changing a player's save.
+    "保林 隼人":"Hobayashi Hayato"};
 function nameInSpanish(name){
     return Object.prototype.hasOwnProperty.call(knownNames,name)?
         knownNames[name]:null;
@@ -485,6 +493,19 @@ function speakerHeader(text){
                 oldSeparator:m[2]};
     return null;
 }
+function localizeDate(text){
+    var dayNames={月:"lun.",火:"mar.",水:"mié.",木:"jue.",
+        金:"vie.",土:"sáb.",日:"dom."};
+    var m=/^\s*([0-9０-９]{1,2})月\s*([0-9０-９]{1,2})日\s*[（(]([月火水木金土日])[）)]\s*$/.exec(text);
+    var normal=function(v){return v.replace(/[０-９]/g,function(c){
+        return String(c.charCodeAt(0)-65296);
+    });};
+    var pad=function(v){return ("0"+Number(normal(v))).slice(-2);};
+    if(m)return pad(m[2])+"/"+pad(m[1])+" ("+dayNames[m[3]]+")";
+    m=/^\s*(午前|午後)\s*([0-9０-９]{1,2})時\s*([0-9０-９]{1,2})分\s*$/.exec(text);
+    if(m)return pad(m[2])+":"+pad(m[3])+(m[1]==="午前"?" a. m.":" p. m.");
+    return null;
+}
 function translatedNativeLabel(text){
     if(typeof text!=="string"||text.length>450||text.length<2||
        !isJapanese(text))return text;
@@ -496,6 +517,8 @@ function translatedNativeLabel(text){
     }
     if(Object.prototype.hasOwnProperty.call(knownUi,text))
         return knownUi[text];
+    var time=localizeDate(text);
+    if(time)return time;
     var name=nameInSpanish(text);
     if(name)return name;
     var source=languageFor(text);
