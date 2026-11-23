@@ -216,7 +216,7 @@ func Install(gameEXE string,pkg *packageReader)error{
  if err!=nil {
   switch err.Error() {
   case "IA_PLUGIN_YA_REGISTRADO":
-   return verifiedNewInstallation(root,content,old)
+   return iaUpgradeOwnPlugin(root,content,old,pkg)
   case "IA_MIGRACION_PREVIA_REQUERIDA":
    previous,err=verifiedOldMigration(root,content,old)
    if err!=nil{return err}

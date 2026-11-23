@@ -8,13 +8,14 @@ const vm=require("node:vm");
 const EventEmitter=require("node:events");
 const crypto=require("node:crypto");
 
-function fixture(translationDelay=0){
+function fixture(translationDelay=0,options={}){
     const posts=[],read={},source=fs.readFileSync(
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
     const root=path.join("/tmp","servidor-qa-juego-日本語");
     const descriptor=path.join(root,"www","data","IATraductora","bridge.json");
     const core=path.join(root,"www","js","rpg_core.js");
     read[core]="// mock rpg core";
+    read[path.join(root,"www","js","plugins.js")]="var $plugins = [];";
     read[descriptor]=JSON.stringify({schema:"ia-traductora-bridge-v1",
         port:24123,pid:123,token:"a".repeat(64)});
     const mockFS={
@@ -60,7 +61,11 @@ function fixture(translationDelay=0){
         this.contents={fontSize:12,outlineWidth:1,clear(){}};
     };
     Window_Base.prototype.contentsWidth=function(){return this.width-20};
-    Window_Base.prototype.drawText=function(t){this.lastText=t};
+    Window_Base.prototype.drawText=function(t,x,y){
+        this.lastText=t;
+        if(!this.drawn)this.drawn=[];
+        this.drawn.push({text:t,y:y});
+    };
     function Window_Message(){this.originalStarts=0;this.updates=0}
     Window_Message.prototype.startMessage=function(){this.originalStarts++};
     Window_Message.prototype.update=function(){this.updates++};
@@ -76,7 +81,8 @@ function fixture(translationDelay=0){
     };
     const $gameMessage=new Game_Message();
     const context={
-        window:{location:{pathname:path.join(root,"www","index.html")}},
+        window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
+        document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
         Utils:{isNwjs:()=>true},
         require(name){
             switch(name){
@@ -124,6 +130,12 @@ async function testJapaneseDialogAndF10(){
     assert.equal(scene.windows.length,2,"single mini badge and one hidden panel");
     assert.equal(scene.windows[0].lastText,"◆ IA Traductora · F10");
     assert.equal(scene.windows[1].visible,false);
+    assert.ok(scene.windows[1].height>=340,
+        "F10 panel must have enough height for readable rows");
+    assert.equal(scene.windows[1].contents.fontSize,18);
+    const ys=scene.windows[1].drawn.map(v=>v.y);
+    assert.ok(ys.every((y,i)=>i===0||y-ys[i-1]>=36),
+        "F10 rows must not overlap");
     f.context.Input.isTriggered=()=>true;
     scene.update();
     assert.equal(scene.windows[1].visible,true,"F10 shows native state panel");
@@ -182,7 +194,29 @@ async function testNativeChoiceTranslationAndNoStaleChoiceOverwrite(){
     assert.deepEqual(Array.from(late.$gameMessage._choices),["No, gracias."],
         "late translation must never overwrite a new choice list");
 }
+async function testMVPathFallbackFromActualPluginScript(){
+    const original=path.join("/tmp","servidor-qa-juego-日本語",
+        "www","js","plugins","IATraductora.js");
+    const f=fixture(1,{pathname:"/not-the-game/index.html",
+        scriptSrc:"file://"+encodeURI(original)});
+    await wait(15);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();
+    msg.startMessage();await wait(15);msg.update();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.",
+        "file:// plugin script must locate real MV game when document URL differs");
+}
+async function testF10ReportsExactBootStageInsteadOfGenericError(){
+    const f=fixture(1,{pathname:"/no-such-mv-game/index.html"});
+    const scene=new f.context.Scene_Map();
+    scene.createAllWindows();
+    const content=scene.windows[1].drawn.map(v=>v.text).join("\n");
+    assert.match(content,/IA_INICIO_RUTA_FALLIDO/);
+    assert.ok(!content.includes("IA_INICIO_COMPLEMENTO_FALLIDO"));
+}
 (async()=>{
+    await testMVPathFallbackFromActualPluginScript();
+    await testF10ReportsExactBootStageInsteadOfGenericError();
     await testJapaneseDialogAndF10();
     await testAutomaticEnglishAndSpanishExclusion();
     await testProtectedCommandsAndMovingDialog();

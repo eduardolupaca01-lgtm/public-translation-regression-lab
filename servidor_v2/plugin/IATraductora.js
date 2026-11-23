@@ -11,14 +11,58 @@ if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var fs=require("fs"),path=require("path"),crypto=require("crypto");
 var http=require("http"),spawn=require("child_process").spawn;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
-var state={connected:false,status:"Comprobando instalación",requested:0,received:0,shown:0,errors:0};
+var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var cache=new Map(),pending=new Map(),maxWait=45000;
-function rootFromURL(){
-    var name=decodeURIComponent(window.location.pathname);
-    if(/^\/[A-Za-z]:/.test(name)) name=name.slice(1);
-    var dir=fs.realpathSync(path.dirname(name));
-    return path.basename(dir).toLowerCase()==="www"?path.dirname(dir):dir;
+// NW.js versions resolve index.html and Game.exe differently. Detect only an
+// actual MV root by checking its original files; never trust a guessed path.
+function resolveMVGame(){
+    var candidates=[],seen={};
+    function add(value){
+        if(typeof value!=="string"||!value||value.length>4096)return;
+        try{
+            var name=value;
+            if(/^file:\/\//i.test(name)){
+                name=name.replace(/^file:\/\//i,"");
+                if(!/^[\\/]/.test(name)&&!/^[A-Za-z]:[\\/]/.test(name))
+                    name="//"+name; // file://server/share/ (UNC)
+            }
+            name=decodeURIComponent(name);
+            if(/^\/[A-Za-z]:[\\/]/.test(name))name=name.slice(1);
+            if(!path.isAbsolute(name))return; // do not search unrelated folders
+            var loc=path.normalize(name);
+            if(/\.(?:js|html?)$/i.test(path.basename(loc)))loc=path.dirname(loc);
+            if(path.basename(loc).toLowerCase()==="plugins")
+                loc=path.dirname(path.dirname(loc));
+            else if(path.basename(loc).toLowerCase()==="js")
+                loc=path.dirname(loc);
+            if(path.basename(loc).toLowerCase()==="www")loc=path.dirname(loc);
+            if(!seen[loc]){seen[loc]=true;candidates.push(loc);}
+        }catch(_){}
+    }
+    try{add(path.dirname(process.execPath));}catch(_){}
+    try{
+        if(typeof document!=="undefined"&&document.currentScript)
+            add(document.currentScript.src);
+    }catch(_){}
+    try{add(window.location.pathname);}catch(_){}
+    try{add(window.location.href);}catch(_){}
+    try{add(process.cwd());}catch(_){}
+    for(var i=0;i<candidates.length;i++){
+        var base=candidates[i];
+        for(var j=0;j<2;j++){
+            var folder=j===0?path.join(base,"www"):base;
+            if(!ordinary(path.join(folder,"js","rpg_core.js"))||
+               !ordinary(path.join(folder,"js","plugins.js")))continue;
+            try{
+                var root=fs.realpathSync(base);
+                // The chosen JS folder must remain associated with this game.
+                if(ordinary(path.join(root,j===0?"www":".","js","rpg_core.js")))
+                    return {root:root,content:j===0?path.join(root,"www"):root};
+            }catch(_){}
+        }
+    }
+    throw Error("IA_RUTA_MV_NO_RECONOCIDA");
 }
 function ordinary(file){
     try{var st=fs.lstatSync(file);return st.isFile()&&!st.isSymbolicLink();}
@@ -34,8 +78,8 @@ function owner(){
     return data;
 }
 function initPaths(){
-    game=rootFromURL();
-    content=ordinary(path.join(game,"www","js","rpg_core.js"))?path.join(game,"www"):game;
+    var found=resolveMVGame();
+    game=found.root;content=found.content;
     sidecar=path.join(game,"IA Traductora");
     worker=path.join(sidecar,".local","Rpg","engine","IATraductora.exe");
     descriptorFile=path.join(content,"data","IATraductora","bridge.json");
@@ -289,20 +333,35 @@ function setupHud(){
     function IAPanel(){this.initialize.apply(this,arguments);}
     IAPanel.prototype=Object.create(Window_Base.prototype);
     IAPanel.prototype.constructor=IAPanel;
-    IAPanel.prototype.standardPadding=function(){return 12;};
-    IAPanel.prototype.lineHeight=function(){return 27;};
+    IAPanel.prototype.standardPadding=function(){return 14;};
+    IAPanel.prototype.lineHeight=function(){return 38;};
     IAPanel.prototype.initialize=function(){
-        Window_Base.prototype.initialize.call(this,Graphics.boxWidth-345,7,335,225);
-        this.opacity=205;this.visible=false;this._tick=0;this.refresh();
+        var w=Math.min(540,Math.max(310,Graphics.boxWidth-22));
+        var h=Math.min(390,Math.max(340,(Graphics.boxHeight||720)-20));
+        Window_Base.prototype.initialize.call(this,
+            Math.max(5,Graphics.boxWidth-w-10),8,w,h);
+        this.opacity=228;this.visible=false;this._tick=0;
+        this.contents.fontSize=18;this.contents.outlineWidth=2;
+        this.refresh();
     };
     IAPanel.prototype.refresh=function(){
         this.contents.clear();
-        var lines=["IA Traductora · RPG","Idioma: Español","Arranque: "+(startupCode()||"En espera"),
-            "Motor: "+state.status,"Solicitados: "+state.requested,
-            "Recibidos: "+state.received+" · Mostrados: "+state.shown,
-            "Errores: "+state.errors,"Cerrar (F10)"];
+        this.contents.fontSize=18;
+        var lines=[
+            "IA Traductora · RPG Maker MV",
+            "Idioma: Español",
+            "Fase: "+state.phase,
+            "Motor:",
+            state.status,
+            "Solicitudes: "+state.requested,
+            "Recibidas: "+state.received+"   Mostradas: "+state.shown,
+            "Errores: "+state.errors,
+            "Cerrar panel: F10"
+        ];
         for(var i=0;i<lines.length;i++){
-            this.drawText(lines[i],0,i*24,this.contentsWidth(),"left");
+            if(i===4&&lines[i].length>32)this.contents.fontSize=16;
+            this.drawText(lines[i],0,i*38,this.contentsWidth(),"left");
+            this.contents.fontSize=18;
         }
     };
     var create=Scene_Map.prototype.createAllWindows;
@@ -323,14 +382,19 @@ function setupHud(){
     Input.keyMapper[121]="ia-traductora";
 }
 try{
-    // F10 must remain visible even if the sidecar is not found or cannot start.
-    setupHud();
-    initPaths();
-    if(!ordinary(path.join(content,"js","rpg_core.js")))throw Error("Sólo RPG Maker MV");
-    hookMessages();hookChoices();
-    refreshConnection();setInterval(refreshConnection,4500);
+    // Keep F10 accessible even if detection or worker startup fails.
+    state.phase="F10";setupHud();
+    state.phase="RUTA";initPaths();
+    state.phase="NUCLEO";
+    if(!ordinary(path.join(content,"js","rpg_core.js")))
+        throw Error("IA_NUCLEO_MV_NO_ENCONTRADO");
+    state.phase="MENSAJES";hookMessages();
+    state.phase="OPCIONES";hookChoices();
+    state.phase="CONEXION";refreshConnection();setInterval(refreshConnection,4500);
+    state.phase="ACTIVO";
 }catch(_){
-    state.status="IA_INICIO_COMPLEMENTO_FALLIDO";
+    // Show a safe *stage* code instead of a generic exception or private path.
+    state.status="IA_INICIO_"+state.phase+"_FALLIDO";
     state.errors++;
 }
 })();

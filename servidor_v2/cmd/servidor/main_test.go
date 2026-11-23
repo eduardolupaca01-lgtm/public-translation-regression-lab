@@ -48,11 +48,14 @@ func TestGameMVPathAndForeignFile(t *testing.T){
  if !ordinary(filepath.Join(game,"www","js","plugins","IATraductora.js")){t.Fatal("foreign plugin missing")}
 }
 func fakePackage(t *testing.T)string{
+ return fakePackageWith(t,[]byte("◆ IA Traductora · F10 \n IA Traductora · V95"),[]byte("fake neutron FOR TEST ONLY"))
+}
+func fakePackageWith(t *testing.T,plugin,worker []byte)string{
  t.Helper()
  directory:=t.TempDir();packageEXE:=filepath.Join(directory,"Servidor.exe")
  required:=map[string][]byte{
- "IATraductora.exe":[]byte("fake neutron FOR TEST ONLY"),
- "IATraductora.js":[]byte("◆ IA Traductora · F10 \n IA Traductora · V95"),
+ "IATraductora.exe":worker,
+ "IATraductora.js":plugin,
  "models/opus_ja_es/model.bin":[]byte("m"),
  "models/opus_ja_es/source.spm":[]byte("s"),
  "models/opus_ja_es/target.spm":[]byte("t"),
@@ -97,4 +100,83 @@ func TestNewInstallerWorksOnClosedCopyAndVerifiesNewPaths(t *testing.T){
  backup,_:=os.ReadFile(filepath.Join(game,"IA Traductora","install","original-plugins.js"))
  if !bytes.Equal(original,backup){t.Fatal("player registry backup modified")}
  if _,err:=os.Stat(filepath.Join(game,"Tenshixgame-IA"));!os.IsNotExist(err){t.Fatal("old folder created")}
+}
+
+
+func TestVerifiedPluginUpgradeInPlace(t *testing.T){
+    oldJS:=[]byte("◆ IA Traductora · F10\n // MV plugin release A")
+    newJS:=[]byte("◆ IA Traductora · F10\n // MV plugin release B - fixed game root")
+    worker:=[]byte("unchanged owned worker")
+    oldPath:=fakePackageWith(t,oldJS,worker)
+    newPath:=fakePackageWith(t,newJS,worker)
+    first,e:=readPackage(oldPath);if e!=nil{t.Fatal(e)};defer first.Close()
+    second,e:=readPackage(newPath);if e!=nil{t.Fatal(e)};defer second.Close()
+    game:=createFixture(t)
+    registry:=filepath.Join(game,"www","js","plugins.js")
+    original,_:=os.ReadFile(registry)
+    if e=Install(filepath.Join(game,"Game.exe"),first);e!=nil{t.Fatal(e)}
+    installedRegistry,_:=os.ReadFile(registry)
+    if e=Install(filepath.Join(game,"Game.exe"),second);e!=nil{
+        t.Fatalf("owned plugin must upgrade instead of silently claiming installed: %v",e)
+    }
+    pluginFile:=filepath.Join(game,"www","js","plugins","IATraductora.js")
+    updated,_:=os.ReadFile(pluginFile)
+    if !bytes.Equal(updated,newJS){t.Fatal("game is still running old plugin")}
+    currentRegistry,_:=os.ReadFile(registry)
+    if !bytes.Equal(installedRegistry,currentRegistry){t.Fatal("upgrade changed game's plugin registry")}
+    backup,_:=os.ReadFile(filepath.Join(game,"IA Traductora","install","original-plugins.js"))
+    if !bytes.Equal(backup,original){t.Fatal("upgrade changed original registry backup")}
+    versioned:=filepath.Join(game,"IA Traductora","install","updates",hash(oldJS)+".js")
+    if got,_:=os.ReadFile(versioned);!bytes.Equal(got,oldJS){t.Fatal("previous plugin not preserved")}
+    if e=Install(filepath.Join(game,"Game.exe"),second);e!=nil{t.Fatalf("idempotent reinstall: %v",e)}
+}
+func TestDifferentModelCannotBeFalselyUpgraded(t *testing.T){
+    pluginA:=[]byte("◆ IA Traductora · F10\nrelease A")
+    pluginB:=[]byte("◆ IA Traductora · F10\nrelease B")
+    pathA:=fakePackageWith(t,pluginA,[]byte("worker A"))
+    pathB:=fakePackageWith(t,pluginB,[]byte("worker B"))
+    a,e:=readPackage(pathA);if e!=nil{t.Fatal(e)};defer a.Close()
+    b,e:=readPackage(pathB);if e!=nil{t.Fatal(e)};defer b.Close()
+    game:=createFixture(t)
+    if e=Install(filepath.Join(game,"Game.exe"),a);e!=nil{t.Fatal(e)}
+    registry:=filepath.Join(game,"www","js","plugins.js")
+    before,_:=os.ReadFile(registry)
+    if e=Install(filepath.Join(game,"Game.exe"),b);e!=nil{
+        t.Fatalf("verified app-owned worker should be updated safely: %v",e)
+    }
+    after,_:=os.ReadFile(registry)
+    if !bytes.Equal(before,after){t.Fatal("worker update changed game registry")}
+    pluginFile:=filepath.Join(game,"www","js","plugins","IATraductora.js")
+    if got,_:=os.ReadFile(pluginFile);!bytes.Equal(got,pluginB){
+        t.Fatal("new plugin bytes were not installed")
+    }
+    workerFile:=filepath.Join(game,"IA Traductora",".local","Rpg","engine","IATraductora.exe")
+    if got,_:=os.ReadFile(workerFile);!bytes.Equal(got,[]byte("worker B")){
+        t.Fatal("new worker bytes were not installed")
+    }
+    backupWorker:=filepath.Join(game,"IA Traductora","install","updates",hash([]byte("worker A"))+".exe")
+    if got,_:=os.ReadFile(backupWorker);!bytes.Equal(got,[]byte("worker A")){
+        t.Fatal("previous worker backup missing")
+    }
+}
+
+func TestTamperedModelPreventsOwnedUpgrade(t *testing.T){
+    oldJS:=[]byte("◆ IA Traductora · F10\nrelease A")
+    newJS:=[]byte("◆ IA Traductora · F10\nrelease B")
+    oldPath:=fakePackageWith(t,oldJS,[]byte("worker A"))
+    newPath:=fakePackageWith(t,newJS,[]byte("worker B"))
+    a,e:=readPackage(oldPath);if e!=nil{t.Fatal(e)};defer a.Close()
+    b,e:=readPackage(newPath);if e!=nil{t.Fatal(e)};defer b.Close()
+    game:=createFixture(t)
+    if e=Install(filepath.Join(game,"Game.exe"),a);e!=nil{t.Fatal(e)}
+    tampered:=filepath.Join(game,"IA Traductora",".local","Rpg","engine","models","opus_ja_es","model.bin")
+    if e=os.WriteFile(tampered,[]byte("changed weights"),0600);e!=nil{t.Fatal(e)}
+    if e=Install(filepath.Join(game,"Game.exe"),b);e==nil||
+       !strings.Contains(e.Error(),"MOTOR_VERSION_DISTINTA"){
+       t.Fatalf("tampered models must not be replaced or accepted: %v",e)
+    }
+    worker:=filepath.Join(game,"IA Traductora",".local","Rpg","engine","IATraductora.exe")
+    if got,_:=os.ReadFile(worker);!bytes.Equal(got,[]byte("worker A")){
+        t.Fatal("tampered model caused destructive worker upgrade")
+    }
 }
