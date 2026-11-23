@@ -40,8 +40,14 @@ def main():
         if not (args.overlays/name).is_file() or (dest/name).exists():
             raise RuntimeError("TX782_GO_OVERLAY_INVALID")
     original=src.read_bytes()
-    if b"\r" in original:raise RuntimeError("TX782_REQUIRES_SOURCE_LF")
-    src.write_bytes(transform(original.decode("utf-8")).encode("utf-8"))
+    # Earlier source-pinned patches on Windows may legitimately use CRLF.
+    # Normalize only EOL before checking exact source anchors, then write
+    # in the original EOL convention without changing code semantics.
+    newline="\r\n" if b"\r\n" in original else "\n"
+    normalized=original.decode("utf-8").replace("\r\n","\n")
+    if "\r" in normalized:
+        raise RuntimeError("TX782_MIXED_OR_INVALID_SOURCE_EOL")
+    src.write_bytes(transform(normalized).replace("\n",newline).encode("utf-8"))
     for name in FILES+("servidor_publication_retry_windows.go",):
         shutil.copyfile(args.overlays/name,dest/name)
     print("TX782_ATOMIC_PORTABLE_ROOT_RETRY_APPLIED")
