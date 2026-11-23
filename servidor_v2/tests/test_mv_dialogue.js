@@ -91,6 +91,12 @@ function fixture(translationDelay=0,options={}){
     }
     LegacyPromise.resolve=Promise.resolve.bind(Promise);
     LegacyPromise.all=Promise.all.bind(Promise);
+    function LegacyBuffer(value,encoding){return Buffer.from(value,encoding);}
+    LegacyBuffer.prototype=Buffer.prototype;
+    LegacyBuffer.from=undefined;
+    function LegacyNumber(value){return Number(value);}
+    LegacyNumber.prototype=Number.prototype;
+    LegacyNumber.isInteger=undefined;
     const context={
         window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
         document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
@@ -106,7 +112,9 @@ function fixture(translationDelay=0,options={}){
                 default:throw Error("unexpected dependency "+name);
             }
         },
-        Buffer,Promise:options.legacyPromise?LegacyPromise:Promise,process,Date,Map,Number,Error,
+        Buffer:options.legacyBuffer?LegacyBuffer:Buffer,
+        Promise:options.legacyPromise?LegacyPromise:Promise,process,Date,Map,
+        Number:options.legacyBuffer?LegacyNumber:Number,Error,
         setTimeout,clearTimeout,setInterval(){return 1},
         Window_Base,Window_Message,Scene_Map,Game_Message,
         Graphics:{boxWidth:1280},
@@ -193,6 +201,19 @@ async function testChoiceCacheOnlyAndNoOverwrite(){
     assert.deepEqual(Array.from(late.$gameMessage._choices),["No, gracias."],
         "async choice must never overwrite later prompt");
 }
+async function testOriginalNWJSWithoutBufferFromOrNumberIsInteger(){
+    const f=fixture(1,{legacyBuffer:true,legacyPromise:true});
+    await wait(15);
+    f.$gameMessage._texts=["おはようございます。"];
+    new f.context.Window_Message().startMessage();
+    await wait(25);
+    assert.equal(f.posts.length,1,
+        "older NW.js must still send a real UTF-8 neural request");
+    f.$gameMessage._texts=["おはようございます。"];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.",
+        "verified translation must show on old NW.js");
+}
 async function testOldNWJSAndPathFallback(){
     const f=fixture(1,{legacyPromise:true});await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
@@ -251,6 +272,7 @@ async function testBoundedMapPrefetchAndPressure(){
 (async()=>{
     await testUnconnectedGameIsPlayableAndF10Safe();
     await testSlowModelNeverPausesText();
+    await testOriginalNWJSWithoutBufferFromOrNumberIsInteger();
     await testOldNWJSAndPathFallback();
     await testJapaneseDialogAndF10();
     await testEnglishAndSpanish();
