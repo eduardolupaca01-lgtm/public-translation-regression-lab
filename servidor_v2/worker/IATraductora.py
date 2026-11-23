@@ -11,31 +11,65 @@ MAX_TEXT=1800
 MODELS={"ja":"opus_ja_es","en":"opus_en_es"}
 
 class NeuralOPUS:
-    def __init__(self, engine:Path):
+    def __init__(self, engine: Path):
         try:
             import ctranslate2
             import sentencepiece as spm
         except ImportError as exc:
             raise RuntimeError("IA_DEPENDENCIAS_MODELO_FALTANTES") from exc
-        self.models={}
-        for lang,name in MODELS.items():
-            root=engine/"models"/name
-            for file in ("model.bin","source.spm","target.spm"):
-                if not (root/file).is_file():
+        self.ct2 = ctranslate2
+        self.models = {}
+        self.roots = {}
+        self.lock = threading.RLock()
+        for lang, name in MODELS.items():
+            root = engine / "models" / name
+            for filename in ("model.bin", "config.json", "source.spm", "target.spm"):
+                if not (root / filename).is_file():
                     raise RuntimeError("IA_MODELO_INCOMPLETO")
-            source=spm.SentencePieceProcessor(model_file=str(root/"source.spm"))
-            target=spm.SentencePieceProcessor(model_file=str(root/"target.spm"))
-            model=ctranslate2.Translator(str(root),device="cpu",compute_type="int8",inter_threads=1)
-            self.models[lang]=(model,source,target)
-        self.lock=threading.Lock()
+            # Reading with Python's Windows Unicode path handling avoids
+            # passing Japanese game directories to SentencePiece's C++ loader.
+            source = spm.SentencePieceProcessor(model_proto=(root / "source.spm").read_bytes())
+            target = spm.SentencePieceProcessor(model_proto=(root / "target.spm").read_bytes())
+            self.roots[lang] = root
+            self.models[lang] = (None, source, target)
 
-    def translate(self,lang:str,text:str)->str:
-        model,src,dst=self.models[lang]
-        tokens=src.encode(text,out_type=str)
-        if not tokens: raise ValueError("IA_TEXTO_VACIO")
+    def _ready(self, lang):
+        model, source, target = self.models[lang]
+        if model is None:
+            root = self.roots[lang]
+            content = {}
+            for name in (
+                "model.bin", "config.json", "shared_vocabulary.json",
+                "source_vocabulary.json", "target_vocabulary.json",
+                "vocabulary.json",
+            ):
+                file = root / name
+                if file.is_file():
+                    # Python reads Unicode paths; CT2 v4.6 loads only bytes
+                    # using its documented files= API and ASCII identifier.
+                    content[name] = file.read_bytes()
+            if "model.bin" not in content or "config.json" not in content:
+                raise RuntimeError("IA_MODELO_INCOMPLETO")
+            model = self.ct2.Translator("IA_OPUS_" + lang, device="cpu",
+                                        compute_type="int8", inter_threads=1,
+                                        files=content)
+            self.models[lang] = (model, source, target)
+        return self.models[lang]
+
+    def check_all(self):
         with self.lock:
-            result=model.translate_batch([tokens],beam_size=4,max_decoding_length=300)
-        return dst.decode(result[0].hypotheses[0]).strip()
+            for lang in MODELS:
+                self._ready(lang)
+
+    def translate(self, lang: str, text: str) -> str:
+        with self.lock:
+            model, source, target = self._ready(lang)
+            tokens = source.encode(text, out_type=str)
+            if not tokens:
+                raise ValueError("IA_TEXTO_VACIO")
+            result = model.translate_batch([tokens], beam_size=4,
+                                           max_decoding_length=300)
+            return target.decode(result[0].hypotheses[0]).strip()
 
 def game_root(exe_root:Path)->tuple[Path,Path]:
     root=exe_root.resolve(strict=True)
@@ -184,7 +218,8 @@ def main():
     engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
     try:
         if args.check_models:
-            NeuralOPUS(engine)
+            neural = NeuralOPUS(engine)
+            neural.check_all()
             write_startup_code(args.diagnostic_file,"IA_MODELOS_REALES_CT2_LISTOS")
             return
         if args.game_root is None:
