@@ -9,7 +9,9 @@ const EventEmitter=require("node:events");
 const crypto=require("node:crypto");
 
 function fixture(translationDelay=0,options={}){
-    const posts=[],read={},source=fs.readFileSync(
+    const posts=[],state=options.fsState||{files:{},dirs:{}};
+    const read=state.files,dirs=state.dirs;
+    const source=fs.readFileSync(
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
     const root=path.join("/tmp","servidor-qa-juego-日本語");
     const descriptor=path.join(root,"www","data","IATraductora","bridge.json");
@@ -21,11 +23,30 @@ function fixture(translationDelay=0,options={}){
     const mockFS={
         realpathSync(p){return path.normalize(p);},
         lstatSync(p){
-            if(!Object.prototype.hasOwnProperty.call(read,p))
-                throw Error("not found");
-            return {isFile:()=>true,isSymbolicLink:()=>false};
+            if(dirs[p])return {isDirectory:()=>true,isFile:()=>false,
+                isSymbolicLink:()=>false,size:0};
+            if(!Object.prototype.hasOwnProperty.call(read,p)){
+                const e=Error("not found");e.code="ENOENT";throw e;
+            }
+            return {isDirectory:()=>false,isFile:()=>true,
+                isSymbolicLink:()=>false,size:Buffer.byteLength(read[p],"utf8")};
         },
         readFileSync(p){if(!(p in read))throw Error("missing");return read[p];},
+        readFile(p,encoding,callback){
+            setTimeout(()=>{
+                if(!(p in read)){
+                    const e=Error("not found");e.code="ENOENT";
+                    callback(e);return;
+                }
+                callback(null,read[p]);
+            },0);
+        },
+        appendFile(p,value,options,callback){
+            setTimeout(()=>{read[p]=(read[p]||"")+String(value);callback(null);},1);
+        },
+        mkdir(p,mode,callback){
+            setTimeout(()=>{dirs[p]=true;callback(null);},0);
+        },
         mkdirSync(){throw Error("a second process should not be needed")},
         createReadStream(){throw Error("worker must not spawn")},
     };
@@ -127,6 +148,39 @@ function fixture(translationDelay=0,options={}){
 }
 const wait=t=>new Promise(resolve=>setTimeout(resolve,t));
 
+async function testPersistentCacheAfterRestartWithoutWorker(){
+    const shared={files:{},dirs:{}};
+    const first=fixture(1,{fsState:shared});
+    await wait(35);
+    first.$gameMessage._texts=["おはようございます。"];
+    new first.context.Window_Message().startMessage();
+    await wait(45);
+    const filename=Object.keys(shared.files).find(v=>v.endsWith("translations-ja-en-es-v2.jsonl"));
+    assert.ok(filename,"asynchronous cache journal must be created");
+    assert.ok(shared.files[filename].includes("Buenos días."),
+        "model result must reach durable cache");
+    const second=fixture(1,{fsState:shared,disconnected:true});
+    await wait(35);
+    second.$gameMessage._texts=["おはようございます。"];
+    const replay=new second.context.Window_Message();replay.startMessage();
+    assert.equal(replay.originalStarts,1);
+    assert.equal(second.$gameMessage.allText(),"Buenos días.",
+        "reopened game must display stored Spanish even while worker offline");
+    assert.equal(second.posts.length,0,
+        "already cached line cannot trigger inference again");
+}
+async function testRejectDamagedOutputBeforeDiskOrRender(){
+    const state={files:{},dirs:{}};
+    const f=fixture(1,{fsState:state});
+    await wait(30);
+    f.$gameMessage._texts=["今日は08月24日です。"];
+    new f.context.Window_Message().startMessage();
+    await wait(30);
+    f.$gameMessage._texts=["今日は08月24日です。"];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"今日は08月24日です。",
+        "missing dates must not be accepted just because response is Spanish");
+}
 async function testJapaneseDialogAndF10(){
     const f=fixture(1);await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
@@ -270,6 +324,8 @@ async function testBoundedMapPrefetchAndPressure(){
     assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
 }
 (async()=>{
+    await testPersistentCacheAfterRestartWithoutWorker();
+    await testRejectDamagedOutputBeforeDiskOrRender();
     await testUnconnectedGameIsPlayableAndF10Safe();
     await testSlowModelNeverPausesText();
     await testOriginalNWJSWithoutBufferFromOrNumberIsInteger();
