@@ -62,6 +62,40 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(ia.quality_reason(lang,original,output),reason)
         self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (8)"))
         self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
+    def test_source_eos_matches_packaged_marian_contract(self):
+        class Tokenizer:
+            def eos_id(self):return 2
+            def id_to_piece(self,i):return "</s>"
+            def encode(self,text,out_type):return text.split()
+        tok=Tokenizer()
+        en={"add_source_eos":False,"eos_token":"</s>"}
+        ja={"add_source_eos":True,"eos_token":"</s>"}
+        self.assertEqual(ia.manual_source_eos(en,tok),"</s>")
+        self.assertIsNone(ia.manual_source_eos(ja,tok))
+        self.assertEqual(ia.encode_source(tok,"Thank you",ia.manual_source_eos(en,tok)),
+                         ["Thank","you","</s>"])
+        self.assertEqual(ia.encode_source(tok,"Thank you </s>","</s>"),
+                         ["Thank","you","</s>"])
+        self.assertEqual(ia.encode_source(tok,"日本語",ia.manual_source_eos(ja,tok)),
+                         ["日本語"])
+        self.assertEqual(ia.encode_source(tok,"","</s>"),[])
+        with self.assertRaisesRegex(RuntimeError,"IA_MODELO_TOKEN_EOS_INVALIDO"):
+            ia.manual_source_eos({"add_source_eos":False,"eos_token":"<bad>"},tok)
+        with self.assertRaisesRegex(RuntimeError,"IA_MODELO_CONFIG_EOS_INVALIDA"):
+            ia.manual_source_eos({},tok)
+        class Model:
+            def translate_batch(self,source,**kw):
+                assert all(v[-1]=="</s>" and v.count("</s>")==1 for v in source)
+                return [SimpleNamespace(hypotheses=[["Gracias por tu ayuda."]]) for _ in source]
+        class Target:
+            def decode(self,hyp):return hyp[0]
+        backend=ia.NeuralOPUS.__new__(ia.NeuralOPUS)
+        backend.lock=threading.RLock()
+        backend.roots={}
+        backend.source_end_tokens={"en":ia.manual_source_eos(en,tok)}
+        backend.models={"en":(Model(),tok,Target())}
+        self.assertEqual(backend.translate_many("en",["Thank you for your help.","Thank you."]),
+                         ["Gracias por tu ayuda.","Gracias por tu ayuda."])
     def test_english_bad_cached_markup_and_repetition(self):
         import hashlib
         src="There is a sound at the gate."
@@ -113,6 +147,7 @@ class EngineTests(unittest.TestCase):
         backend.lock=threading.RLock()
         backend.models={"ja":(model,Tokenizer(),Tokenizer())}
         backend.roots={}
+        backend.source_end_tokens={"ja":None,"en":None}
         self.assertEqual(backend.translate_many("ja",["おはよう。","明日は雨が降ります。"]),
                          ["Buenos días.","Mañana lloverá."])
         self.assertEqual(len(model.calls),2)
@@ -136,6 +171,7 @@ class EngineTests(unittest.TestCase):
         backend.lock=threading.RLock()
         backend.models={"en":(model,Tokenizer(),Tokenizer())}
         backend.roots={}
+        backend.source_end_tokens={"ja":None,"en":None}
         result=backend.translate_many("en",["Good morning.","Thank you for your help."])
         self.assertEqual(result,["Buenos días.","Gracias por tu ayuda."])
         self.assertEqual([c[1]["beam_size"] for c in model.calls],[4,6,1])
@@ -165,6 +201,7 @@ class EngineTests(unittest.TestCase):
         model=FakeCandidateModel()
         backend.models={"ja":(model,SourceTokenizer(),TargetTokenizer())}
         backend.roots={}
+        backend.source_end_tokens={"ja":None,"en":None}
         result=backend.translate("ja","お前はいつも早過ぎなんだよ。")
         self.assertEqual(result,"Siempre llegas demasiado temprano.")
         self.assertEqual(model.kwargs["num_hypotheses"],3)

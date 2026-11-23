@@ -132,6 +132,30 @@ def decoding_budget(language: str, source_tokens: int) -> int:
         return min(144, max(32, source_tokens*3+16))
     return min(300, max(48, source_tokens*3+24))
 
+def manual_source_eos(config, tokenizer):
+    """Respect CT2's source boundary contract, independently for each model.
+
+    Converted HF Marian models expect the caller to add the source EOS.
+    Native Marian conversions may already add it within CT2. The packaged
+    EN model has add_source_eos=false, while JA has true. Never add twice.
+    """
+    automatic=config.get("add_source_eos")
+    if automatic is True:
+        return None
+    if automatic is not False:
+        raise RuntimeError("IA_MODELO_CONFIG_EOS_INVALIDA")
+    token=config.get("eos_token")
+    if (not isinstance(token,str) or not token or tokenizer.eos_id()<0
+            or tokenizer.id_to_piece(tokenizer.eos_id())!=token):
+        raise RuntimeError("IA_MODELO_TOKEN_EOS_INVALIDO")
+    return token
+
+def encode_source(tokenizer, text, eos=None):
+    tokens=list(tokenizer.encode(text,out_type=str))
+    if tokens and eos is not None and tokens[-1]!=eos:
+        tokens.append(eos)
+    return tokens
+
 class NeuralOPUS:
     def __init__(self, engine: Path):
         try:
@@ -142,6 +166,7 @@ class NeuralOPUS:
         self.ct2 = ctranslate2
         self.models = {}
         self.roots = {}
+        self.source_end_tokens = {}
         self.lock = threading.RLock()
         for lang, name in MODELS.items():
             root = engine / "models" / name
@@ -152,6 +177,8 @@ class NeuralOPUS:
             # passing Japanese game directories to SentencePiece's C++ loader.
             source = spm.SentencePieceProcessor(model_proto=(root / "source.spm").read_bytes())
             target = spm.SentencePieceProcessor(model_proto=(root / "target.spm").read_bytes())
+            config=json.loads((root / "config.json").read_text(encoding="utf-8"))
+            self.source_end_tokens[lang]=manual_source_eos(config,source)
             self.roots[lang] = root
             self.models[lang] = (None, source, target)
 
@@ -183,12 +210,25 @@ class NeuralOPUS:
             for lang in MODELS:
                 self._ready(lang)
 
+    def check_inference(self):
+        # This is a genuine neural preflight on neutral test phrases.
+        # It runs in --check-models, before the installer is packaged,
+        # without reading or seeding any user translation memory.
+        samples={"ja":("おはようございます。",r"\b(buenos|buen|días|día|hola)\b"),
+                 "en":("Thank you for your help.",r"\b(gracias|agradezco|agradecemos|ayuda|asistencia)\b")}
+        for lang,(text,expected) in samples.items():
+            result=self.translate(lang,text)
+            if native_quality_reason(lang,text,result) or not re.search(expected,result,re.I):
+                raise RuntimeError("IA_QUALITY_PREFLIGHT_"+lang.upper())
+
+
     def translate_many(self, lang: str, texts: list[str]) -> list[str | None]:
         if not texts or len(texts)>6:
             raise ValueError("IA_LOTE_INVALIDO")
         with self.lock:
             model, source, target = self._ready(lang)
-            encoded=[source.encode(text,out_type=str) for text in texts]
+            eos=self.source_end_tokens[lang]
+            encoded=[encode_source(source,text,eos) for text in texts]
             if any(not tokens for tokens in encoded):
                 raise ValueError("IA_TEXTO_VACIO")
             # Use genuine CT2 batching, preserving the N-best quality
@@ -401,7 +441,10 @@ def make_handler(service:Service):
             except Exception as error:
                 service.failures+=1
                 if isinstance(error,RuntimeError) and "IA_QUALITY_" in str(error):
-                    return self.send(422,{"error":"IA_CALIDAD_RECHAZADA","permanent":True})
+                    category=str(error)
+                    if not re.fullmatch(r"IA_QUALITY_[A-Z0-9_]{1,64}",category):
+                        category="IA_QUALITY_RECHAZADA"
+                    return self.send(422,{"error":"IA_CALIDAD_RECHAZADA","reason":category,"permanent":True})
                 self.send(503,{"error":"IA_MOTOR_FALLO"})
     return Handler
 
@@ -471,7 +514,14 @@ def safe_startup_code(error):
         return "IA_PARENT_PID_INVALIDO"
     if "ia_cache_" in raw:
         return "IA_CACHE_PERSISTENTE_INACCESIBLE"
+    if "ia_modelo_config_eos_invalida" in raw:
+        return "IA_MODELO_CONFIG_EOS_INVALIDA"
+    if "ia_modelo_token_eos_invalido" in raw:
+        return "IA_MODELO_TOKEN_EOS_INVALIDO"
     if "ia_quality_" in raw:
+        category=str(error)
+        if re.fullmatch(r"IA_QUALITY_[A-Z0-9_]{1,64}",category):
+            return category
         return "IA_TRADUCCION_RECHAZADA_POR_CALIDAD"
     if "sentencepiece" in raw or "ctranslate2" in raw:
         return "IA_LIBRERIA_NEURONAL_FALTANTE"
@@ -509,6 +559,7 @@ def main():
         if args.check_models:
             neural = NeuralOPUS(engine)
             neural.check_all()
+            neural.check_inference()
             write_startup_code(args.diagnostic_file,"IA_MODELOS_REALES_CT2_LISTOS")
             return
         if args.game_root is None:

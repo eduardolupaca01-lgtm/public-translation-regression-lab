@@ -61,7 +61,16 @@ def run(game:Path):
                       {"source":"en","target":"es","text":english})
     except HTTPError as exc:
         if exc.code==503:raise RuntimeError("IA_INGLES_MODELO_HTTP_503") from None
-        raise RuntimeError("IA_INGLES_HTTP_RECHAZADO") from None
+        if exc.code==422:
+            try:
+                body=json.loads(exc.read(4096).decode("utf8"))
+                reason=body.get("reason")
+                if isinstance(reason,str) and re.fullmatch(r"IA_QUALITY_[A-Z0-9_]{1,64}",reason):
+                    raise RuntimeError(reason) from None
+            except (ValueError,AttributeError):
+                pass
+            raise RuntimeError("IA_INGLES_CALIDAD_HTTP_422") from None
+        raise RuntimeError("IA_INGLES_HTTP_"+str(exc.code)) from None
     except OSError:
         raise RuntimeError("IA_INGLES_CONEXION_INTERRUMPIDA") from None
     translated_en=response.get("translated") if isinstance(response,dict) else None
