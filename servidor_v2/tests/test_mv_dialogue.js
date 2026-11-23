@@ -150,7 +150,7 @@ async function testProtectedCommandsAndMovingDialog(){
     const protectedMessage=new f.context.Window_Message();
     protectedMessage.startMessage();
     assert.equal(protectedMessage.originalStarts,0,"wait for safely masked translation");
-    await wait(12);protectedMessage.update();
+    await wait(40);protectedMessage.update();
     assert.equal(f.$gameMessage.allText(),"\\V[1] Buenos días.",
         "RPG variable must be preserved while natural text is translated");
     assert.equal(protectedMessage.originalStarts,1);
