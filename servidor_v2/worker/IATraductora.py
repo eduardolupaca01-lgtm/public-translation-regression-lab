@@ -33,6 +33,12 @@ def quality_reason(lang, original, output):
         if not re.search(r"笑|わら|[wｗ]{2,}|(?:あ|は|ふ|へ|え|ひ)[はふへひハフヘヒ]{2,}|ハハ|フフ|へへ|ハッ|フッ",
                          original,re.IGNORECASE):
             return "IA_QUALITY_LAUGHTER_INVENTED"
+    # A false stage direction was observed in persisted SQLite results.
+    # Do not invalidate genuine applause described by the Japanese source.
+    if lang=="ja" and re.fullmatch(r"[\s(\[（【「『]*(?:aplausos?|ovaci[oó]n)[.!…\s]*[)\]）】」』]*",
+                                  output.strip(),re.IGNORECASE):
+        if not re.search(r"拍手|喝采|パチパチ|ぱちぱち|万雷",original):
+            return "IA_QUALITY_APPLAUSE_INVENTED"
     # TX716's bilingual holdout found 早過ぎ -> "too young" rather
     # than "too early". Reject this time-vs-age confusion, not the game.
     if lang=="ja" and re.search(r"(早過ぎ|早すぎ|遅過ぎ|遅すぎ)",original) and re.search(
@@ -44,6 +50,23 @@ def quality_reason(lang, original, output):
     for index in range(5,len(words)):
         if words[index-2:index+1]==words[index-5:index-2]:
             return "IA_QUALITY_REPEATED_GENERATION"
+    return None
+
+# The MV bridge separates literal outer delimiters from the neural segment.
+# Validate both sides of its cache contract, not the entire rendered message.
+def native_quality_reason(lang,original,output):
+    reason=quality_reason(lang,original,output)
+    if reason:
+        return reason
+    opening="(（[［【「『《〈〔"
+    closing=")）]］】」』》〉〕"
+    def edges(value):
+        value=value.strip(" \t\u3000")
+        left=len(value)-len(value.lstrip(opening))
+        right=len(value.rstrip(closing))
+        return value[:left],value[right:]
+    if lang=="ja" and edges(original)!=edges(output):
+        return "IA_QUALITY_NATIVE_DELIMITERS"
     return None
 
 class TranslationMemory:
@@ -74,9 +97,9 @@ class TranslationMemory:
                 "SELECT translated FROM translations WHERE key_sha256=? "
                 "AND schema_version=? AND source=? AND original=?",
                 (key,CACHE_SCHEMA,lang,text)).fetchone()
-        return row[0] if row and not quality_reason(lang,text,row[0]) else None
+        return row[0] if row and not native_quality_reason(lang,text,row[0]) else None
     def put(self,key,lang,text,output):
-        if quality_reason(lang,text,output):
+        if native_quality_reason(lang,text,output):
             return False
         with self.lock:
             self.db.execute("INSERT OR REPLACE INTO translations "
@@ -163,15 +186,29 @@ class NeuralOPUS:
             results=model.translate_batch(encoded,**kwargs)
             if len(results)!=len(texts):
                 raise RuntimeError("IA_LOTE_RESPUESTA_INVALIDA")
-            answers=[]
-            for original,result in zip(texts,results):
-                answer=None
+            def choose(original,result):
                 for hypothesis in result.hypotheses:
                     output=unicodedata.normalize("NFC",target.decode(hypothesis)).strip()
-                    if quality_reason(lang,original,output) is None:
-                        answer=output
-                        break
-                answers.append(answer)
+                    if native_quality_reason(lang,original,output) is None:
+                        return output
+                return None
+            answers=[choose(original,result) for original,result in zip(texts,results)]
+            # Only failed Japanese segments receive a second pass. Accepted
+            # results, model files and the usual fast path stay unchanged.
+            rejected=[i for i,answer in enumerate(answers) if answer is None and lang=="ja"]
+            if rejected:
+                retry_tokens=[encoded[i] for i in rejected]
+                retry=dict(kwargs,beam_size=6,num_hypotheses=5,disable_unk=True,
+                           repetition_penalty=1.05,
+                           max_decoding_length=max(decoding_budget(lang,len(t)) for t in retry_tokens))
+                try:
+                    alternative=model.translate_batch(retry_tokens,**retry)
+                    if len(alternative)==len(rejected):
+                        for i,result in zip(rejected,alternative):
+                            answers[i]=choose(texts[i],result)
+                except (RuntimeError,ValueError):
+                    # Keep the first-pass successes even if recovery fails.
+                    pass
             return answers
 
     def translate(self,lang:str,text:str)->str:
@@ -229,7 +266,7 @@ class Service:
             if "IA_QUALITY_" in str(err):
                 with self.lock:self.quality_rejected+=1
             raise
-        reason=quality_reason(lang,text,output)
+        reason=native_quality_reason(lang,text,output)
         if reason is not None:
             with self.lock:self.quality_rejected+=1
             raise RuntimeError(reason)
@@ -271,7 +308,7 @@ class Service:
                             generated.append(None)
                 if len(generated)!=len(missing):raise RuntimeError("IA_LOTE_RESPUESTA_INVALIDA")
                 for (key,text),out in zip(missing,generated):
-                    reason=quality_reason(lang,text,out)
+                    reason=native_quality_reason(lang,text,out)
                     if reason:
                         results[text]={"error":reason,"permanent":True}
                         with self.lock:self.quality_rejected+=1

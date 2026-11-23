@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R3-20261123"; // also checked against the installed package SHA
+var BUILD_ID="MV-R3P1-20261123"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -303,7 +303,7 @@ function translate(source,text){
     if(existing!==undefined)cache.delete(key);
     if(pending.has(key))return pending.get(key);
     if(rejectedKeys.has(key)&&rejectedKeys.get(key)>Date.now())return Promise.resolve(null);
-    if(pending.size>=96)return Promise.resolve(null);
+    if(pending.size>=96){rejectedKeys.set(key,Date.now()+1500);return Promise.resolve(null);}
     state.requested++;
     var prepared=prepareNamedDialogue(text,source);
     var raw=new Promise(function(resolve){
@@ -348,7 +348,7 @@ function validTranslation(source,original,result,composed){
         return false;
     var fixed=stableDisplay(original,false);
     if(fixed!==null&&fixed!==result)return false;
-    if(source==="ja"&&spuriousLaughter(original,result))return false;
+    if(source==="ja"&&(spuriousLaughter(original,result)||spuriousApplause(original,result)))return false;
     if(/(?:\\|\x1b)[NVP]\[[0-9]+\](?=[A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/i.test(result))return false;
     if(source==="ja"){
         var visibleOriginal=protectedParts(original).filter(function(c){return !c.locked;}).map(function(c){return c.value;}).join("");
@@ -392,6 +392,7 @@ function acceptCache(source,original,result,composed,persist){
         diskStats.rejected++;return false;
     }
     var key=source+"\u0000"+original;
+    rejectedKeys.delete(key);
     if(approvedKeys.has(key)){
         cache.set(key,approvedKeys.get(key));return true;
     }
@@ -579,6 +580,22 @@ function spuriousLaughter(original,result){
     return /^\s*[\(\[（【「『]?\s*(?:risas?|jajaja|ja ja ja)\s*[.!…]*\s*[\)\]）】」』]?\s*$/i.test(result)&&
         !/(?:笑|わら|[wｗ]{2,}|(?:あ|は|ふ|へ|え|ひ)[はふへひハフヘヒ]{2,}|ハハ|フフ|へへ|ハッ|フッ)/i.test(original);
 }
+function spuriousApplause(original,result){
+    return /^\s*[\(\[（【「『]?\s*(?:aplausos?|ovaci[oó]n)[.!…\s]*[\)\]）】」』]?\s*$/i.test(result)&&
+        !/(?:拍手|喝采|パチパチ|ぱちぱち|万雷)/.test(original);
+}
+// Standard, unambiguous notice fragments only. No names, game scripts,
+// title-specific data or whole-dialogue replacement dictionaries.
+// Match complete segments rather than replacing words inside other prose.
+function standardNotice(text){
+    if(text==="この物語はフィクションであり、")return "Esta historia es ficticia y";
+    // Keep both native color tokens and the acronym's original width.
+    // Applies only to the exact conventional notice grammar and a short
+    // Latin acronym. No general change to the name or control lexer.
+    var m=/^また、本作では(\\C\[\d{1,3}\])([A-ZＡ-Ｚ]{2,10})(\\C\[\d{1,3}\])要素が含まれております。予めご了承下さい。$/.exec(text);
+    if(m)return "Además, esta obra incluye elementos de tipo "+m[1]+m[2]+m[3]+". Tenlo en cuenta.";
+    return null;
+}
 function translatePreservingControls(source,text){
     var key=source+"\u0000"+text;
     var ready=readyText(source,text);
@@ -612,7 +629,18 @@ function translatePreservingControls(source,text){
             return out?before+out+after:null;
         });
     })).then(function(parts){
-        if(parts.some(function(p){return p===null;}))return null;
+        if(parts.some(function(p){return p===null;})){
+            // A composite must not be marked permanently failed just
+            // because one of its fragments hit a temporary queue limit.
+            var retryAt=0;
+            for(var i=0;i<parts.length;i++){
+                if(parts[i]!==null)continue;
+                var until=rejectedKeys.get(source+"\u0000"+chunks[i].value.trim());
+                if(until&&until!==Infinity&&until>Date.now())retryAt=Math.max(retryAt,until);
+            }
+            if(retryAt)rejectedKeys.set(key,retryAt);
+            return null;
+        }
         var updated=joinNativeParts(parts);
         if(updated===text)return null;
         if(!acceptCache(source,text,updated,true,true))return null;
@@ -717,6 +745,7 @@ function stableDisplay(text,identity){
     var name=nameInSpanish(text,identity);
     if(name!==null)return name;
     if(Object.prototype.hasOwnProperty.call(knownUi,text))return knownUi[text];
+    var notice=standardNotice(text);if(notice!==null)return notice;
     var m=/^デフォルト名は[『「]([^』」\r\n]{1,24})[』」]\s*[（(]([ぁ-ゖァ-ヶー]{1,30})[）)]です[。．.]?$/.exec(text);
     if(m){var first=nameInSpanish(m[1],true);return "El nombre predeterminado es «"+first+"».";}
     m=/^※?\s*苗字は[《〈]([^（(\r\n]{1,24})[（(]([ぁ-ゖァ-ヶー]{1,30})[）)][》〉]で固定です[。．.]?$/.exec(text);

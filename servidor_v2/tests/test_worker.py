@@ -67,6 +67,43 @@ class EngineTests(unittest.TestCase):
                          "IA_QUALITY_LAUGHTER_INVENTED")
         self.assertIsNone(ia.quality_reason("ja","あははは。","(Risas)"))
         self.assertIsNone(ia.quality_reason("ja","明日は行くの？","¿Vas mañana?"))
+    def test_old_applause_cache_is_rejected_without_erasing_good_rows(self):
+        import hashlib
+        original="明日は雨が降ります。"
+        key=hashlib.sha256(("ja\0"+original).encode()).hexdigest()
+        self.s.memory.db.execute("INSERT INTO translations VALUES (?,?,?,?,?,?)",
+             (key,ia.CACHE_SCHEMA,"ja",original,"(Aplausos)",0))
+        self.s.memory.db.commit()
+        self.assertIsNone(self.s.memory.get(key,"ja",original))
+        self.assertEqual(ia.quality_reason("ja",original,"(Aplausos)"),
+                         "IA_QUALITY_APPLAUSE_INVENTED")
+        self.assertIsNone(ia.quality_reason("ja","拍手が起こった。","(Aplausos)"))
+        self.assertEqual(ia.native_quality_reason("ja",original,"(Lloverá mañana)"),
+                         "IA_QUALITY_NATIVE_DELIMITERS")
+        self.assertTrue(self.s.memory.put(key,"ja",original,"Mañana lloverá."))
+        self.assertEqual(self.s.memory.get(key,"ja",original),"Mañana lloverá.")
+    def test_recovery_redecodes_only_rejected_segments(self):
+        class Tokenizer:
+            def encode(self,text,out_type):return [text]
+            def decode(self,hyp):return hyp[0]
+        class Model:
+            def __init__(self):self.calls=[]
+            def translate_batch(self,source,**kw):
+                self.calls.append((source,kw))
+                return [SimpleNamespace(hypotheses=[
+                    ["Buenos días."] if t[0]=="おはよう。" else
+                    ["Mañana lloverá."] if kw["beam_size"]==6 else ["(Aplausos)"]
+                ]) for t in source]
+        model=Model()
+        backend=ia.NeuralOPUS.__new__(ia.NeuralOPUS)
+        backend.lock=threading.RLock()
+        backend.models={"ja":(model,Tokenizer(),Tokenizer())}
+        backend.roots={}
+        self.assertEqual(backend.translate_many("ja",["おはよう。","明日は雨が降ります。"]),
+                         ["Buenos días.","Mañana lloverá."])
+        self.assertEqual(len(model.calls),2)
+        self.assertEqual(model.calls[1][0],[["明日は雨が降ります。"]])
+        self.assertEqual(model.calls[0][1]["beam_size"],4)
     def test_historical_early_not_young_semantic_gate(self):
         source="お前はいつも早過ぎなんだよ。"
         self.assertEqual(ia.quality_reason("ja",source,

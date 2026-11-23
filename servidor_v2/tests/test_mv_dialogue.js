@@ -549,6 +549,30 @@ async function testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts(){
     assert.equal(f.$gameMessage.allText(),"Buenos días.","unvisited map already available on first draw");
     assert.equal(m.originalStarts,1);
 }
+async function testR3PatchRepairsStandardNoticeAndKeepsColor(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語",
+        "IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const old=[
+        ["この物語はフィクションであり、","(Aplausos)"],
+        ["これは架空の人物です。","Es un personaje ficticio."]
+    ];
+    const state={files:{[journal]:old.map(row=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"ja",original:row[0],
+        translated:row[1],composed:false})).join("\n")+"\n"},dirs:{[folder]:true}};
+    const f=fixture(1,{fsState:state,disconnected:true});await wait(40);
+    const message=new f.context.Window_Message();
+    // Synthetic Latin acronym; no commercial game content is needed.
+    const lines=["この物語はフィクションであり、","これは架空の人物です。",
+        "また、本作では\\C[6]ＡＢＣ\\C[0]要素が含まれております。予めご了承下さい。"];
+    f.$gameMessage._texts=lines.slice();message.startMessage();
+    assert.equal(message.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),
+        "Esta historia es ficticia y\nEs un personaje ficticio.\nAdemás, esta obra incluye elementos de tipo \\C[6]ＡＢＣ\\C[0]. Tenlo en cuenta.");
+    assert.equal(f.posts.length,0,"known repaired notice works offline without new inference");
+    assert.ok(state.files[journal].includes("Es un personaje ficticio."),
+        "unaffected old cache is preserved");
+}
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -591,6 +615,7 @@ async function testBoundedMapPrefetchAndPressure(){
 (async()=>{
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
+    await testR3PatchRepairsStandardNoticeAndKeepsColor();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();
     await testApprovedBilingualCorrectionsOverridePreviousNeuralCache();
