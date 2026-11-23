@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 90
     env:
       GH_TOKEN: ${{ github.token }}
-      IA_PASSWORD: ${{ secrets.EDUARDO_RPG_ARCHIVE_PASSWORD }}
+      IA_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
