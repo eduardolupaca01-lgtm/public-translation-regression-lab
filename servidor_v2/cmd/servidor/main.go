@@ -228,6 +228,9 @@ func Install(gameEXE string,pkg *packageReader)error{
    return err
   }
  }
+ // A verified game recovered to its exact original registry must be
+ // safely re-enabled/upgraded instead of falsely treating our JS as foreign.
+ if ordinary(jsfile){return iaReinstallAfterRecovery(root,content,old,updated,pkg)}
  if _,e:=os.Lstat(jsfile);!os.IsNotExist(e){return errors.New("IA_COMPLEMENTO_AJENO_EXISTE")}
  script,err:=readZip(pkg.files["IATraductora.js"],1024*1024)
  if err!=nil||hash(script)!=pkg.manifest.Files["IATraductora.js"]{

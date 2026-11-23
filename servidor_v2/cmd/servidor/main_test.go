@@ -237,3 +237,48 @@ func TestInactivePluginDoesNotCountAsInstalled(t *testing.T){
         t.Fatalf("duplicated own plugin must be rejected: %v",e)
     }
 }
+
+
+func TestReinstallCompleteNeuralPackageAfterVerifiedRecovery(t *testing.T){
+    firstPath:=fakePackageWith(t,[]byte("◆ IA Traductora · F10\nversion A"),[]byte("worker A"))
+    secondPath:=fakePackageWith(t,[]byte("◆ IA Traductora · F10\nversion B"),[]byte("worker B"))
+    a,e:=readPackage(firstPath);if e!=nil{t.Fatal(e)};defer a.Close()
+    b,e:=readPackage(secondPath);if e!=nil{t.Fatal(e)};defer b.Close()
+    game:=createFixture(t);gameEXE:=filepath.Join(game,"Game.exe")
+    reg:=filepath.Join(game,"www","js","plugins.js")
+    original,_:=os.ReadFile(reg)
+    save:=filepath.Join(game,"www","save","File1.rpgsave")
+    if e=os.MkdirAll(filepath.Dir(save),0700);e!=nil{t.Fatal(e)}
+    if e=os.WriteFile(save,[]byte("ORIGINAL_PLAYER_SAVE"),0600);e!=nil{t.Fatal(e)}
+    if e=Install(gameEXE,a);e!=nil{t.Fatal(e)}
+    if e=RecoverGame(gameEXE);e!=nil{t.Fatal(e)}
+    restored,_:=os.ReadFile(reg)
+    if !bytes.Equal(restored,original){t.Fatal("recovery failed before reinstall")}
+    if e=Install(gameEXE,b);e!=nil{t.Fatalf("reinstall must accept verified owned files: %v",e)}
+    current,_:=os.ReadFile(reg)
+    if bytes.Equal(current,original)||!bytes.Contains(current,[]byte("\"name\":\"IATraductora\"")){
+        t.Fatal("verified recovery did not reactivate translator")
+    }
+    pluginFile:=filepath.Join(game,"www","js","plugins","IATraductora.js")
+    if p,_:=os.ReadFile(pluginFile);!bytes.Contains(p,[]byte("version B")){
+        t.Fatal("game still has stale plugin")
+    }
+    if saveData,_:=os.ReadFile(save);string(saveData)!="ORIGINAL_PLAYER_SAVE"{
+        t.Fatal("reinstall modified player's saves")
+    }
+    if e=Install(gameEXE,b);e!=nil{t.Fatalf("verified repeat install rejected: %v",e)}
+}
+func TestReinstallFailsClosedWhenOwnedJSModifiedAfterRecovery(t *testing.T){
+    pack:=fakePackage(t)
+    pkg,e:=readPackage(pack);if e!=nil{t.Fatal(e)};defer pkg.Close()
+    game:=createFixture(t);gameEXE:=filepath.Join(game,"Game.exe")
+    reg:=filepath.Join(game,"www","js","plugins.js")
+    if e=Install(gameEXE,pkg);e!=nil{t.Fatal(e)}
+    if e=RecoverGame(gameEXE);e!=nil{t.Fatal(e)}
+    original,_:=os.ReadFile(reg)
+    pluginFile:=filepath.Join(game,"www","js","plugins","IATraductora.js")
+    if e=os.WriteFile(pluginFile,[]byte("foreign edit"),0600);e!=nil{t.Fatal(e)}
+    if e=Install(gameEXE,pkg);e==nil{t.Fatal("must reject foreign JS after recovery")}
+    now,_:=os.ReadFile(reg)
+    if !bytes.Equal(now,original){t.Fatal("failed reinstall changed game's original registry")}
+}
