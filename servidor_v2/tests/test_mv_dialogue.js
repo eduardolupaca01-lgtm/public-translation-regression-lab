@@ -9,7 +9,7 @@ const EventEmitter=require("node:events");
 const crypto=require("node:crypto");
 
 function fixture(translationDelay=0,options={}){
-    const posts=[],state=options.fsState||{files:{},dirs:{}};
+    const posts=[],batches=[],state=options.fsState||{files:{},dirs:{}};
     const read=state.files,dirs=state.dirs;
     const source=fs.readFileSync(
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
@@ -32,6 +32,10 @@ function fixture(translationDelay=0,options={}){
                 isSymbolicLink:()=>false,size:Buffer.byteLength(read[p],"utf8")};
         },
         readFileSync(p){if(!(p in read))throw Error("missing");return read[p];},
+        readdir(p,callback){
+            setTimeout(()=>callback(null,Object.keys(read).filter(k=>path.dirname(k)===p)
+                .map(k=>path.basename(k))),0);
+        },
         readFile(p,encoding,callback){
             setTimeout(()=>{
                 if(!(p in read)){
@@ -61,11 +65,18 @@ function fixture(translationDelay=0,options={}){
                     setTimeout(()=>request.emit("error",Error("IA connection unavailable")),0);
                     return;
                 }
-                const result=requestOptions.path==="/status"
-                    ?{schema:"ia-traductora-bridge-v1",active:true}
-                    :responseFor(JSON.parse(body.toString()));
+                let result;
+                if(requestOptions.path==="/status"){
+                    result={schema:"ia-traductora-bridge-v1",active:true,batch:!!options.batch};
+                }else{
+                    const payload=JSON.parse(body.toString());
+                    if(requestOptions.path==="/translate_batch"){
+                        batches.push(payload.texts.length);
+                        result={results:payload.texts.map(text=>responseFor({source:payload.source,text}))};
+                    }else result=responseFor(payload);
+                }
                 const response=new EventEmitter();
-                response.statusCode=200;
+                response.statusCode=options.qualityReject&&requestOptions.path!=="/status"?422:200;
                 response.resume=()=>{};
                 setTimeout(()=>{
                     callback(response);
@@ -99,7 +110,14 @@ function fixture(translationDelay=0,options={}){
     function Bitmap(){}
     Bitmap.prototype.drawText=function(t){this.lastText=String(t);return t;};
     function Scene_Name(){}
+    function Scene_Title(){this.starts=0;}
+    Scene_Title.prototype.start=function(){this.starts++;};
     function Window_Message(){this.originalStarts=0;this.updates=0}
+    Window_Message.prototype.createSubWindows=function(){
+        const name=new Window_Base();name.initialize(0,0,300,90);
+        name.setText=function(t){this.assigned=t;this.drawText(t,0,0,300);};
+        this._nameWindow=name;
+    };
     Window_Message.prototype.startMessage=function(){this.originalStarts++};
     Window_Message.prototype.update=function(){this.updates++};
     function Scene_Map(){this.windows=[]}
@@ -122,7 +140,7 @@ function fixture(translationDelay=0,options={}){
     LegacyPromise.all=Promise.all.bind(Promise);
     function LegacyBuffer(value,encoding){return Buffer.from(value,encoding);}
     LegacyBuffer.prototype=Buffer.prototype;
-    LegacyBuffer.from=undefined;
+    LegacyBuffer.from=undefined;LegacyBuffer.byteLength=Buffer.byteLength;
     function LegacyNumber(value){return Number(value);}
     LegacyNumber.prototype=Number.prototype;
     LegacyNumber.isInteger=undefined;
@@ -144,15 +162,16 @@ function fixture(translationDelay=0,options={}){
         Buffer:options.legacyBuffer?LegacyBuffer:Buffer,
         Promise:options.legacyPromise?LegacyPromise:Promise,process,Date,Map,
         Number:options.legacyBuffer?LegacyNumber:Number,Error,
-        setTimeout,clearTimeout,setInterval(){return 1},
-        Window_Base,Window_Message,Scene_Map,Game_Message,Bitmap,Scene_Name,
+        setTimeout(fn,delay){const timer=setTimeout(fn,delay);timer.unref();return timer;},
+        clearTimeout,setInterval(){return 1},
+        Window_Base,Window_Message,Scene_Map,Game_Message,Bitmap,Scene_Name,Scene_Title,
         Graphics:{boxWidth:1280},
         Input:{keyMapper:{},isTriggered(){return false}},
         SceneManager:{_scene:null},
         $gameMessage
     };
     vm.runInNewContext(source,context,{filename:"IATraductora.js"});
-    return {context,posts,$gameMessage,spawnCount:()=>spawnCount};
+    return {context,posts,batches,$gameMessage,spawnCount:()=>spawnCount};
 }
 const wait=t=>new Promise(resolve=>setTimeout(resolve,t));
 
@@ -361,12 +380,12 @@ async function testRPGControlsAndNoLateRewrite(){
 async function testChoiceCacheOnlyAndNoOverwrite(){
     const f=fixture(1);await wait(12);
     f.$gameMessage.setChoices(["はい","いいえ"],0,1);
-    assert.deepEqual(Array.from(f.$gameMessage._choices),["はい","いいえ"]);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),["Sí","No"]);
     await wait(22);
     f.$gameMessage.setChoices(["はい","いいえ"],0,1);
     assert.deepEqual(Array.from(f.$gameMessage._choices),
-        ["Buenos días.","Buenos días."],"cached choices preserve their indices");
-    assert.equal(f.posts.length,2);
+        ["Sí","No"],"deterministic choices preserve their distinct indices");
+    assert.equal(f.posts.length,0,"known choices must not use neural inference");
     const late=fixture(25);await wait(12);
     late.$gameMessage.setChoices(["はい"],0,0);
     late.$gameMessage.setChoices(["No, gracias."],0,0);
@@ -429,6 +448,88 @@ async function testSlowModelNeverPausesText(){
     await wait(95);
     assert.equal(f.$gameMessage.allText(),"次のシーンです。");
 }
+async function testNameIdentityMigrationAndNameSetupFirstPaint(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語");
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const state={files:{},dirs:{[folder]:true}};
+    const cacheFile=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const old=[
+        ["保林","Conservación"],
+        ["保林 Mc","Conservación Mc"],
+        ["姫乃 Hanami","Su Alteza Hanami"],
+        ["※苗字は《姫乃（ひめの）》で固定です。","Apellido incorrecto."],
+        ["モブ生徒Ａ","Estupenda Mob A."],
+        ["モブ生徒Ｂ","Estupenda MobB."],
+        ["おはようございます。","Buenos días."]
+    ];
+    state.files[cacheFile]=old.map(row=>JSON.stringify({schema:"ia-traductora-cache-v2",
+        source:"ja",original:row[0],translated:row[1],composed:false})).join("\n")+"\n";
+    const untouched=state.files[cacheFile];
+    const f=fixture(1,{fsState:state,disconnected:true});await wait(40);
+    const msg=new f.context.Window_Message();msg.createSubWindows();
+    const name=msg._nameWindow;
+    for(const [source,expected] of [
+        ["保林 Mc","Hobayashi Mc"],["姫乃 Hanami","Himeno Hanami"],
+        ["モブ生徒Ａ","Estudiante A"],["モブ生徒Ｂ","Estudiante B"],
+        ["未知の名前","未知の名前"]
+    ]){
+        name.setText(source);
+        assert.equal(name.assigned,expected,"name must be correct before window measures width");
+        assert.equal(name.lastText,expected);
+    }
+    const lines=["このキャラクターの名前を決めて下さい。",
+        "デフォルト名は『隼人』(はやと)です。","",
+        "※苗字は《保林（ほばやし）》で固定です。"];
+    f.$gameMessage._texts=lines.slice();
+    msg.startMessage();
+    assert.equal(f.$gameMessage.allText(),
+        "Elige el nombre de este personaje.\nEl nombre predeterminado es «Hayato».\n\nEl apellido «Hobayashi» es fijo.",
+        "name setup must be readable on first paint even offline");
+    f.$gameMessage._texts=["おはようございます。"];msg.startMessage();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.","valid previous cache must survive");
+    assert.ok(state.files[cacheFile].startsWith(untouched),"old journal is not deleted or overwritten");
+    assert.equal(f.posts.length,0,"neither names nor fixed setup need neural translation");
+}
+async function testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const state={files:{},dirs:{[data]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:2});
+    const makeMap=lines=>({events:[null,{pages:[{list:[
+        {code:101,parameters:["Actor1",0,0,2]},
+        ...lines.map(t=>({code:401,parameters:[t]})),
+        {code:355,parameters:["実行禁止スクリプト"]},
+        {code:102,parameters:[["おはようございます。"],0,0,2,0]}
+    ]}]}]});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify(makeMap(["別の町です。"]));
+    state.files[path.join(data,"Map002.json")]=JSON.stringify(makeMap(["こんにちは。","今日は晴れです。"]));
+    state.files[path.join(data,"CommonEvents.json")]=JSON.stringify([null,{list:[{code:401,parameters:["ようこそ。"]}]}]);
+    state.files[path.join(data,"Actors.json")]=JSON.stringify([null,{name:"未知の俳優",profile:"元気です。"}]);
+    state.files[path.join(data,"Save01.json")]=JSON.stringify({text:"絶対読まない"});
+    const originals=Object.assign({},state.files);
+    const f=fixture(1,{fsState:state,batch:true});
+    const title=new f.context.Scene_Title();title.start();assert.equal(title.starts,1);
+    await wait(350);
+    assert.ok(f.posts.some(x=>x.text==="別の町です。"),"never visited map must be translated");
+    assert.ok(f.posts.some(x=>x.text==="ようこそ。"),"common events must be preloaded");
+    assert.ok(f.batches.some(n=>n>1&&n<=6),"genuine batch endpoint must group requests");
+    assert.ok(!f.posts.some(x=>/実行禁止|絶対読まない|未知の俳優/.test(x.text)),
+        "scripts, saves and actor identities must not be sent to model");
+    for(const k of Object.keys(originals))assert.equal(state.files[k],originals[k],"original game files stay byte-identical");
+    f.$gameMessage._texts=["別の町です。"];const m=new f.context.Window_Message();m.startMessage();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.","unvisited map already available on first draw");
+    assert.equal(m.originalStarts,1);
+}
+async function testPermanentQualityFailureIsNotRetried(){
+    const f=fixture(1,{qualityReject:true});await wait(25);
+    const original="おはようございます。";
+    for(let i=0;i<3;i++){
+        f.$gameMessage._texts=[original];new f.context.Window_Message().startMessage();
+        await wait(30);
+    }
+    await wait(950);
+    assert.equal(f.posts.length,1,"permanent QA rejection is not a transport error");
+    assert.equal(f.$gameMessage.allText(),original);
+}
 async function testBoundedMapPrefetchAndPressure(){
     const f=fixture(1);await wait(12);
     const commands=[];
@@ -443,6 +544,9 @@ async function testBoundedMapPrefetchAndPressure(){
     assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
 }
 (async()=>{
+    await testNameIdentityMigrationAndNameSetupFirstPaint();
+    await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
+    await testPermanentQualityFailureIsNotRetried();
     await testApprovedBilingualCorrectionsOverridePreviousNeuralCache();
     await testFullNativeMenusAndNameOnlyText();
     await testSpeakerHeadersAreNotMixedWithSpanish();

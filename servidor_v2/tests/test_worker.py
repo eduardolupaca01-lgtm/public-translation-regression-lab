@@ -99,6 +99,41 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             unsafe.translate("ja","おはようございます。")
         self.assertEqual(unsafe.quality_rejected,1)
+    def test_batch_preserves_order_identity_and_deduplicates_inference(self):
+        class BatchNeural:
+            def __init__(self):self.calls=[]
+            def translate_many(self,lang,texts):
+                self.calls.append(list(texts))
+                return ["Buenos días" if t=="おはよう" else
+                        "Buenas tardes" if t=="こんにちは" else None for t in texts]
+        neural=BatchNeural()
+        service=ia.Service(self.root,self.engine,neural=neural)
+        self.addCleanup(service.close)
+        texts=["おはよう","こんにちは","おはよう","数字を守る"]
+        result=service.translate_batch("ja",texts)
+        self.assertEqual([v.get("translated") for v in result],
+                         ["Buenos días","Buenas tardes","Buenos días",None])
+        self.assertEqual(neural.calls,[["おはよう","こんにちは","数字を守る"]])
+        self.assertTrue(result[3]["permanent"])
+        self.assertEqual(service.quality_rejected,1)
+        self.assertEqual(service.translations,2)
+        self.assertEqual(service.translate_batch("ja",texts[:3]),result[:3])
+        self.assertEqual(len(neural.calls),1,"batch cache must avoid duplicate inference")
+        again=ia.Service(self.root,self.engine,neural=BatchNeural())
+        self.addCleanup(again.close)
+        self.assertEqual(again.translate_batch("ja",texts[:3]),result[:3])
+        self.assertEqual(again.neural.calls,[])
+    def test_authenticated_batch_http_and_permanent_qa_code(self):
+        result=self.http("/translate_batch",{"source":"ja","target":"es",
+            "texts":["おはよう","こんにちは","おはよう"]})
+        self.assertEqual(len(result["results"]),3)
+        self.assertTrue(self.http("/status")["batch"])
+        with self.assertRaises(HTTPError) as error:
+            self.http("/translate_batch",{"source":"ja","target":"es","texts":["こんにちは"]*7})
+        self.assertEqual(error.exception.code,400)
+        with self.assertRaises(HTTPError) as error:
+            self.http("/translate",{"source":"ja","target":"es","text":"2月です"})
+        self.assertEqual(error.exception.code,422)
     def test_authentication(self):
         with self.assertRaises(HTTPError) as e:self.http("/status",token="0"*64)
         self.assertEqual(e.exception.code,403)

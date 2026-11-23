@@ -24,7 +24,7 @@ def quality_reason(lang, original, output):
          re.findall(r"[0-9０-９]+",text))
     if digits(original)!=digits(output):
         return "IA_QUALITY_NUMBER_MISSING"
-    if lang=="ja" and re.search(r"[\u3040-\u30ff\u3400-\u9fff]",output):
+    if lang=="ja" and re.search(r"[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff\uff66-\uff9d]",output):
         return "IA_QUALITY_JAPANESE_RESIDUAL"
     # TX716's bilingual holdout found 早過ぎ -> "too young" rather
     # than "too early". Reject this time-vs-age confusion, not the game.
@@ -138,27 +138,40 @@ class NeuralOPUS:
             for lang in MODELS:
                 self._ready(lang)
 
-    def translate(self, lang: str, text: str) -> str:
+    def translate_many(self, lang: str, texts: list[str]) -> list[str | None]:
+        if not texts or len(texts)>6:
+            raise ValueError("IA_LOTE_INVALIDO")
         with self.lock:
             model, source, target = self._ready(lang)
-            tokens = source.encode(text, out_type=str)
-            if not tokens:
+            encoded=[source.encode(text,out_type=str) for text in texts]
+            if any(not tokens for tokens in encoded):
                 raise ValueError("IA_TEXTO_VACIO")
-            # English model can loop for very short RPG dialogue when the
-            # decoding budget is a flat 300. Bound by source tokens and
-            # explicitly discourage repeated 3-grams on the English route.
-            kwargs = {"beam_size": 4,"num_hypotheses":3,
-                      "repetition_penalty":1.12,"no_repeat_ngram_size":3,
-                      "max_decoding_length": decoding_budget(lang, len(tokens))}
-            result = model.translate_batch([tokens], **kwargs)
-            # The first candidate is highest-ranked; if it violates a control,
-            # number, or repetition contract, consider a safer alternative.
-            for hypothesis in result[0].hypotheses:
-                output = unicodedata.normalize("NFC",
-                    target.decode(hypothesis)).strip()
-                if quality_reason(lang,text,output) is None:
-                    return output
+            # Use genuine CT2 batching, preserving the N-best quality
+            # checks for each individual source. Never concatenate unrelated
+            # dialogue into one model input or one cache key.
+            kwargs={"beam_size":4,"num_hypotheses":3,
+                    "repetition_penalty":1.12,"no_repeat_ngram_size":3,
+                    "max_decoding_length":max(decoding_budget(lang,len(t)) for t in encoded),
+                    "batch_type":"tokens","max_batch_size":512}
+            results=model.translate_batch(encoded,**kwargs)
+            if len(results)!=len(texts):
+                raise RuntimeError("IA_LOTE_RESPUESTA_INVALIDA")
+            answers=[]
+            for original,result in zip(texts,results):
+                answer=None
+                for hypothesis in result.hypotheses:
+                    output=unicodedata.normalize("NFC",target.decode(hypothesis)).strip()
+                    if quality_reason(lang,original,output) is None:
+                        answer=output
+                        break
+                answers.append(answer)
+            return answers
+
+    def translate(self,lang:str,text:str)->str:
+        result=self.translate_many(lang,[text])[0]
+        if result is None:
             raise RuntimeError("IA_QUALITY_ALL_CANDIDATES_REJECTED")
+        return result
 
 def game_root(exe_root:Path)->tuple[Path,Path]:
     root=exe_root.resolve(strict=True)
@@ -183,9 +196,14 @@ class Service:
         self.quality_rejected=0
         self.cache=OrderedDict()
         self.lock=threading.Lock()
+        self.inference_lock=threading.RLock()
         self.memory=TranslationMemory(self.game)
 
     def translate(self,lang,text):
+        with self.inference_lock:
+            return self._translate_one(lang,text)
+
+    def _translate_one(self,lang,text):
         if lang not in MODELS or not isinstance(text,str) or not (0<len(text)<=MAX_TEXT):
             raise ValueError("IA_SOLICITUD_INVALIDA")
         key=hashlib.sha256((lang+"\0"+text).encode()).hexdigest()
@@ -216,6 +234,50 @@ class Service:
             self.translations+=1
         return output
 
+    def translate_batch(self,lang,texts):
+        if lang not in MODELS or not isinstance(texts,list) or not (1<=len(texts)<=6):
+            raise ValueError("IA_LOTE_INVALIDO")
+        if any(not isinstance(t,str) or not (0<len(t)<=MAX_TEXT) for t in texts):
+            raise ValueError("IA_SOLICITUD_INVALIDA")
+        with self.inference_lock:
+            results={}
+            missing=[]
+            for text in dict.fromkeys(texts):
+                key=hashlib.sha256((lang+"\0"+text).encode()).hexdigest()
+                with self.lock:
+                    result=self.cache.get(key)
+                if result is None:
+                    result=self.memory.get(key,lang,text)
+                if result is None:
+                    missing.append((key,text))
+                else:
+                    results[text]={"translated":result}
+            if missing:
+                if hasattr(self.neural,"translate_many"):
+                    generated=self.neural.translate_many(lang,[t for _,t in missing])
+                else:
+                    generated=[]
+                    for _,t in missing:
+                        try:generated.append(self.neural.translate(lang,t))
+                        except RuntimeError as err:
+                            if "IA_QUALITY_" not in str(err):raise
+                            generated.append(None)
+                if len(generated)!=len(missing):raise RuntimeError("IA_LOTE_RESPUESTA_INVALIDA")
+                for (key,text),out in zip(missing,generated):
+                    reason=quality_reason(lang,text,out)
+                    if reason:
+                        results[text]={"error":reason,"permanent":True}
+                        with self.lock:self.quality_rejected+=1
+                        continue
+                    self.memory.put(key,lang,text,out)
+                    with self.lock:
+                        self.cache[key]=out
+                        while len(self.cache)>3000:self.cache.popitem(last=False)
+                        self.translations+=1
+                    results[text]={"translated":out}
+            # Same order and multiplicity as the requested list.
+            return [results[t] for t in texts]
+
     def close(self):
         self.memory.close()
 
@@ -239,22 +301,27 @@ def make_handler(service:Service):
             self.send(200,{"schema":SCHEMA,"active":True,
                 "translated":service.translations,"failed":service.failures,
                 "cache":len(service.cache),
-                "quality_rejected":service.quality_rejected})
+                "quality_rejected":service.quality_rejected,"batch":True})
         def do_POST(self):
             if not self.allowed():return self.send(403,{"error":"IA_TOKEN_INVALIDO"})
-            if self.path!="/translate":return self.send(404,{"error":"IA_RUTA_INVALIDA"})
+            if self.path not in ("/translate","/translate_batch"):return self.send(404,{"error":"IA_RUTA_INVALIDA"})
             try:
                 length=int(self.headers.get("Content-Length","0"))
-                if not (0<length<=8192):raise ValueError("IA_TAMANO")
+                if not (0<length<=(32768 if self.path=="/translate_batch" else 8192)):raise ValueError("IA_TAMANO")
                 data=json.loads(self.rfile.read(length).decode("utf8"))
                 if not isinstance(data,dict) or data.get("target")!="es":
                     raise ValueError("IA_IDIOMA")
+                if self.path=="/translate_batch":
+                    results=service.translate_batch(data.get("source"),data.get("texts"))
+                    return self.send(200,{"results":results})
                 answer=service.translate(data.get("source"),data.get("text"))
                 self.send(200,{"translated":answer,"source":data["source"],"target":"es"})
             except (ValueError,UnicodeError):
                 self.send(400,{"error":"IA_SOLICITUD_INVALIDA"})
-            except Exception:
+            except Exception as error:
                 service.failures+=1
+                if isinstance(error,RuntimeError) and "IA_QUALITY_" in str(error):
+                    return self.send(422,{"error":"IA_CALIDAD_RECHAZADA","permanent":True})
                 self.send(503,{"error":"IA_MOTOR_FALLO"})
     return Handler
 
