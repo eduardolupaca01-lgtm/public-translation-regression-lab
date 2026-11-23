@@ -16,7 +16,7 @@ try{
 }catch(_){return;}
 if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
-var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0};
+var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var runtimeActivated=false;
 var cache=new Map(),pending=new Map(),maxWait=45000,messageWait=4500;
@@ -198,6 +198,8 @@ function refreshConnection(){
     request("/status",null,2500).then(function(d){
         if(d.schema!=="ia-traductora-bridge-v1"||d.active!==true)throw Error("Motor no autenticado");
         state.connected=true;state.status="IA local conectada";
+        state.qualityRejected=typeof d.quality_rejected==="number"?
+            d.quality_rejected:0;
     }).catch(function(){
         state.connected=false;
         state.status=startupCode()||"Esperando IA local";
@@ -386,7 +388,7 @@ function languageFor(s){
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
-var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\r?\n/g;
+var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[A-Za-z]+\[[0-9]{1,8}\]|[{}!])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n/g;
 function protectedParts(text){
     var chunks=[],position=0,match;
     controlRE.lastIndex=0;
@@ -715,7 +717,8 @@ function setupHud(){
             "Solicitudes: "+state.requested,
             "Recibidas: "+state.received+"   Mostradas: "+state.shown,
             "Caché cargada: "+diskStats.loaded+"   Guardada: "+diskStats.saved,
-            "Errores: "+state.errors+"   Caché: "+diskStats.errors,
+            "Errores: "+state.errors+"   QA: "+state.qualityRejected+
+                "   Caché: "+diskStats.errors,
             "Cerrar panel: F10"
         ];
         for(var i=0;i<lines.length;i++){
