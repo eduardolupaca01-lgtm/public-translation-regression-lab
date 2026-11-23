@@ -80,5 +80,11 @@ func servidorInstallMV(gameEXE,local string)error{
         receipt.Status!="UPGRADED_VERIFIED") || !receipt.LiveOverlay || !receipt.AheadSceneScan{
         return errors.New("TX779_NATIVE_PLUGIN_INSTALLATION_NOT_VERIFIED")
     }
+    // The installer must prove what is actually on disk. A successful
+    // InstallRPGLivePlugin receipt does not guarantee that the running game
+    // will show this application's identity rather than a stale adapter.
+    if err:=servidorVerifyInstalledF10Badge(root,receipt.PluginSHA);err!=nil{
+        return fmt.Errorf("IA_TRADUCTORA_COMPLEMENTO_ANTIGUO_O_NO_VERIFICADO: %w",err)
+    }
     return nil
 }
