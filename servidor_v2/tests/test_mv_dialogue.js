@@ -78,6 +78,8 @@ function fixture(translationDelay=0,options={}){
     };
     function responseFor(body){
         posts.push(body);
+        if(options.namedResponse&&body.text.indexOf("Natsumi")>=0)
+            return {translated:"Natsumi vive al lado."};
         return {translated:body.source==="ja"?"Buenos días.":"Hello"===body.text?"Hola.":"Buenos días."};
     }
     function Window_Base(){}
@@ -277,6 +279,27 @@ async function testApprovedBilingualCorrectionsOverridePreviousNeuralCache(){
     assert.equal(w.lastText,"Hayato Hobayashi (revisado)",
         "owner-approved name reading must supersede pilot default");
 }
+async function testNamesStayVisibleWhenMentionedInsideDialogue(){
+    const text="夏実が隣に住んでいます。";
+    const f=fixture(1,{namedResponse:true});await wait(20);
+    f.$gameMessage._texts=[text];
+    new f.context.Window_Message().startMessage();
+    await wait(30);
+    assert.equal(f.posts.length,1);
+    assert.ok(f.posts[0].text.indexOf("Natsumi")>=0);
+    assert.equal(f.posts[0].text.indexOf("夏実"),-1,
+        "Japanese proper name reading must be supplied before neural inference");
+    f.$gameMessage._texts=[text];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"Natsumi vive al lado.");
+    const bad=fixture(1);await wait(20);
+    bad.$gameMessage._texts=[text];
+    new bad.context.Window_Message().startMessage();await wait(30);
+    bad.$gameMessage._texts=[text];
+    new bad.context.Window_Message().startMessage();
+    assert.equal(bad.$gameMessage.allText(),text,
+        "neural output dropping a character's name must be rejected");
+}
 async function testJapaneseDialogAndF10(){
     const f=fixture(1);await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
@@ -424,6 +447,7 @@ async function testBoundedMapPrefetchAndPressure(){
     await testFullNativeMenusAndNameOnlyText();
     await testSpeakerHeadersAreNotMixedWithSpanish();
     await testNativeControlsNeverReachNeuralOrChangeOnScreen();
+    await testNamesStayVisibleWhenMentionedInsideDialogue();
     await testPersistentCacheAfterRestartWithoutWorker();
     await testRejectDamagedOutputBeforeDiskOrRender();
     await testUnconnectedGameIsPlayableAndF10Safe();
