@@ -187,10 +187,15 @@ function translatePreservingControls(source,text){
     if(chunks.length===1 && !chunks[0].locked)return translate(source,text);
     return Promise.all(chunks.map(function(chunk){
         if(chunk.locked)return Promise.resolve(chunk.value);
-        var eligible=source==="ja"?isJapanese(chunk.value):
-            /[A-Za-z]{2}/.test(chunk.value)&&chunk.value.trim().length>=8;
+        var before=(chunk.value.match(/^\s*/)||[""])[0];
+        var after=(chunk.value.match(/\s*$/)||[""])[0];
+        var body=chunk.value.slice(before.length,chunk.value.length-after.length);
+        var eligible=source==="ja"?isJapanese(body):
+            /[A-Za-z]{2}/.test(body)&&body.length>=8;
         if(!eligible)return Promise.resolve(chunk.value);
-        return translate(source,chunk.value).then(function(out){return out||chunk.value;});
+        return translate(source,body).then(function(out){
+            return out?before+out+after:chunk.value;
+        });
     })).then(function(parts){
         var updated=parts.join("");
         if(updated===text)return null;
