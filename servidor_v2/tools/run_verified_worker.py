@@ -19,7 +19,7 @@ def diagnostic(file: Path) -> str:
     except (ValueError, OSError):
         return "IA_DIAGNOSTICO_FORMATO_INVALIDO"
     code = doc.get("code") if doc.get("schema") == "ia-traductora-startup-v1" else None
-    return code if isinstance(code, str) and re.fullmatch(r"IA_[A-Z_]{4,90}", code) else "IA_DIAGNOSTICO_INVALIDO"
+    return code if isinstance(code, str) and re.fullmatch(r"IA_[A-Z0-9_]{4,90}", code) else "IA_DIAGNOSTICO_INVALIDO"
 
 def launch(exe: Path, arguments: list[str], diagnostic_file: Path, timeout: int) -> int:
     opts = {
