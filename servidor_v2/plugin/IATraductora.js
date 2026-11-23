@@ -76,6 +76,13 @@ function request(route,body,timeout){
     });
 }
 function startWorker(){
+    // CTranslate2 can take time to load genuine neural weights on Windows.
+    // Never start a second model process while our OWN worker is alive.
+    if(proc && Number.isInteger(proc.pid) && proc.pid>0 &&
+       proc.exitCode===null && !proc.killed){
+        state.status="IA cargando modelos";
+        return;
+    }
     if(starting||Date.now()-lastAttempt<15000)return;
     starting=true;lastAttempt=Date.now();state.status="Verificando motor local";
     try {
@@ -93,8 +100,8 @@ function startWorker(){
                 env.LOCALAPPDATA=local;env.TEMP=tmp;env.TMP=tmp;env.TMPDIR=tmp;
                 proc=spawn(worker,["--game-root",game,"--parent-pid",String(process.pid)],
                     {cwd:game,env:env,windowsHide:true,detached:false,shell:false,stdio:"ignore"});
-                proc.on("error",function(){state.status="Error al abrir IA";state.errors++;starting=false;});
-                proc.on("exit",function(){state.connected=false;state.status="Motor detenido";starting=false;});
+                proc.on("error",function(){state.status="Error al abrir IA";state.errors++;starting=false;proc=null;});
+                proc.on("exit",function(){state.connected=false;state.status="Motor detenido";starting=false;proc=null;});
                 state.status="Iniciando IA local";
                 starting=false;
             }catch(_){state.status="Motor sin firma válida";state.errors++;starting=false;}
