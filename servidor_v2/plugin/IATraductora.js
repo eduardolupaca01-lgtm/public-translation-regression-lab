@@ -10,10 +10,10 @@ var BRAND="IA Traductora";
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var fs=require("fs"),path=require("path"),crypto=require("crypto");
 var http=require("http"),spawn=require("child_process").spawn;
-var game="",content="",sidecar="",worker="",descriptorFile="";
+var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
 var state={connected:false,status:"Comprobando instalación",requested:0,received:0,shown:0,errors:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
-var cache=new Map(),pending=new Map(),maxWait=24000;
+var cache=new Map(),pending=new Map(),maxWait=45000;
 function rootFromURL(){
     var name=decodeURIComponent(window.location.pathname);
     if(/^\/[A-Za-z]:/.test(name)) name=name.slice(1);
@@ -39,6 +39,7 @@ function initPaths(){
     sidecar=path.join(game,"IA Traductora");
     worker=path.join(sidecar,".local","Rpg","engine","IATraductora.exe");
     descriptorFile=path.join(content,"data","IATraductora","bridge.json");
+    startupFile=path.join(sidecar,".local","Rpg","startup-status.json");
 }
 function descriptor(){
     if(!ordinary(descriptorFile))return null;
@@ -48,6 +49,16 @@ function descriptor(){
            d.port<1024||d.port>65535||!/^[0-9a-f]{64}$/.test(d.token)||!(d.pid>0))return null;
         return d;
     }catch(_){return null;}
+}
+function startupCode(){
+    if(!startupFile||!ordinary(startupFile))return "";
+    try{
+        var raw=fs.readFileSync(startupFile,"utf8");
+        if(raw.length>512)return "";
+        var doc=JSON.parse(raw);
+        var code=doc&&doc.schema==="ia-traductora-startup-v1"?doc.code:"";
+        return typeof code==="string"&&/^IA_[A-Z0-9_]{4,90}$/.test(code)?code:"";
+    }catch(_){return "";}
 }
 function request(route,body,timeout){
     return new Promise(function(resolve,reject){
@@ -98,10 +109,11 @@ function startWorker(){
                 var local=path.join(sidecar,".local"),tmp=path.join(local,"tmp");
                 fs.mkdirSync(tmp,{recursive:true});
                 env.LOCALAPPDATA=local;env.TEMP=tmp;env.TMP=tmp;env.TMPDIR=tmp;
-                proc=spawn(worker,["--game-root",game,"--parent-pid",String(process.pid)],
+                proc=spawn(worker,["--game-root",game,"--parent-pid",String(process.pid),
+                    "--diagnostic-file",startupFile],
                     {cwd:game,env:env,windowsHide:true,detached:false,shell:false,stdio:"ignore"});
-                proc.on("error",function(){state.status="Error al abrir IA";state.errors++;starting=false;proc=null;});
-                proc.on("exit",function(){state.connected=false;state.status="Motor detenido";starting=false;proc=null;});
+                proc.on("error",function(){state.status="IA no pudo iniciarse";state.errors++;starting=false;proc=null;});
+                proc.on("exit",function(){state.connected=false;state.status=startupCode()||"Motor detenido";starting=false;proc=null;});
                 state.status="Iniciando IA local";
                 starting=false;
             }catch(_){state.status="Motor sin firma válida";state.errors++;starting=false;}
@@ -114,7 +126,7 @@ function refreshConnection(){
         state.connected=true;state.status="IA local conectada";
     }).catch(function(){
         state.connected=false;
-        state.status="Esperando IA local";
+        state.status=startupCode()||"Esperando IA local";
         startWorker();
     });
 }
@@ -128,7 +140,7 @@ function translate(source,text){
             if(done)return;
             if(Date.now()-beginning>maxWait){done=true;state.errors++;resolve(null);return;}
             if(!state.connected){setTimeout(attempt,600);return;}
-            request("/translate",{source:source,target:"es",text:text},12000).then(function(r){
+            request("/translate",{source:source,target:"es",text:text},30000).then(function(r){
                 if(r && typeof r.translated==="string"&&r.translated.trim()&&r.translated!==text){
                     cache.set(source+"\u0000"+text,r.translated);state.received++;done=true;resolve(r.translated);
                 }else{done=true;state.errors++;resolve(null);}
@@ -151,10 +163,40 @@ function languageFor(s){
     if(/\b(?:the|you|are|have|this|that|with|your|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning)\b/i.test(s))return "en";
     return null;
 }
-function isProtected(s){
-    // Control sequences are retained byte-for-byte; until proper masking,
-    // never send unbalanced game commands into the neural model.
-    return /\\(?:V|N|P|G|C|I|FS|PX|PY)\s*\[/i.test(s||"");
+// Never send game control sequences (including character names) to OPUS.
+var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\r?\n/g;
+function protectedParts(text){
+    var chunks=[],position=0,match;
+    controlRE.lastIndex=0;
+    while((match=controlRE.exec(text))!==null){
+        if(match.index>position)chunks.push({value:text.slice(position,match.index),locked:false});
+        chunks.push({value:match[0],locked:true});
+        position=controlRE.lastIndex;
+    }
+    if(position<text.length)chunks.push({value:text.slice(position),locked:false});
+    return chunks;
+}
+function translatePreservingControls(source,text){
+    var key=source+"\u0000"+text;
+    if(cache.has(key))return Promise.resolve(cache.get(key));
+    var chunks=protectedParts(text);
+    if(chunks.length===0)return Promise.resolve(null);
+    // Reject malformed/unrecognized escapes instead of letting the model change them.
+    var rest=chunks.filter(function(c){return !c.locked;}).map(function(c){return c.value;}).join("");
+    if(/\\[A-Za-z]/.test(rest))return Promise.resolve(null);
+    if(chunks.length===1 && !chunks[0].locked)return translate(source,text);
+    return Promise.all(chunks.map(function(chunk){
+        if(chunk.locked)return Promise.resolve(chunk.value);
+        var eligible=source==="ja"?isJapanese(chunk.value):
+            /[A-Za-z]{2}/.test(chunk.value)&&chunk.value.trim().length>=8;
+        if(!eligible)return Promise.resolve(chunk.value);
+        return translate(source,chunk.value).then(function(out){return out||chunk.value;});
+    })).then(function(parts){
+        var updated=parts.join("");
+        if(updated===text)return null;
+        cache.set(key,updated);
+        return updated;
+    });
 }
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
@@ -164,14 +206,14 @@ function hookMessages(){
         if(!$gameMessage||!$gameMessage.hasText())return original.apply(this,arguments);
         var text=$gameMessage.allText();
         var source=languageFor(text);
-        if(!source||isProtected(text))return original.apply(this,arguments);
+        if(!source)return original.apply(this,arguments);
         if(cache.has(source+"\u0000"+text)){
             $gameMessage._texts=cache.get(source+"\u0000"+text).split("\n");state.shown++;
             return original.apply(this,arguments);
         }
         var instance=this;
         instance._iaWaiting={text:text,at:Date.now(),done:false,translated:null};
-        translate(source,text).then(function(out){
+        translatePreservingControls(source,text).then(function(out){
             if(!instance._iaWaiting||instance._iaWaiting.text!==text)return;
             instance._iaWaiting.done=true;
             instance._iaWaiting.translated=out;
@@ -191,6 +233,39 @@ function hookMessages(){
             }
         }
         return update.apply(this,arguments);
+    };
+}
+function hookChoices(){
+    if(typeof Game_Message==="undefined"||!Game_Message.prototype||
+       typeof Game_Message.prototype.setChoices!=="function")return;
+    var original=Game_Message.prototype.setChoices;
+    Game_Message.prototype.setChoices=function(choices){
+        var result=original.apply(this,arguments);
+        if(!Array.isArray(choices)||choices.length===0||choices.length>12)return result;
+        var message=this,sourceChoices=choices.slice();
+        var ticket=(message._iaChoiceTicket||0)+1;
+        message._iaChoiceTicket=ticket;
+        Promise.all(sourceChoices.map(function(choice){
+            var source=languageFor(choice);
+            return source?translatePreservingControls(source,choice):Promise.resolve(null);
+        })).then(function(outputs){
+            if(message._iaChoiceTicket!==ticket||
+               !Array.isArray(message._choices)||
+               message._choices.length!==sourceChoices.length)return;
+            for(var i=0;i<sourceChoices.length;i++)
+                if(message._choices[i]!==sourceChoices[i])return;
+            var changed=false,translated=sourceChoices.slice();
+            for(var j=0;j<outputs.length;j++)
+                if(outputs[j]){translated[j]=outputs[j];changed=true;}
+            if(!changed)return;
+            message._choices=translated;state.shown++;
+            // Change only the existing choice list; never draw an overlay.
+            var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+            var windowMessage=scene&&scene._messageWindow;
+            var choicesWindow=windowMessage&&windowMessage._choiceWindow;
+            if(choicesWindow&&typeof choicesWindow.refresh==="function")choicesWindow.refresh();
+        }).catch(function(){state.errors++;});
+        return result;
     };
 }
 function setupHud(){
@@ -217,7 +292,7 @@ function setupHud(){
     };
     IAPanel.prototype.refresh=function(){
         this.contents.clear();
-        var lines=["IA Traductora · RPG","Idioma: Español","Origen: Auto",
+        var lines=["IA Traductora · RPG","Idioma: Español","Arranque: "+(startupCode()||"En espera"),
             "Motor: "+state.status,"Solicitados: "+state.requested,
             "Recibidos: "+state.received+" · Mostrados: "+state.shown,
             "Errores: "+state.errors,"Cerrar (F10)"];
@@ -243,9 +318,14 @@ function setupHud(){
     Input.keyMapper[121]="ia-traductora";
 }
 try{
+    // F10 must remain visible even if the sidecar is not found or cannot start.
+    setupHud();
     initPaths();
     if(!ordinary(path.join(content,"js","rpg_core.js")))throw Error("Sólo RPG Maker MV");
-    hookMessages();setupHud();
+    hookMessages();hookChoices();
     refreshConnection();setInterval(refreshConnection,4500);
-}catch(_){state.status="Instalación no reconocida";state.errors++;}
+}catch(_){
+    state.status="IA_INICIO_COMPLEMENTO_FALLIDO";
+    state.errors++;
+}
 })();
