@@ -54,6 +54,17 @@ def run(game:Path):
         raise RuntimeError("IA_SALIDA_NO_ES_ESPANOL")
     if len(translated)>1000:raise RuntimeError("IA_TRADUCCION_NO_ACOTADA")
     print("SERVIDOR_V2_REAL_OPUS_JAPONES_A_ESPANOL_PASS")
+    english="Thank you for your help."
+    response=call(opener,base+"/translate",d["token"],
+                  {"source":"en","target":"es","text":english})
+    translated_en=response.get("translated") if isinstance(response,dict) else None
+    if (not isinstance(translated_en,str) or not translated_en.strip()
+        or translated_en.casefold().strip()==english.casefold().strip()):
+        raise RuntimeError("IA_INGLES_SIN_TRADUCCION_REAL")
+    if re.search("[\\u3040-\\u30ff\\u3400-\\u9fff\\ufffd]",translated_en):
+        raise RuntimeError("IA_INGLES_IDIOMA_INCORRECTO")
+    if len(translated_en)>1000:raise RuntimeError("IA_INGLES_TRADUCCION_NO_ACOTADA")
+    print("SERVIDOR_V2_REAL_OPUS_INGLES_A_ESPANOL_PASS")
 if __name__=="__main__":
     parser=argparse.ArgumentParser()
     parser.add_argument("--game-root",type=Path,required=True)
@@ -61,6 +72,6 @@ if __name__=="__main__":
     try:run(args.game_root)
     except Exception as e:
         message=str(e)
-        if not re.fullmatch(r"IA_[A-Z_]+",message):message="IA_PROBE_FALLO_RESERVADO"
+        if not re.fullmatch(r"IA_[A-Z0-9_]+",message):message="IA_PROBE_FALLO_RESERVADO"
         print(message)
         raise SystemExit(1)
