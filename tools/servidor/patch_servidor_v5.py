@@ -72,7 +72,7 @@ def main():
         source=main_src.read_text("utf-8")
         assert 'event.code="TX777_INTERFAZ_ABIERTA"' in source
         assert "tx777Destroy.Call(hwnd)" in source
-        assert "TX779_GAME_PLUGIN_VERIFIED" in transformed.__code__.co_consts.__str__()
+        assert "TX779_GAME_PLUGIN_VERIFIED" in str(transformed.__code__.co_consts)
         print("SERVIDOR_SINGLE_UI_SOURCE_PREFLIGHT_PASS")
         return
     if not x.source_root or not x.overlays:

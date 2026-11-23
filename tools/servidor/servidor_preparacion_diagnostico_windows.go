@@ -51,6 +51,12 @@ func servidorClassifyPreparationFailure(err error)(string,string){
   return code,"La verificación final de la carpeta portátil falló. Se han conservado los archivos existentes para evitar pérdida de datos."
  case "TX772_OWNER_MARKER_REQUIRED":
   return code,"La carpeta portátil anterior no dispone de un marcador de propiedad válido. Servidor conserva su contenido para proteger traducciones y partidas; no la borres ni la sobrescribas."
+ case "TX779_ONLY_MV_SELECTED","TX779_GAME_PORTABLE_RUNTIME_MISMATCH","TX779_LOCAL_ENGINE_NOT_FOUND":
+  return code,"La selección de MV o la carpeta portátil no coinciden con el juego. Comprueba la copia cerrada y conserva el registro de instalación."
+ case "TX779_ORIGINAL_V95_OWNER_WORKER_MISMATCH","TX779_ORIGINAL_V95_ENGINE_INVALID","TX779_ORIGINAL_NEURAL_WEIGHTS_INVALID":
+  return code,"El componente de IA V95 no superó una verificación de integridad. Servidor no modificará archivos desconocidos ni instalará un complemento sin verificar el motor."
+ case "TX779_NATIVE_MV_PLUGIN_INSTALL_FAILED","TX779_PREVIOUS_LANGUAGE_RESTORE_REFUSED","TX779_NATIVE_PLUGIN_INSTALLATION_NOT_VERIFIED":
+  return code,"No se pudo verificar la instalación del complemento MV o su copia de seguridad. Conserva el respaldo y los archivos actuales del juego."
  case "TX771_PORTABLE_PUBLISH_FAILED":
   return code,"Windows rechazó publicar la carpeta preparada. Puede deberse al bloqueo del directorio o a los permisos en la unidad del juego."
  case "TX771_FOREIGN_PORTABLE_FOLDER","TX771_OWNER_MARKER_NOT_REGULAR","TX771_OWNER_MARKER_WRONG_SCHEMA":

@@ -59,6 +59,7 @@ jobs:
           python tools/servidor/patch_servidor_v2.py --self-test
           python tools/servidor/patch_servidor_v3.py --self-test
           python tools/servidor/patch_servidor_v4.py --self-test
+          python tools/servidor/patch_servidor_v5.py --self-test
           python tools/publication_guard.py
           echo "EDUARDO_ORIGINAL_PUBLIC_ORCHESTRATION_ONLY_PASS"
 
@@ -365,15 +366,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_DIAG_ORIGINAL_SOURCE_HOLD" }
           python ci/tools/servidor/patch_servidor_v4.py --source-root original --overlays ci/tools/servidor
           if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_TX567_RESOLVED_PUBLISH_APP_HOLD" }
+          python ci/tools/servidor/patch_servidor_v5.py --source-root original --overlays ci/tools/servidor
+          if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_SINGLE_GUI_NATIVE_MV_INSTALLER_HOLD" }
           Push-Location original/reference/tx541-rpg-onefile
           try {
             $log = Join-Path $env:RUNNER_TEMP "servidor-mv-guard-private.log"
-            go test . -run 'TestServidor(MV|Picker|Preparacion|Portable)' -count=1 *> $log
+            go mod tidy *> $log
+            if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_INTEGRATED_GO_MODULE_DEPENDENCY_HOLD" }
+            go test . -run 'TestServidor(MV|Picker|Preparacion|Portable|Integrated)' -count=1 *> $log
             if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_MV_SIGNATURE_GUARD_TEST_HOLD" }
             go vet . *> $log
             if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_MV_GO_VET_HOLD" }
           } finally { Pop-Location }
-          Write-Host "SERVIDOR_V4_TX567_APP_VERIFICADO_Y_V95_READY"
+          Write-Host "SERVIDOR_V5_ONE_NATIVE_UI_AND_MV_INSTALLER_AND_V95_READY"
 
       - name: Run the EXACT original source-pinned GUI and V95 chain on Windows
         shell: pwsh
