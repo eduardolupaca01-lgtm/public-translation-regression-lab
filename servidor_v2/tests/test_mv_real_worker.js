@@ -90,25 +90,37 @@ async function run(){
         return scene.windows[1].drawn.some(line=>line.indexOf("IA local conectada")!==-1);
     },120000,"IA_WORKER_DID_NOT_CONNECT_AFTER_MAP");
 
-    gameMessage._texts=["\\N[2] おはようございます。"];
-    const dialog=new Window_Message();
-    dialog.startMessage();
-    await until(()=>{dialog.update();return dialog.starts===1;},120000,
-        "IA_NATIVE_DIALOG_TIMEOUT");
+    const sourceText="\\N[2] おはようございます。";
+    gameMessage._texts=[sourceText];
+    const first=new Window_Message();
+    first.startMessage();
+    assert.equal(first.starts,1,"IA_NATIVE_FIRST_DIALOG_MUST_NOT_STALL");
+    assert.equal(gameMessage.allText(),sourceText,
+        "IA_PENDING_DIALOG_MUST_REMAIN_ORIGINAL");
+    await until(()=>{
+        gameMessage._texts=[sourceText];
+        const repeated=new Window_Message();
+        repeated.startMessage();
+        return !japanese(gameMessage.allText());
+    },120000,"IA_NATIVE_DIALOG_CACHE_TIMEOUT");
     const displayed=gameMessage.allText();
     assert.ok(displayed.startsWith("\\N[2] "),
         "IA_GAME_CONTROL_CODE_CHANGED");
-    assert.ok(!japanese(displayed) && displayed!=="\\N[2] おはようございます。",
+    assert.ok(!japanese(displayed)&&displayed!==sourceText,
         "IA_DIALOG_NOT_TRANSLATED");
-    assert.equal(dialog.starts,1,"IA_DIALOG_DOUBLE_STARTED");
 
-    gameMessage.setChoices(["はい、お願いします。","いいえ、けっこうです。"],0,1);
-    await until(()=>gameMessage._choices.every(v=>!japanese(v)),120000,
-        "IA_NATIVE_CHOICES_TIMEOUT");
+    const sourceChoices=["はい、お願いします。","いいえ、けっこうです。"];
+    gameMessage.setChoices(sourceChoices,0,1);
+    assert.ok(gameMessage._choices.every(japanese),
+        "IA_UNCACHED_CHOICES_CANNOT_REPAINT_LIVE_PROMPT");
+    await until(()=>{
+        gameMessage.setChoices(sourceChoices,0,1);
+        return gameMessage._choices.every(v=>!japanese(v));
+    },120000,"IA_NATIVE_CHOICES_CACHE_TIMEOUT");
     assert.equal(gameMessage._choices.length,2,"IA_CHOICE_COUNT_CHANGED");
     assert.ok(gameMessage._choices.every(v=>typeof v==="string"&&v.trim()),
         "IA_NATIVE_CHOICES_EMPTY");
-    console.log("SERVIDOR_V2_INSTALLED_PLUGIN_TO_REAL_V95_NATIVE_TEXT_AND_CHOICES_PASS");
+    console.log("SERVIDOR_V2_REAL_OPUS_PASSIVE_NATIVE_CACHE_TEXT_AND_CHOICES_PASS");
 }
 run().catch(err=>{
     const code=err&&typeof err.message==="string"&&/^IA_[A-Z0-9_]+$/.test(err.message)?
