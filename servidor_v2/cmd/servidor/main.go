@@ -199,36 +199,10 @@ func createNew(filename string,b []byte)error{
  if _,err=f.Write(b);err!=nil{f.Close();return err}
  if err=f.Sync();err!=nil{f.Close();return err};return f.Close()
 }
+// Explicitly separate staging, Windows publication and recovery from the
+// MV-specific installer. Existing game assets are never overwritten here.
 func prepareSidecar(game string,pkg *packageReader)(string,error){
- folder:=filepath.Join(game,brandFolder)
- if _,err:=os.Lstat(folder);err==nil{return "",errors.New("IA_INSTALACION_EXISTENTE_REVISAR")}
- stage,err:=os.MkdirTemp(game,".ia-traductora-stage-");if err!=nil{return "",err}
- ok:=false;defer func(){if !ok{_ =os.RemoveAll(stage)}}()
- engine:=filepath.Join(stage,".local","Rpg","engine")
- if err=os.MkdirAll(engine,0700);err!=nil{return "",err}
- for name,expected:=range pkg.manifest.Files{
-  if name=="IATraductora.js" {continue}
-  file:=pkg.files[name]
-  target:=filepath.Join(engine,filepath.FromSlash(name))
-  if err=os.MkdirAll(filepath.Dir(target),0700);err!=nil{return "",err}
-  input,e:=file.Open();if e!=nil{return "",e}
-  output,e:=os.OpenFile(target,os.O_CREATE|os.O_EXCL|os.O_WRONLY,0600)
-  if e!=nil{input.Close();return "",e}
-  digest:=sha256.New()
-  _,e=io.Copy(io.MultiWriter(output,digest),io.LimitReader(input,maxArchive+1))
-  input.Close();closeErr:=output.Close()
-  if e!=nil||closeErr!=nil||hex.EncodeToString(digest.Sum(nil))!=expected{
-   return "",errors.New("IA_MODELO_SHA_NO_COINCIDE")
-  }
- }
- own:=ownerManifest{Schema:ownerSchema,WorkerSHA:pkg.manifest.Files["IATraductora.exe"],
-  PluginSHA:pkg.manifest.Files["IATraductora.js"]}
- bytes,_:=json.MarshalIndent(own,"","  ")
- if err=createNew(filepath.Join(stage,"owner-v1.json"),bytes);err!=nil{return "",err}
- if err=os.MkdirAll(filepath.Join(stage,"install"),0700);err!=nil{return "",err}
- if _,err=os.Lstat(folder);err==nil{return "",errors.New("IA_CARPETA_APARECIO_EN_JUEGO")}
- if err=os.Rename(stage,folder);err!=nil{return "",err}
- ok=true;return folder,nil
+ return iaPrepareAndPublishSidecar(game,pkg)
 }
 func Install(gameEXE string,pkg *packageReader)error{
  root,content,err:=detectGame(gameEXE);if err!=nil{return err}
