@@ -7,6 +7,7 @@ package main
 import(
     "fmt"
     "os"
+    "errors"
     "runtime"
     "strings"
     "sync"
@@ -28,6 +29,11 @@ const(
     iaWMDestroy=0x0002
     iaWMClose=0x0010
     iaWMAppDone=0x8001
+    iaWMDrawItem=0x002B
+    iaWMPaint=0x000F
+    iaWMEraseBk=0x0014
+    iaWMColorStatic=0x0138
+    iaWMColorEdit=0x0133
     iaCmdBrowse=100
     iaCmdInstall=101
     iaCmdClose=102
@@ -105,19 +111,28 @@ type iaUI struct{
     hwnd uintptr
     gameFile string
     input uintptr
+    browse uintptr
+    closeBtn uintptr
+    titleLabel uintptr
+    sectionLabel uintptr
+    statusLabel uintptr
+    infoLabel uintptr
     install uintptr
     status uintptr
     logs uintptr
     logText string
     mu sync.Mutex
     result string
+    busy bool
 }
 var iaCurrentUI iaUI
 func iaUTF16(s string)*uint16{return syscall.StringToUTF16Ptr(s)}
 func iaControl(parent uintptr,klass,title string,style uint32,x,y,width,height,id int)uintptr{
+    if klass=="BUTTON"{style|=0x0000000B} // BS_OWNERDRAW
     win,_,_:=iaCreateWindow.Call(0,uintptr(unsafe.Pointer(iaUTF16(klass))),
         uintptr(unsafe.Pointer(iaUTF16(title))),uintptr(style)|iaWSVisible|iaWSChild,
         uintptr(x),uintptr(y),uintptr(width),uintptr(height),parent,uintptr(id),0,0)
+    if win!=0{iaApplyControlFont(win,klass,id)}
     return win
 }
 func iaSet(hwnd uintptr,text string){
@@ -128,9 +143,16 @@ func iaLog(line string){
     iaCurrentUI.logText+=line
     iaSet(iaCurrentUI.logs,iaCurrentUI.logText)
 }
-func iaChooseEXE(owner uintptr)(string,error){
+var iaSelectFile=iaChooseEXE
+func iaChooseEXE(owner uintptr)(selected string,err error){
+    defer func(){
+        if recover()!=nil{
+            selected=""
+            err=errors.New("IA_SELECTOR_PANICO_RECUPERADO")
+        }
+    }()
     buffer:=make([]uint16,32768)
-    filter:=syscall.StringToUTF16("Juegos Windows (*.exe)\x00*.exe\x00\x00")
+    filter:=iaExeFilterUTF16()
     title:=iaUTF16("Selecciona el Game.exe de una COPIA cerrada del videojuego")
     data:=iaFileDialog{
         Size:uint32(unsafe.Sizeof(iaFileDialog{})),Owner:owner,
@@ -158,12 +180,20 @@ func iaStartInstall(){
         iaLog("[IA_EXE_REQUERIDO] Selecciona primero Game.exe.")
         return
     }
+    if ui.busy{return}
+    ui.busy=true
     iaEnableWindow.Call(ui.install,0)
+    iaEnableWindow.Call(ui.browse,0)
     iaSet(ui.status,"Preparando IA Traductora...")
     iaLog("[IA_INICIANDO] Verificando el paquete propio y los modelos.")
     game:=ui.gameFile
     go func(){
         info:="IA_ERROR_NO_CLASIFICADO"
+        defer func(){
+            if recover()!=nil{info="IA_INSTALACION_PANICO_RECUPERADO"}
+            ui.mu.Lock();ui.result=info;ui.mu.Unlock()
+            iaPostMessage.Call(ui.hwnd,iaWMAppDone,0,0)
+        }()
         executable,e:=os.Executable()
         if e!=nil{info="IA_NO_SE_PUEDE_LEER_SERVIDOR"}else{
             pkg,err:=readPackage(executable)
@@ -173,34 +203,62 @@ func iaStartInstall(){
                 if err!=nil{info=err.Error()}else{info="IA_INSTALACION_COMPLETADA_VERIFICADA"}
             }
         }
-        ui.mu.Lock();ui.result=info;ui.mu.Unlock()
-        iaPostMessage.Call(ui.hwnd,iaWMAppDone,0,0)
     }()
 }
-func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)uintptr{
+func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
+    defer func(){
+        if recover()!=nil{
+            if iaCurrentUI.logs!=0 {iaLog("[IA_INTERFAZ_PANICO_RECUPERADO] El programa continúa abierto.")}
+            ret=0
+        }
+    }()
     ui:=&iaCurrentUI
     switch message {
     case iaWMClose:
+        if ui.busy{return 0}
         iaDestroyWindow.Call(hwnd);return 0
     case iaWMDestroy:
+        iaThemeDestroy()
         iaPostQuitMessage.Call(0);return 0
+    case iaWMEraseBk:
+        return 1
+    case iaWMPaint:
+        iaPaintWindow(hwnd)
+        return 0
+    case iaWMDrawItem:
+        if iaDrawButton(lparam){return 1}
+    case iaWMColorStatic,iaWMColorEdit:
+        return iaColorControl(wparam,lparam)
     case iaWMCommand:
         switch int(wparam&0xFFFF){
         case iaCmdBrowse:
-            file,err:=iaChooseEXE(hwnd)
-            if err!=nil{iaLog("[IA_SELECTOR_ERROR] "+err.Error())}else if file!=""{
-                ui.gameFile=file;iaSet(ui.input,file)
-                iaSet(ui.status,"Listo para instalar el traductor.")
-                iaLog("[IA_EXE_SELECCIONADO] Se usará una copia cerrada del juego.")
+            if lparam!=ui.browse || ui.busy{return 0}
+            file,err:=iaSelectFile(hwnd)
+            if err!=nil{
+                iaLog("[IA_SELECTOR_ERROR] "+err.Error())
+                iaSet(ui.status,"No se pudo abrir el selector. Servidor sigue abierto.")
+            }else if file!=""{
+                if _,_,e:=detectGame(file);e!=nil{
+                    iaLog("[IA_EXE_NO_COMPATIBLE] "+e.Error())
+                    iaSet(ui.status,"Selecciona un EXE de una copia de RPG Maker MV.")
+                }else{
+                    ui.gameFile=file;iaSet(ui.input,file)
+                    iaSet(ui.status,"Juego MV seleccionado. Listo para instalar.")
+                    iaLog("[IA_EXE_SELECCIONADO] Se verificó el ejecutable de una copia MV.")
+                }
+            }else{
+                iaLog("[IA_SELECTOR_CANCELADO] Puedes volver a pulsar EXE.")
             }
         case iaCmdInstall:
-            iaStartInstall()
+            if lparam==ui.install {iaStartInstall()}
         case iaCmdClose:
-            iaDestroyWindow.Call(hwnd)
+            if lparam==ui.closeBtn && !ui.busy{iaDestroyWindow.Call(hwnd)}
         }
         return 0
     case iaWMAppDone:
         ui.mu.Lock();result:=ui.result;ui.mu.Unlock()
+        ui.busy=false
+        iaEnableWindow.Call(ui.browse,1)
         iaLog("["+result+"]")
         if strings.HasPrefix(result,"IA_INSTALACION_COMPLETADA"){
             iaSet(ui.status,"Instalación finalizada. Reinicia el juego para probar.")
@@ -214,11 +272,14 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)uintptr{
     return result
 }
 func runUI(){
+    runtime.LockOSThread()
+    defer runtime.UnlockOSThread()
+    iaThemeInit()
     className:=iaUTF16("SERVIDOR_INDEPENDIENTE_RPG_V2")
     instance,_,_:=iaGetModule.Call(0)
     class:=iaWndClass{Size:uint32(unsafe.Sizeof(iaWndClass{})),
         WndProc:syscall.NewCallback(iaWinProc),Instance:instance,
-        Background:uintptr(16),ClassName:className}
+        Background:iaThemeBrushSide,ClassName:className}
     reg,_,_:=iaRegClass.Call(uintptr(unsafe.Pointer(&class)))
     if reg==0{fmt.Fprintln(os.Stderr,"IA_VENTANA_NO_REGISTRADA");return}
     hwnd,_,_:=iaCreateWindow.Call(0,uintptr(unsafe.Pointer(className)),
@@ -226,22 +287,23 @@ func runUI(){
         100,60,1050,760,0,0,instance,0)
     if hwnd==0{fmt.Fprintln(os.Stderr,"IA_NO_SE_PUEDE_ABRIR_VENTANA");return}
     ui:=&iaCurrentUI;ui.hwnd=hwnd
-    iaControl(hwnd,"STATIC","Servidor",0,21,20,230,46,0)
-    iaControl(hwnd,"STATIC","RPG",0,218,75,180,37,0)
+    ui.titleLabel=iaControl(hwnd,"STATIC","Servidor",0,30,20,360,55,0)
+    ui.sectionLabel=iaControl(hwnd,"STATIC","RPG",0,233,123,250,40,0)
     for i,label:=range []string{"01","RPG","03","04","05","+"}{
         style:=uint32(0)
         if label!="RPG"{style|=iaWSDisabled}
-        iaControl(hwnd,"BUTTON",label,style,20,125+i*69,169,52,300+i)
+        iaControl(hwnd,"BUTTON",label,style,20,127+i*70,169,54,300+i)
     }
-    iaControl(hwnd,"STATIC","1. Selecciona el archivo EXE de una COPIA del juego cerrado:",0,220,132,740,33,0)
-    ui.input=iaControl(hwnd,"EDIT","",iaWSBorder|iaESReadOnly,218,169,604,42,0)
-    iaControl(hwnd,"BUTTON","EXE",0,841,169,171,43,iaCmdBrowse)
-    ui.install=iaControl(hwnd,"BUTTON","2. INSTALAR TRADUCTOR AUTOMÁTICO",0,219,243,793,59,iaCmdInstall)
-    iaControl(hwnd,"STATIC","Estado de instalación:",0,219,333,740,30,0)
+    ui.infoLabel=iaControl(hwnd,"STATIC","1. Selecciona el archivo EXE del juego (una copia cerrada):",0,230,187,780,34,0)
+    ui.input=iaControl(hwnd,"EDIT","",iaWSBorder|iaESReadOnly,230,227,597,44,0)
+    ui.browse=iaControl(hwnd,"BUTTON","EXE",0,843,226,169,46,iaCmdBrowse)
+    ui.install=iaControl(hwnd,"BUTTON","2. INSTALAR TRADUCTOR AUTOMÁTICO",0,230,302,782,59,iaCmdInstall)
+    iaControl(hwnd,"STATIC","Estado de instalación:",0,230,379,760,31,0)
     ui.logs=iaControl(hwnd,"EDIT","",iaWSBorder|iaWSVScroll|iaESMultiline|
-        iaESReadOnly|iaESAutoVScroll,219,370,793,246,0)
-    ui.status=iaControl(hwnd,"STATIC","Listo para instalar el traductor.",0,219,627,790,38,0)
-    iaControl(hwnd,"BUTTON","Cerrar",0,740,679,270,42,iaCmdClose)
+        iaESReadOnly|iaESAutoVScroll,230,414,782,236,0)
+    ui.statusLabel=iaControl(hwnd,"STATIC","Listo para instalar el traductor.",0,230,664,773,39,0)
+    ui.status=ui.statusLabel
+    ui.closeBtn=iaControl(hwnd,"BUTTON","Cerrar",0,792,710,218,36,iaCmdClose)
     iaLog("[IA_TRADUCTORA_LISTA] Selecciona una copia MV. El motor es local y propio.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
