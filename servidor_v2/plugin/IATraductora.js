@@ -118,9 +118,9 @@ function refreshConnection(){
         startWorker();
     });
 }
-function translate(text){
-    if(cache.has(text))return Promise.resolve(cache.get(text));
-    if(pending.has(text))return pending.get(text);
+function translate(source,text){
+    if(cache.has(source+"\u0000"+text))return Promise.resolve(cache.get(source+"\u0000"+text));
+    if(pending.has(source+"\u0000"+text))return pending.get(source+"\u0000"+text);
     state.requested++;
     var call=new Promise(function(resolve){
         var beginning=Date.now(),done=false;
@@ -128,18 +128,29 @@ function translate(text){
             if(done)return;
             if(Date.now()-beginning>maxWait){done=true;state.errors++;resolve(null);return;}
             if(!state.connected){setTimeout(attempt,600);return;}
-            request("/translate",{source:"ja",target:"es",text:text},12000).then(function(r){
+            request("/translate",{source:source,target:"es",text:text},12000).then(function(r){
                 if(r && typeof r.translated==="string"&&r.translated.trim()&&r.translated!==text){
-                    cache.set(text,r.translated);state.received++;done=true;resolve(r.translated);
+                    cache.set(source+"\u0000"+text,r.translated);state.received++;done=true;resolve(r.translated);
                 }else{done=true;state.errors++;resolve(null);}
             }).catch(function(){setTimeout(attempt,1200);});
         }
         attempt();
-    }).finally(function(){pending.delete(text);});
-    pending.set(text,call);
+    }).finally(function(){pending.delete(source+"\u0000"+text);});
+    pending.set(source+"\u0000"+text,call);
     return call;
 }
 function isJapanese(s){return /[\u3040-\u30ff\u3400-\u9fff]/.test(s||"");}
+function languageFor(s){
+    if(typeof s!=="string" || s.length===0 || s.length>1800)return null;
+    if(isJapanese(s))return "ja";
+    // English detection must be conservative: never send player names,
+    // numerical menus, short labels, or Spanish text to an English model.
+    if(/[áéíóúñ¿¡]/i.test(s) || /[^\x09\x0a\x0d\x20-\x7e]/.test(s))return null;
+    var words=s.match(/[A-Za-z']+/g)||[];
+    if(words.length<3 || s.trim().length<12)return null;
+    if(/\b(?:the|you|are|have|this|that|with|your|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning)\b/i.test(s))return "en";
+    return null;
+}
 function isProtected(s){
     // Control sequences are retained byte-for-byte; until proper masking,
     // never send unbalanced game commands into the neural model.
@@ -152,14 +163,15 @@ function hookMessages(){
         if(this._iaWaiting)return;
         if(!$gameMessage||!$gameMessage.hasText())return original.apply(this,arguments);
         var text=$gameMessage.allText();
-        if(!isJapanese(text)||isProtected(text))return original.apply(this,arguments);
-        if(cache.has(text)){
-            $gameMessage._texts=cache.get(text).split("\n");state.shown++;
+        var source=languageFor(text);
+        if(!source||isProtected(text))return original.apply(this,arguments);
+        if(cache.has(source+"\u0000"+text)){
+            $gameMessage._texts=cache.get(source+"\u0000"+text).split("\n");state.shown++;
             return original.apply(this,arguments);
         }
         var instance=this;
         instance._iaWaiting={text:text,at:Date.now(),done:false,translated:null};
-        translate(text).then(function(out){
+        translate(source,text).then(function(out){
             if(!instance._iaWaiting||instance._iaWaiting.text!==text)return;
             instance._iaWaiting.done=true;
             instance._iaWaiting.translated=out;
@@ -171,8 +183,12 @@ function hookMessages(){
             var w=this._iaWaiting;
             if(!w.done&&Date.now()-w.at<maxWait+1500)return;
             this._iaWaiting=null;
-            if(w.translated){$gameMessage._texts=w.translated.split("\n");state.shown++;}
-            original.call(this);
+            // A custom dialogue plugin can advance/change text during async inference.
+            // Never paste an old translation over the next scene or speaker.
+            if($gameMessage && $gameMessage.hasText() && $gameMessage.allText()===w.text){
+                if(w.translated){$gameMessage._texts=w.translated.split("\n");state.shown++;}
+                original.call(this);
+            }
         }
         return update.apply(this,arguments);
     };
