@@ -90,6 +90,15 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result,"Siempre llegas demasiado temprano.")
         self.assertEqual(model.kwargs["num_hypotheses"],3)
         self.assertGreater(model.kwargs["repetition_penalty"],1.0)
+    def test_all_opus_candidates_rejected_visible_in_qa_status(self):
+        class UnsafeNeural:
+            def translate(self,*_):
+                raise RuntimeError("IA_QUALITY_ALL_CANDIDATES_REJECTED")
+        unsafe=ia.Service(self.root,self.engine,neural=UnsafeNeural())
+        self.addCleanup(unsafe.close)
+        with self.assertRaises(RuntimeError):
+            unsafe.translate("ja","おはようございます。")
+        self.assertEqual(unsafe.quality_rejected,1)
     def test_authentication(self):
         with self.assertRaises(HTTPError) as e:self.http("/status",token="0"*64)
         self.assertEqual(e.exception.code,403)
