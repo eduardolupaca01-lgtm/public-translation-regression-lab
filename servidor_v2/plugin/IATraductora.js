@@ -20,6 +20,11 @@ var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requ
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var runtimeActivated=false;
 var cache=new Map(),pending=new Map(),maxWait=45000,messageWait=4500;
+var cacheDir="",cacheFile="",diskReady=false,diskBusy=false,diskQueue=[];
+var diskStats={loaded:0,saved:0,rejected:0,errors:0};
+// A cache never includes game assets or saves. The schema is versioned to
+// quarantine old, unverified outputs from previous releases.
+var CACHE_SCHEMA="ia-traductora-cache-v2",CACHE_LIMIT=12*1024*1024;
 // NW.js versions resolve index.html and Game.exe differently. Detect only an
 // actual MV root by checking its original files; never trust a guessed path.
 function resolveMVGame(){
@@ -210,8 +215,8 @@ function translate(source,text){
             if(Date.now()-beginning>maxWait){done=true;state.errors++;resolve(null);return;}
             if(!state.connected){setTimeout(attempt,600);return;}
             request("/translate",{source:source,target:"es",text:text},30000).then(function(r){
-                if(r && typeof r.translated==="string"&&r.translated.trim()&&r.translated!==text){
-                    cache.set(source+"\u0000"+text,r.translated);state.received++;done=true;resolve(r.translated);
+                if(r && acceptCache(source,text,r.translated,false,true)){
+                    state.received++;done=true;resolve(r.translated);
                 }else{done=true;state.errors++;resolve(null);}
             }).catch(function(){setTimeout(attempt,1200);});
         }
@@ -227,6 +232,130 @@ function translate(source,text){
     pending.set(key,call);
     return call;
 }
+
+function numbersIn(text){
+    var n=String(text).match(/[0-9０-９]+/g)||[];
+    return n.map(function(v){return v.replace(/[０-９]/g,function(c){
+        return String(c.charCodeAt(0)-65296);
+    });}).sort().join("|");
+}
+function validTranslation(source,original,result,composed){
+    if(typeof original!=="string"||typeof result!=="string"||
+       !original||!result.trim()||result===original||
+       result.length>Math.max(100,Math.min(5400,original.length*5+80))||
+       /\uFFFD|\u0000/.test(result)||numbersIn(original)!==numbersIn(result))
+        return false;
+    if(source==="ja"&&!composed&&isJapanese(result))return false;
+    // A replayed cache is data, not code. Reject generated RPG escapes that
+    // weren't in the original. Also protect carriage returns and line count.
+    if((result.match(/\n/g)||[]).length!==(original.match(/\n/g)||[]).length)
+        return false;
+    if((result.match(/\r/g)||[]).length!==(original.match(/\r/g)||[]).length)
+        return false;
+    var before=protectedParts(original).filter(function(c){return c.locked;})
+        .map(function(c){return c.value;}).join("\u0002");
+    var after=protectedParts(result).filter(function(c){return c.locked;})
+        .map(function(c){return c.value;}).join("\u0002");
+    if(before!==after)return false;
+    var words=result.toLowerCase().match(/[a-záéíóúñ]{2,}/g)||[];
+    for(var i=5;i<words.length;i++){
+        if(words[i]===words[i-3]&&words[i-1]===words[i-4]&&
+           words[i-2]===words[i-5])return false;
+    }
+    return true;
+}
+function acceptCache(source,original,result,composed,persist){
+    if(!validTranslation(source,original,result,!!composed)){
+        diskStats.rejected++;return false;
+    }
+    var key=source+"\u0000"+original;
+    if(cache.has(key)&&cache.get(key)===result)return true;
+    cache.set(key,result);
+    if(cache.size>9000){cache.delete(cache.keys().next().value);}
+    if(persist)enqueuePersistentCache({
+        schema:CACHE_SCHEMA,source:source,original:original,
+        translated:result,composed:!!composed
+    });
+    return true;
+}
+function safeCachePath(){
+    if(!cacheDir||!cacheFile)return false;
+    try{
+        var d=fs.lstatSync(cacheDir);
+        if(!d.isDirectory()||d.isSymbolicLink())return false;
+        var f;
+        try{f=fs.lstatSync(cacheFile);}
+        catch(e){if(e&&e.code==="ENOENT")return true;return false;}
+        return f.isFile()&&!f.isSymbolicLink()&&f.size<=CACHE_LIMIT;
+    }catch(_){return false;}
+}
+function queueFlush(){
+    if(!diskReady||diskBusy||!diskQueue.length)return;
+    if(!safeCachePath()){diskStats.errors++;diskQueue=[];return;}
+    var item=diskQueue.shift(),line=JSON.stringify(item)+"\n";
+    if(line.length>6000){diskStats.rejected++;queueFlush();return;}
+    diskBusy=true;
+    fs.appendFile(cacheFile,line,{encoding:"utf8",mode:0o600},function(err){
+        diskBusy=false;
+        if(err)diskStats.errors++;
+        else diskStats.saved++;
+        queueFlush();
+    });
+}
+function enqueuePersistentCache(record){
+    if(diskQueue.length>=400){
+        diskStats.errors++;return;
+    }
+    diskQueue.push(record);
+    queueFlush();
+}
+function startPersistentCache(){
+    cacheDir=path.join(sidecar,".local","Rpg","cache");
+    cacheFile=path.join(cacheDir,"translations-ja-en-es-v2.jsonl");
+    function onReady(){
+        if(!safeCachePath()){diskStats.errors++;return;}
+        fs.readFile(cacheFile,"utf8",function(err,data){
+            if(err&&err.code!=="ENOENT"){diskStats.errors++;return;}
+            if(!err&&typeof data==="string"){
+                if(Buffer.byteLength(data,"utf8")>CACHE_LIMIT){
+                    diskStats.errors++;return;
+                }
+                var lines=data.split("\n");
+                // A partially-written final line is not a trusted entry.
+                for(var i=0;i<lines.length-1&&i<30000;i++){
+                    if(!lines[i]||lines[i].length>6000)continue;
+                    try{
+                        var r=JSON.parse(lines[i]);
+                        if(r.schema!==CACHE_SCHEMA||!/^(ja|en)$/.test(r.source)||
+                           !validTranslation(r.source,r.original,r.translated,
+                               r.composed))continue;
+                        var key=r.source+"\u0000"+r.original;
+                        if(!cache.has(key)){
+                            cache.set(key,r.translated);diskStats.loaded++;
+                        }
+                    }catch(_){diskStats.rejected++;}
+                }
+            }
+            diskReady=true;queueFlush();
+        });
+    }
+    try{
+        var d;
+        try{d=fs.lstatSync(cacheDir);}catch(e){
+            if(!e||e.code!=="ENOENT")throw e;
+        }
+        if(d){
+            if(!d.isDirectory()||d.isSymbolicLink())throw Error("IA_CACHE_DIR_UNSAFE");
+            onReady();
+        }else{
+            fs.mkdir(cacheDir,0o700,function(e){
+                if(e&&e.code!=="EEXIST"){diskStats.errors++;return;}
+                onReady();
+            });
+        }
+    }catch(_){diskStats.errors++;}
+}
+
 function isJapanese(s){return /[\u3040-\u30ff\u3400-\u9fff]/.test(s||"");}
 function languageFor(s){
     if(typeof s!=="string" || s.length===0 || s.length>1800)return null;
@@ -275,7 +404,7 @@ function translatePreservingControls(source,text){
     })).then(function(parts){
         var updated=parts.join("");
         if(updated===text)return null;
-        cache.set(key,updated);
+        if(!acceptCache(source,text,updated,true,true))return null;
         return updated;
     });
 }
@@ -411,7 +540,7 @@ function setupHud(){
     IAPanel.prototype.lineHeight=function(){return 38;};
     IAPanel.prototype.initialize=function(){
         var w=Math.min(540,Math.max(310,Graphics.boxWidth-22));
-        var h=Math.min(390,Math.max(340,(Graphics.boxHeight||720)-20));
+        var h=Math.min(428,Math.max(380,(Graphics.boxHeight||720)-20));
         Window_Base.prototype.initialize.call(this,
             Math.max(5,Graphics.boxWidth-w-10),8,w,h);
         this.opacity=228;this.visible=false;this._tick=0;
@@ -429,7 +558,8 @@ function setupHud(){
             state.status,
             "Solicitudes: "+state.requested,
             "Recibidas: "+state.received+"   Mostradas: "+state.shown,
-            "Errores: "+state.errors,
+            "Caché cargada: "+diskStats.loaded+"   Guardada: "+diskStats.saved,
+            "Errores: "+state.errors+"   Caché: "+diskStats.errors,
             "Cerrar panel: F10"
         ];
         for(var i=0;i<lines.length;i++){
@@ -472,6 +602,9 @@ try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";setupHud();
     state.phase="RUTA";initPaths();
+    // Load verified translations asynchronously before map boot; never
+    // hold the game's event loop waiting for a cache or neural result.
+    startPersistentCache();
     state.phase="NUCLEO";
     if(!ordinary(path.join(content,"js","rpg_core.js")))
         throw Error("IA_NUCLEO_MV_NO_ENCONTRADO");
