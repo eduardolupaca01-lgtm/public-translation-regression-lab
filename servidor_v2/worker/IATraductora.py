@@ -2,6 +2,7 @@
 """IA Traductora, motor neuronal independiente. Sólo 127.0.0.1, sin nube."""
 from __future__ import annotations
 import argparse, hashlib, json, os, secrets, sys, threading, time
+import re, sqlite3, unicodedata
 from pathlib import Path
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -9,6 +10,72 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SCHEMA="ia-traductora-bridge-v1"
 MAX_TEXT=1800
 MODELS={"ja":"opus_ja_es","en":"opus_en_es"}
+CACHE_SCHEMA=2
+
+def quality_reason(lang, original, output):
+    """Conservative structural checks; semantic adequacy still needs bilingual QA."""
+    if not isinstance(output,str) or not output.strip() or output.strip()==original.strip():
+        return "IA_QUALITY_UNCHANGED"
+    if "\ufffd" in output or "<unk>" in output or "▁" in output or "\x00" in output:
+        return "IA_QUALITY_CORRUPT"
+    if len(output)>max(120,min(5400,len(original)*5+80)):
+        return "IA_QUALITY_LENGTH_EXCESS"
+    digits=lambda text:sorted(unicodedata.normalize("NFKC",x) for x in
+         re.findall(r"[0-9０-９]+",text))
+    if digits(original)!=digits(output):
+        return "IA_QUALITY_NUMBER_MISSING"
+    if lang=="ja" and re.search(r"[\u3040-\u30ff\u3400-\u9fff]",output):
+        return "IA_QUALITY_JAPANESE_RESIDUAL"
+    if len(original)>30 and original.count("。")+original.count("！")+original.count("？")>=2 and len(output)<12:
+        return "IA_QUALITY_MULTICLAUSE_COMPRESSED"
+    words=re.findall(r"[a-záéíóúñ]{2,}",output.lower())
+    for index in range(5,len(words)):
+        if words[index-2:index+1]==words[index-5:index-2]:
+            return "IA_QUALITY_REPEATED_GENERATION"
+    return None
+
+class TranslationMemory:
+    """Game-local, crash-durable SQLite; never touches original game data."""
+    def __init__(self,game):
+        root=game/"IA Traductora"/".local"/"Rpg"
+        directory=root/"cache"
+        if root.is_symlink() or directory.is_symlink():
+            raise RuntimeError("IA_CACHE_RUTA_NO_SEGURA")
+        directory.mkdir(mode=0o700,exist_ok=True)
+        if directory.is_symlink() or not directory.is_dir():
+            raise RuntimeError("IA_CACHE_RUTA_NO_SEGURA")
+        filename=directory/"translation-memory-v2.sqlite3"
+        if filename.is_symlink() or (filename.exists() and not filename.is_file()):
+            raise RuntimeError("IA_CACHE_ARCHIVO_AJENO")
+        self.db=sqlite3.connect(str(filename),timeout=7,check_same_thread=False)
+        self.lock=threading.RLock()
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA synchronous=FULL")
+        self.db.execute("CREATE TABLE IF NOT EXISTS translations ("
+            "key_sha256 TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,"
+            "source TEXT NOT NULL, original TEXT NOT NULL,"
+            "translated TEXT NOT NULL, created_unix INTEGER NOT NULL)")
+        self.db.commit()
+    def get(self,key,lang,text):
+        with self.lock:
+            row=self.db.execute(
+                "SELECT translated FROM translations WHERE key_sha256=? "
+                "AND schema_version=? AND source=? AND original=?",
+                (key,CACHE_SCHEMA,lang,text)).fetchone()
+        return row[0] if row and not quality_reason(lang,text,row[0]) else None
+    def put(self,key,lang,text,output):
+        if quality_reason(lang,text,output):
+            return False
+        with self.lock:
+            self.db.execute("INSERT OR REPLACE INTO translations "
+                "(key_sha256,schema_version,source,original,translated,created_unix) "
+                "VALUES (?,?,?,?,?,?)",
+                (key,CACHE_SCHEMA,lang,text,output,int(time.time())))
+            self.db.commit()
+        return True
+    def close(self):
+        with self.lock:self.db.close()
+
 
 def decoding_budget(language: str, source_tokens: int) -> int:
     if language == "en":
@@ -75,16 +142,18 @@ class NeuralOPUS:
             # English model can loop for very short RPG dialogue when the
             # decoding budget is a flat 300. Bound by source tokens and
             # explicitly discourage repeated 3-grams on the English route.
-            kwargs = {"beam_size": 4,
+            kwargs = {"beam_size": 4,"num_hypotheses":3,
+                      "repetition_penalty":1.12,"no_repeat_ngram_size":3,
                       "max_decoding_length": decoding_budget(lang, len(tokens))}
-            if lang == "en":
-                kwargs["repetition_penalty"] = 1.15
-                kwargs["no_repeat_ngram_size"] = 3
             result = model.translate_batch([tokens], **kwargs)
-            output = target.decode(result[0].hypotheses[0]).strip()
-            if lang == "en" and len(output) > min(900, max(180, len(text)*5)):
-                raise RuntimeError("IA_EN_EXCESO_LONGITUD")
-            return output
+            # The first candidate is highest-ranked; if it violates a control,
+            # number, or repetition contract, consider a safer alternative.
+            for hypothesis in result[0].hypotheses:
+                output = unicodedata.normalize("NFC",
+                    target.decode(hypothesis)).strip()
+                if quality_reason(lang,text,output) is None:
+                    return output
+            raise RuntimeError("IA_QUALITY_ALL_CANDIDATES_REJECTED")
 
 def game_root(exe_root:Path)->tuple[Path,Path]:
     root=exe_root.resolve(strict=True)
@@ -108,6 +177,7 @@ class Service:
         self.failures=0
         self.cache=OrderedDict()
         self.lock=threading.Lock()
+        self.memory=TranslationMemory(self.game)
 
     def translate(self,lang,text):
         if lang not in MODELS or not isinstance(text,str) or not (0<len(text)<=MAX_TEXT):
@@ -116,14 +186,26 @@ class Service:
         with self.lock:
             if key in self.cache:
                 self.cache.move_to_end(key);return self.cache[key]
+        disk=self.memory.get(key,lang,text)
+        if disk is not None:
+            with self.lock:
+                self.cache[key]=disk
+                while len(self.cache)>3000:self.cache.popitem(last=False)
+            return disk
         output=self.neural.translate(lang,text)
-        if not isinstance(output,str) or not output.strip() or output.strip()==text.strip():
-            raise RuntimeError("IA_NO_TRADUJO")
+        reason=quality_reason(lang,text,output)
+        if reason is not None:
+            raise RuntimeError(reason)
+        # No text is called translated until its validated bytes are committed.
+        self.memory.put(key,lang,text,output)
         with self.lock:
             self.cache[key]=output
             while len(self.cache)>3000:self.cache.popitem(last=False)
             self.translations+=1
         return output
+
+    def close(self):
+        self.memory.close()
 
 def make_handler(service:Service):
     class Handler(BaseHTTPRequestHandler):
@@ -213,6 +295,7 @@ def run(service,parent_pid=0):
         http.serve_forever(poll_interval=0.5)
     finally:
         http.server_close()
+        service.close()
         try:
             state=json.loads(dest.read_text("utf8"))
             if state.get("token")==service.token:dest.unlink()
@@ -226,6 +309,10 @@ def safe_startup_code(error):
         return "IA_MODELO_VERSION_INCOMPATIBLE"
     if "ia_parent_pid_invalido" in raw:
         return "IA_PARENT_PID_INVALIDO"
+    if "ia_cache_" in raw:
+        return "IA_CACHE_PERSISTENTE_INACCESIBLE"
+    if "ia_quality_" in raw:
+        return "IA_TRADUCCION_RECHAZADA_POR_CALIDAD"
     if "sentencepiece" in raw or "ctranslate2" in raw:
         return "IA_LIBRERIA_NEURONAL_FALTANTE"
     if "model" in raw and ("path" in raw or "file" in raw):
