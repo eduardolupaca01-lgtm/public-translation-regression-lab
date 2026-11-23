@@ -7,6 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
+var BUILD_ID="MV-R3-20261123"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -18,7 +19,7 @@ if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
-var runtimeActivated=false;
+var runtimeActivated=false,connectionProbe=false,lastStatusProbe=0;
 var cache=new Map(),approvedKeys=new Map(),pending=new Map(),rejectedKeys=new Map(),maxWait=45000;
 var cacheReadDone=false,identityDrawDepth=0;
 var cacheDir="",cacheFile="",diskReady=false,diskBusy=false,diskQueue=[];
@@ -197,15 +198,17 @@ function startWorker(){
     }catch(_){state.status="Instalación incompleta";state.errors++;starting=false;}
 }
 function refreshConnection(){
+    if(connectionProbe)return;
+    connectionProbe=true;lastStatusProbe=Date.now();
     request("/status",null,2500).then(function(d){
         if(d.schema!=="ia-traductora-bridge-v1"||d.active!==true)throw Error("Motor no autenticado");
-        state.connected=true;state.status="IA local conectada";
+        connectionProbe=false;state.connected=true;state.status="IA local conectada";
         state.qualityRejected=typeof d.quality_rejected==="number"?
             d.quality_rejected:0;
         state.batch=d.batch===true;
         nextPrefetch();
     }).catch(function(){
-        state.connected=false;
+        connectionProbe=false;state.connected=false;
         state.status=startupCode()||"Esperando IA local";
         startWorker();
     });
@@ -345,6 +348,8 @@ function validTranslation(source,original,result,composed){
         return false;
     var fixed=stableDisplay(original,false);
     if(fixed!==null&&fixed!==result)return false;
+    if(source==="ja"&&spuriousLaughter(original,result))return false;
+    if(/(?:\\|\x1b)[NVP]\[[0-9]+\](?=[A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/i.test(result))return false;
     if(source==="ja"){
         var visibleOriginal=protectedParts(original).filter(function(c){return !c.locked;}).map(function(c){return c.value;}).join("");
         if(!containsNames(result,prepareNamedDialogue(visibleOriginal,source).needed))return false;
@@ -517,16 +522,62 @@ function languageFor(s){
 }
 // Never send game control sequences (including character names) to OPUS.
 var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[A-Za-z]+\[[0-9]{1,8}\]|[{}!])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n/g;
+// Brackets at a segment's edges are presentation, not instructions for OPUS.
+// Preserve them byte-for-byte, including an opening/closing bracket on separate
+// native lines. Internal punctuation stays in the sentence for grammar.
+var OPEN_BRACKETS="(（[［【「『《〈〔";
+var CLOSE_BRACKETS=")）]］】」』》〉〕";
+function edgeChunks(value){
+    var result=[],left=0,right=value.length;
+    while(left<right&&OPEN_BRACKETS.indexOf(value.charAt(left))>=0)left++;
+    while(right>left&&CLOSE_BRACKETS.indexOf(value.charAt(right-1))>=0)right--;
+    if(left)result.push({value:value.slice(0,left),locked:true,literal:true});
+    if(right>left)result.push({value:value.slice(left,right),locked:false});
+    if(right<value.length)result.push({value:value.slice(right),locked:true,literal:true});
+    return result;
+}
 function protectedParts(text){
     var chunks=[],position=0,match;
+    function addProse(value){
+        // Keep whitespace exactly; brackets just inside indentation still
+        // belong to the visible outer envelope.
+        var lead=(value.match(/^[ \t\u3000]*/)||[""])[0];
+        var tail=(value.match(/[ \t\u3000]*$/)||[""])[0];
+        if(lead.length+tail.length>=value.length){
+            if(value)chunks.push({value:value,locked:false});return;
+        }
+        var center=value.slice(lead.length,value.length-tail.length);
+        var parts=edgeChunks(center);
+        if(parts.length===1&&!parts[0].locked){chunks.push({value:value,locked:false});return;}
+        if(lead)chunks.push({value:lead,locked:false});
+        Array.prototype.push.apply(chunks,parts);
+        if(tail)chunks.push({value:tail,locked:false});
+    }
     controlRE.lastIndex=0;
     while((match=controlRE.exec(text))!==null){
-        if(match.index>position)chunks.push({value:text.slice(position,match.index),locked:false});
+        if(match.index>position)addProse(text.slice(position,match.index));
         chunks.push({value:match[0],locked:true});
         position=controlRE.lastIndex;
     }
-    if(position<text.length)chunks.push({value:text.slice(position),locked:false});
+    if(position<text.length)addProse(text.slice(position));
     return chunks;
+}
+function dynamicValue(part){return /^(?:\\|\x1b)[NVP]\[[0-9]+\]$/i.test(part);}
+function joinNativeParts(parts){
+    var result="";
+    for(var i=0;i<parts.length;i++){
+        var current=parts[i],previous=i?parts[i-1]:"";
+        // Japanese needs no space between a variable and the next word;
+        // Spanish does. Never insert inside an escape, color or name tag.
+        if((dynamicValue(previous)&&/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]/.test(current))||
+           (dynamicValue(current)&&/[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]$/.test(previous)))result+=" ";
+        result+=current;
+    }
+    return result;
+}
+function spuriousLaughter(original,result){
+    return /^\s*[\(\[（【「『]?\s*(?:risas?|jajaja|ja ja ja)\s*[.!…]*\s*[\)\]）】」』]?\s*$/i.test(result)&&
+        !/(?:笑|わら|[wｗ]{2,}|(?:あ|は|ふ|へ|え|ひ)[はふへひハフヘヒ]{2,}|ハハ|フフ|へへ|ハッ|フッ)/i.test(original);
 }
 function translatePreservingControls(source,text){
     var key=source+"\u0000"+text;
@@ -562,7 +613,7 @@ function translatePreservingControls(source,text){
         });
     })).then(function(parts){
         if(parts.some(function(p){return p===null;}))return null;
-        var updated=parts.join("");
+        var updated=joinNativeParts(parts);
         if(updated===text)return null;
         if(!acceptCache(source,text,updated,true,true))return null;
         return cache.get(key);
@@ -635,7 +686,7 @@ function learnReadings(text){
     }
 }
 function roleLabel(text){
-    var m=/^(?:モブ)?(男|女)?(?:生徒|学生)\s*([Ａ-ＺA-Z])?$/.exec(text);
+    var m=/^(?:モブ)?(男子?|女子?)?(?:生徒|学生)\s*([Ａ-ＺA-Z])?$/.exec(text);
     if(m){
         var suffix=m[2]||"";
         if(/[Ａ-Ｚ]/.test(suffix))suffix=String.fromCharCode(suffix.charCodeAt(0)-65248);
@@ -652,7 +703,10 @@ function nameInSpanish(name,identity){
     if(m&&Object.prototype.hasOwnProperty.call(knownNames,m[1])&&
        (identity||/^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ .'\-]{0,47}$/.test(m[3])))
         return knownNames[m[1]]+m[2]+m[3];
-    if(identity||actorNames[name])return name;
+    if(identity||actorNames[name]){
+        if(/^[ぁ-ゖァ-ヶー]{2,30}$/.test(name))return romanizeKana(name)||name;
+        return name;
+    }
     return null;
 }
 function stableDisplay(text,identity){
@@ -703,7 +757,7 @@ function readyText(source,text){
         parts.push(before+result+after);
     }
     if(!changed)return null;
-    var joined=parts.join("");
+    var joined=joinNativeParts(parts);
     return acceptCache(source,text,joined,true,true)?cache.get(source+"\u0000"+text):null;
 }
 function loadApprovedTranslations(){
@@ -784,7 +838,7 @@ function translatedNativeLabel(text,identity){
         // Only the literal buttons, never the name-entry keyboard/value.
         return text==="決定"?"Aceptar":text==="キャンセル"?"Cancelar":text;
     }
-    if(identity)return nameInSpanish(text,true);
+    if(identity)return nameInSpanish(text,true)||text;
     var source=languageFor(text);
     if(!source)return text;
     var found=readyText(source,text);
@@ -826,7 +880,7 @@ function hookNativeSurface(){
                     var set=win.setText;
                     if(typeof set==="function")win.setText=function(value){
                         var args=Array.prototype.slice.call(arguments);
-                        if(typeof value==="string")args[0]=nameInSpanish(value,true);
+                        if(typeof value==="string")args[0]=nameInSpanish(value,true)||value;
                         return set.apply(this,args);
                     };
                 }
@@ -861,10 +915,9 @@ function hookMessages(){
                     if(typeof old==="string"&&old!==text){
                         $gameMessage._texts=old.split("\n");
                         state.shown++;
-                    }else if(state.connected){
-                        translatePreservingControls(source,text).catch(function(){
-                            state.errors++;
-                        });
+                    }else{
+                        if(state.connected)translatePreservingControls(source,text).catch(function(){state.errors++;});
+                        else addPrefetch(text,true);
                     }
                 }
             }
@@ -903,6 +956,7 @@ function hookChoices(){
 // Read-only full MV inventory. Never parse plugin source, save files, script
 // commands, variable values, filenames, or event conditions as dialogue.
 var prefetchedMap=null,discovered=new Map(),priorityQueue=[],prefetchQueue=[];
+var initialMapFile="",initialMapScanned=false,initialKeys=new Map(),collectInitial=false;
 var scanStats={files:0,totalFiles:0,ready:0,rejected:0,skipped:0,done:false,limited:false};
 var scanStarted=false,prefetchBusy=false,MAX_DISCOVERED=40000;
 function addPrefetch(text,priority){
@@ -911,6 +965,7 @@ function addPrefetch(text,priority){
     var source=languageFor(text);
     if(!source)return;
     var key=source+"\u0000"+text,item=discovered.get(key);
+    if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
     if(item){
         if(priority&&item.status==="queued"&&!item.priority){
             item.priority=true;priorityQueue.push(item);
@@ -958,7 +1013,14 @@ function scanMap(data,priority){
     });
 }
 function scanDatabase(name,data){
-    if(/^Map\d{3,6}\.json$/.test(name)){scanMap(data,false);return;}
+    if(/^Map\d{3,6}\.json$/.test(name)){
+        collectInitial=name===initialMapFile;
+        try{scanMap(data,collectInitial);}finally{
+            if(collectInitial)initialMapScanned=true;
+            collectInitial=false;
+        }
+        return;
+    }
     if(name==="System.json"){
         if(!data||typeof data!=="object")return;
         addPrefetch(data.gameTitle,true);addPrefetch(data.currencyUnit,true);
@@ -1027,6 +1089,7 @@ function startFullScan(){
                     var data=JSON.parse(raw.replace(/^\uFEFF/,""));
                     if(name==="System.json"&&data&&integer(data.startMapId)&&data.startMapId>0){
                         var first="Map"+("000"+data.startMapId).slice(-Math.max(3,String(data.startMapId).length))+".json";
+                        initialMapFile=first;
                         var p=files.indexOf(first);
                         if(p>=0){files.splice(p,1);files.unshift(first);}
                     }
@@ -1058,7 +1121,16 @@ function nextPrefetch(){
         Promise.all(jobs.map(function(item){
             return translatePreservingControls(item.source,item.text).then(function(out){
                 if(out!==null){if(item.status!=="ready"){item.status="ready";scanStats.ready++;}}
-                else if(item.status!=="ready"){item.status="rejected";scanStats.rejected++;}
+                else if(item.status!=="ready"){
+                    // A transport failure is not a permanent linguistic rejection.
+                    var retry=rejectedKeys.get(item.source+"\u0000"+item.text);
+                    if(!state.connected||(retry&&retry!==Infinity)){
+                        item.status="deferred";
+                        setTimeout(function(){if(item.status==="deferred"){
+                            item.status="queued";(item.priority?priorityQueue:prefetchQueue).push(item);nextPrefetch();
+                        }},Math.min(60000,Math.max(1500,(retry||Date.now()+1500)-Date.now()+30)));
+                    }else{item.status="rejected";scanStats.rejected++;}
+                }
             },function(){
                 item.status="rejected";scanStats.rejected++;state.errors++;
             });
@@ -1068,16 +1140,96 @@ function nextPrefetch(){
         },function(){prefetchBusy=false;state.errors++;});
     },30);
 }
+// First-pass preparation is a bounded, optional title-screen wait, never
+// a wait inside Game_Interpreter or Window_Message. The title keeps running.
+function firstMapProgress(){
+    var ready=0,finished=0;
+    initialKeys.forEach(function(_,key){
+        var item=discovered.get(key);
+        if(item&&item.status==="ready"){ready++;finished++;}
+        else if(item&&item.status==="rejected")finished++;
+    });
+    return {ready:ready,finished:finished,total:initialKeys.size,
+        complete:initialMapScanned&&finished===initialKeys.size};
+}
 function hookTitleStart(){
     if(typeof Scene_Title==="undefined"||!Scene_Title.prototype||
        typeof Scene_Title.prototype.start!=="function")return;
-    var start=Scene_Title.prototype.start;
-    Scene_Title.prototype.start=function(){
+    var proto=Scene_Title.prototype,start=proto.start;
+    proto.start=function(){
         var out=start.apply(this,arguments);
         if(!runtimeActivated){
             runtimeActivated=true;
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
         }
+        return out;
+    };
+    var launch=proto.commandNewGame,update=proto.update;
+    if(typeof launch!=="function"||typeof update!=="function")return;
+    function finish(scene){
+        var gate=scene._iaStartGate;
+        if(!gate)return;
+        scene._iaStartGate=null;
+        if(scene._iaTitleProgress&&typeof scene._iaTitleProgress.hide==="function")scene._iaTitleProgress.hide();
+        // invoke the original title handler exactly once, with its own arguments
+        return launch.apply(scene,gate.args);
+    }
+    proto.commandNewGame=function(){
+        if(this._iaStartGate)return finish(this); // explicit second selection skips
+        var info=firstMapProgress();
+        if((scanStats.done&&!initialMapFile)||info.complete||!content||
+           !this._commandWindow||typeof this._commandWindow.activate!=="function"||
+           typeof this.addWindow!=="function"||typeof Window_Base==="undefined")
+            return launch.apply(this,arguments);
+        try{
+            var width=Math.min(560,Graphics.boxWidth||816);
+            var win=this._iaTitleProgress;
+            if(!win){
+                win=new Window_Base();win.initialize(
+                    Math.max(0,Math.floor(((Graphics.boxWidth||816)-width)/2)),8,width,124);
+                this.addWindow(win);this._iaTitleProgress=win;
+            }
+            if(typeof win.show==="function")win.show();
+            win.visible=true;win.contents.fontSize=18;
+            this._iaStartGate={deadline:Date.now()+25000,args:Array.prototype.slice.call(arguments),last:""};
+            this._commandWindow.activate(); // allow pressing New Game again to skip
+            win.contents.clear();
+            win.drawText("Preparando textos iniciales · "+BUILD_ID,0,0,win.contentsWidth(),"center");
+            win.drawText("Pulsa Nueva partida otra vez para continuar",0,36,win.contentsWidth(),"center");
+            return;
+        }catch(_){
+            this._iaStartGate=null;state.errors++;return launch.apply(this,arguments);
+        }
+    };
+    ["commandContinue","commandOptions"].forEach(function(method){
+        var base=proto[method];if(typeof base!=="function")return;
+        proto[method]=function(){
+            this._iaStartGate=null;
+            if(this._iaTitleProgress&&typeof this._iaTitleProgress.hide==="function")this._iaTitleProgress.hide();
+            return base.apply(this,arguments);
+        };
+    });
+    proto.update=function(){
+        var out=update.apply(this,arguments);
+        var gate=this._iaStartGate;
+        if(!gate)return out;
+        try{
+            var info=firstMapProgress(),remaining=Math.max(0,Math.ceil((gate.deadline-Date.now())/1000));
+            // Never launch a deferred command in a different scene.
+            if(typeof SceneManager!=="undefined"&&SceneManager._scene&&SceneManager._scene!==this){
+                this._iaStartGate=null;return out;
+            }
+            if(info.complete||(scanStats.done&&!initialMapFile)||remaining===0||
+               (typeof Input!=="undefined"&&Input.isTriggered("cancel"))){finish(this);return out;}
+            var label="Textos iniciales: "+info.ready+"/"+info.total+
+                " · "+remaining+" s máx.";
+            var win=this._iaTitleProgress;
+            if(win&&gate.last!==label){
+                gate.last=label;win.contents.clear();
+                win.drawText(label,0,0,win.contentsWidth(),"center");
+                win.drawText("Nueva partida otra vez: continuar sin esperar",0,36,win.contentsWidth(),"center");
+            }
+        }catch(_){state.errors++;if(this._iaStartGate)finish(this);}
         return out;
     };
 }
@@ -1113,7 +1265,7 @@ function setupHud(){
         this.contents.fontSize=18;
         var lines=[
             "IA Traductora · RPG Maker MV",
-            "Idioma: Español",
+            "Español · "+BUILD_ID,
             "Fase: "+state.phase,
             "Motor:",
             state.status,
@@ -1151,9 +1303,7 @@ function setupHud(){
             runtimeActivated=true;
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
         }
-        if(state.connected){
-            try{collectMapText();}catch(_){state.errors++;}
-        }
+        try{collectMapText();}catch(_){state.errors++;}
         if(Input.isTriggered("ia-traductora")&&this._iaPanel){
             this._iaPanel.visible=!this._iaPanel.visible;
             this._iaMini.visible=!this._iaPanel.visible;
@@ -1175,7 +1325,9 @@ try{
     state.phase="MENSAJES";hookMessages();
     state.phase="OPCIONES";hookChoices();
     state.phase="INTERFAZ";hookNativeSurface();hookTitleStart();
-    state.phase="CONEXION";startFullScan();refreshConnection();setInterval(refreshConnection,4500);
+    state.phase="CONEXION";startFullScan();refreshConnection();setInterval(function(){
+        if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
+    },750);
     state.phase="ACTIVO";
 }catch(_){
     // Show a safe *stage* code instead of a generic exception or private path.

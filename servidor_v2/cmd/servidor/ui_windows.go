@@ -249,7 +249,10 @@ func iaStartInstall(){
             if err!=nil{info=err.Error()}else{
                 defer pkg.Close()
                 err=Install(game,pkg)
-                if err!=nil{info=err.Error()}else{info="IA_INSTALACION_COMPLETADA_VERIFICADA"}
+                if err!=nil{info=err.Error()}else{
+                    identity,verifyErr:=installedPackageIdentity(game,pkg)
+                    if verifyErr!=nil{info=verifyErr.Error()}else{info="IA_INSTALACION_COMPLETADA_VERIFICADA|"+identity}
+                }
             }
         }
     }()
@@ -353,6 +356,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             iaEnableWindow.Call(ui.install,0)
         }else if code=="IA_INSTALACION_COMPLETADA_VERIFICADA"{
             iaLog("[IA_INSTALACION_COMPLETADA_VERIFICADA] Listo para iniciar la copia del juego.")
+            if pieces:=strings.SplitN(result,"|",2);len(pieces)==2{iaLog("[IA_VERSION_INSTALADA] "+pieces[1])}
             iaSet(ui.status,"Instalación completa. Reinicia la copia del juego y prueba F10.")
         }else{
             text:=iaFriendlyInstall(code)
@@ -403,7 +407,7 @@ func runUI(){
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
-    iaLog("[IA_TRADUCTORA_LISTA] Selecciona una copia MV. El motor es local y propio.")
+    iaLog("[IA_TRADUCTORA_LISTA] MV-R3-20261123. Selecciona una copia MV. El motor es local.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

@@ -62,6 +62,11 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(ia.quality_reason(lang,original,output),reason)
         self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (8)"))
         self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
+    def test_laughter_is_not_a_translation_for_a_question(self):
+        self.assertEqual(ia.quality_reason("ja","明日は行くの？","(Risas)"),
+                         "IA_QUALITY_LAUGHTER_INVENTED")
+        self.assertIsNone(ia.quality_reason("ja","あははは。","(Risas)"))
+        self.assertIsNone(ia.quality_reason("ja","明日は行くの？","¿Vas mañana?"))
     def test_historical_early_not_young_semantic_gate(self):
         source="お前はいつも早過ぎなんだよ。"
         self.assertEqual(ia.quality_reason("ja",source,

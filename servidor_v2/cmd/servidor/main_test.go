@@ -325,3 +325,24 @@ func TestComplex46PluginMVManifestPreservesExistingGame(t *testing.T){
         t.Fatal("second installation must not duplicate translator")
     }
 }
+
+func TestInstalledIdentityMatchesExactPackage(t *testing.T){
+ game:=createFixture(t)
+ plugin:=filepath.Join(game,"www","js","plugins","IATraductora.js")
+ worker:=filepath.Join(game,brandFolder,".local","Rpg","engine","IATraductora.exe")
+ if err:=os.MkdirAll(filepath.Dir(worker),0700);err!=nil{t.Fatal(err)}
+ script:=[]byte("var BUILD_ID=\"MV-R3-20261123\";\n")
+ motor:=[]byte("new synthetic motor")
+ if err:=os.WriteFile(plugin,script,0600);err!=nil{t.Fatal(err)}
+ if err:=os.WriteFile(worker,motor,0600);err!=nil{t.Fatal(err)}
+ pkg:=&packageReader{manifest:packageManifest{Files:map[string]string{
+  "IATraductora.js":hash(script),"IATraductora.exe":hash(motor),
+ }}}
+ report,err:=installedPackageIdentity(filepath.Join(game,"Game.exe"),pkg)
+ if err!=nil||report!="MV-R3-20261123 SHA256="+hash(script){t.Fatalf("identity %s: %v",report,err)}
+ if err:=os.WriteFile(plugin,[]byte("valid older copy"),0600);err!=nil{t.Fatal(err)}
+ if _,err:=installedPackageIdentity(filepath.Join(game,"Game.exe"),pkg);err==nil{t.Fatal("old plugin falsely verified")}
+ if err:=os.WriteFile(plugin,script,0600);err!=nil{t.Fatal(err)}
+ if err:=os.WriteFile(worker,[]byte("old worker"),0600);err!=nil{t.Fatal(err)}
+ if _,err:=installedPackageIdentity(filepath.Join(game,"Game.exe"),pkg);err==nil{t.Fatal("old worker falsely verified")}
+}

@@ -99,6 +99,8 @@ function fixture(translationDelay=0,options={}){
         this.contents={fontSize:12,outlineWidth:1,clear(){}};
     };
     Window_Base.prototype.contentsWidth=function(){return this.width-20};
+    Window_Base.prototype.hide=function(){this.visible=false;};
+    Window_Base.prototype.show=function(){this.visible=true;};
     Window_Base.prototype.drawTextEx=function(t){
         this.lastTextEx=t;return String(t).length;
     };
@@ -110,8 +112,15 @@ function fixture(translationDelay=0,options={}){
     function Bitmap(){}
     Bitmap.prototype.drawText=function(t){this.lastText=String(t);return t;};
     function Scene_Name(){}
-    function Scene_Title(){this.starts=0;}
+    function Scene_Title(){
+        this.starts=0;this.launches=0;this.frames=0;this.windows=[];
+        this._commandWindow={activate:()=>{this.titleActive=true;}};
+    }
     Scene_Title.prototype.start=function(){this.starts++;};
+    Scene_Title.prototype.commandNewGame=function(){this.launches++;};
+    Scene_Title.prototype.update=function(){this.frames++;};
+    Scene_Title.prototype.addWindow=function(win){this.windows.push(win);};
+    Scene_Title.prototype.commandContinue=function(){this.continued=true;};
     function Window_Message(){this.originalStarts=0;this.updates=0}
     Window_Message.prototype.createSubWindows=function(){
         const name=new Window_Base();name.initialize(0,0,300,90);
@@ -259,7 +268,13 @@ async function testNativeControlsNeverReachNeuralOrChangeOnScreen(){
         {src:"おはようございます。\${actor}",
             expected:"Buenos días.\${actor}"},
         {src:"\\N[2] おはようございます。",
-            expected:"\\N[2] Buenos días."}
+            expected:"\\N[2] Buenos días."},
+        {src:"\\N[2]おはようございます。",
+            expected:"\\N[2] Buenos días."},
+        {src:"\\N<保林 \\N[2]>「おはようございます。」",
+            expected:"\\N<保林 \\N[2]>「Buenos días.」"},
+        {src:"（【おはようございます。】）",expected:"（【Buenos días.】）"},
+        {src:"(おはようございます。",expected:"(Buenos días."}
     ];
     for(const sample of samples){
         const f=fixture(1);await wait(22);
@@ -508,6 +523,10 @@ async function testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts(){
     const originals=Object.assign({},state.files);
     const f=fixture(1,{fsState:state,batch:true});
     const title=new f.context.Scene_Title();title.start();assert.equal(title.starts,1);
+    title.commandNewGame();
+    assert.equal(title.launches,0,"cold title prepares first map without starting the original handler");
+    assert.equal(title.titleActive,true,"title remains interactive during bounded preparation");
+    title.update();assert.equal(title.frames,1,"native title updates are never blocked");
     // Wait for an observed readiness condition, not a scheduler-dependent
     // 350ms deadline. The test still fails if the unvisited map never loads.
     const deadline=Date.now()+2500;
@@ -518,6 +537,9 @@ async function testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts(){
         "never visited map must be translated; posts="+JSON.stringify(f.posts.map(x=>x.text))+"; "+diag);
     // The final network response and cache write may be one turn behind POST.
     await wait(50);
+    title.update();
+    assert.equal(title.launches,1,"first-map preparation launches once");
+    title.update();assert.equal(title.launches,1,"deferred start must not repeat");
     assert.ok(f.posts.some(x=>x.text==="ようこそ。"),"common events must be preloaded");
     assert.ok(f.batches.some(n=>n>1&&n<=6),"genuine batch endpoint must group requests");
     assert.ok(!f.posts.some(x=>/実行禁止|絶対読まない|未知の俳優/.test(x.text)),
@@ -526,6 +548,21 @@ async function testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts(){
     f.$gameMessage._texts=["別の町です。"];const m=new f.context.Window_Message();m.startMessage();
     assert.equal(f.$gameMessage.allText(),"Buenos días.","unvisited map already available on first draw");
     assert.equal(m.originalStarts,1);
+}
+async function testTitlePreparationCanBeSkipped(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const state={files:{},dirs:{[data]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{
+        list:[{code:401,parameters:["はじめまして。"]}]
+    }]}]});
+    const f=fixture(300,{fsState:state,disconnected:true});
+    const title=new f.context.Scene_Title();title.start();
+    title.commandNewGame();
+    assert.equal(title.launches,0);
+    title.commandNewGame();
+    assert.equal(title.launches,1,"explicit second selection skips preparation");
+    title.update();assert.equal(title.launches,1);
 }
 async function testPermanentQualityFailureIsNotRetried(){
     const f=fixture(1,{qualityReject:true});await wait(25);
@@ -554,6 +591,7 @@ async function testBoundedMapPrefetchAndPressure(){
 (async()=>{
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
+    await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();
     await testApprovedBilingualCorrectionsOverridePreviousNeuralCache();
     await testFullNativeMenusAndNameOnlyText();

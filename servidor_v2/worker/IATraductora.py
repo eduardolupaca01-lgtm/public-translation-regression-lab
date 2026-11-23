@@ -26,6 +26,13 @@ def quality_reason(lang, original, output):
         return "IA_QUALITY_NUMBER_MISSING"
     if lang=="ja" and re.search(r"[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff\uff66-\uff9d]",output):
         return "IA_QUALITY_JAPANESE_RESIDUAL"
+    # A stage direction is not a substitute for dialogue. Use a conservative
+    # exact output match, only when the source has no laughter indication.
+    if lang=="ja" and re.fullmatch(r"[\s(\[（【「『]*?(?:risas?|jajaja|ja ja ja)[.!…\s]*[)\]）】」』]*",
+                                  output.strip(),re.IGNORECASE):
+        if not re.search(r"笑|わら|[wｗ]{2,}|(?:あ|は|ふ|へ|え|ひ)[はふへひハフヘヒ]{2,}|ハハ|フフ|へへ|ハッ|フッ",
+                         original,re.IGNORECASE):
+            return "IA_QUALITY_LAUGHTER_INVENTED"
     # TX716's bilingual holdout found 早過ぎ -> "too young" rather
     # than "too early". Reject this time-vs-age confusion, not the game.
     if lang=="ja" and re.search(r"(早過ぎ|早すぎ|遅過ぎ|遅すぎ)",original) and re.search(

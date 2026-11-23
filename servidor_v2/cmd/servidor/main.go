@@ -269,6 +269,33 @@ func Install(gameEXE string,pkg *packageReader)error{
  }
  return verifiedNewInstallation(root,content,list)
 }
+// The receipt may be valid for an older version. Verify the bytes against
+// the selected package before announcing successful installation.
+func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
+ root,content,err:=detectGame(gameEXE);if err!=nil{return "",err}
+ script:=filepath.Join(content,"js","plugins",pluginName+".js")
+ worker:=filepath.Join(root,brandFolder,".local","Rpg","engine","IATraductora.exe")
+ if !ordinary(script)||!ordinary(worker){return "",errors.New("IA_INSTALACION_VERSION_NO_VERIFICADA")}
+ source,err:=os.ReadFile(script)
+ if err!=nil||hash(source)!=pkg.manifest.Files["IATraductora.js"]{
+  return "",errors.New("IA_INSTALACION_VERSION_NO_VERIFICADA")
+ }
+ digest,err:=digestFile(worker)
+ if err!=nil||digest!=pkg.manifest.Files["IATraductora.exe"]{
+  return "",errors.New("IA_INSTALACION_MOTOR_VERSION_NO_VERIFICADA")
+ }
+ build:="SIN-MARCA"
+ const marker="var BUILD_ID=\""
+ if i:=bytes.Index(source,[]byte(marker));i>=0{
+  rest:=source[i+len(marker):]
+  if j:=bytes.IndexByte(rest,'"');j>0&&j<=32{
+   v:=string(rest[:j]);safe:=true
+   for _,r:=range v{if !(r>='A'&&r<='Z'||r>='0'&&r<='9'||r=='-'){safe=false;break}}
+   if safe{build=v}
+  }
+ }
+ return build+" SHA256="+hash(source),nil
+}
 func main(){
  exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
@@ -286,5 +313,8 @@ func main(){
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  defer p.Close()
  if err=Install(*exe,p);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+ identity,err:=installedPackageIdentity(*exe,p)
+ if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+ fmt.Println("[IA_VERSION_INSTALADA] "+identity)
  fmt.Println("IA Traductora: instalación MV verificada. Reinicia el juego.")
 }
