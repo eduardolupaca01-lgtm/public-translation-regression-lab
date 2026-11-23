@@ -183,6 +183,12 @@ jobs:
           python servidor_v2/tools/run_verified_worker.py --worker $worker --game-root $game --diagnostic-file $diagnostic --timeout-seconds 190
           if ($LASTEXITCODE -ne 0) { throw "IA_SERVICIO_PROPIO_NO_ENTREGA_ESPANOL_REAL" }
           Write-Host "SERVIDOR_V2_RPG_MV_PROPIO_EXE_INSTALACION_Y_OPUS_REAL_PASS"
+      - name: Probar complemento MV instalado contra worker real (F10, dialogo y elecciones)
+        shell: pwsh
+        run: |
+          $game=Join-Path $env:RUNNER_TEMP "ia-v2-acceptance-juego-日本語"
+          node servidor_v2/tests/test_mv_real_worker.js $game
+          if ($LASTEXITCODE -ne 0) { throw "IA_COMPLEMENTO_JUEGO_NO_CONECTA_CON_MODELO_REAL" }
       - name: Cifrar siempre la versión final antes de publicarla en GitHub
         shell: pwsh
         run: |
