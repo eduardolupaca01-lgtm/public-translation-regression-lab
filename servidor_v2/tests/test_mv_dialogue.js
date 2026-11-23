@@ -80,6 +80,13 @@ function fixture(translationDelay=0,options={}){
         this._choices=choices.slice();
     };
     const $gameMessage=new Game_Message();
+    function LegacyPromise(executor){
+        const p=new Promise(executor);
+        p.finally=undefined; // simulate NW.js before Promise.finally
+        return p;
+    }
+    LegacyPromise.resolve=Promise.resolve.bind(Promise);
+    LegacyPromise.all=Promise.all.bind(Promise);
     const context={
         window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
         document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
@@ -95,7 +102,7 @@ function fixture(translationDelay=0,options={}){
                 default:throw Error("unexpected dependency "+name);
             }
         },
-        Buffer,Promise,process,Date,Map,Number,Error,
+        Buffer,Promise:options.legacyPromise?LegacyPromise:Promise,process,Date,Map,Number,Error,
         setTimeout,clearTimeout,setInterval(){return 1},
         Window_Base,Window_Message,Scene_Map,Game_Message,
         Graphics:{boxWidth:1280},
@@ -194,6 +201,15 @@ async function testNativeChoiceTranslationAndNoStaleChoiceOverwrite(){
     assert.deepEqual(Array.from(late.$gameMessage._choices),["No, gracias."],
         "late translation must never overwrite a new choice list");
 }
+async function testOldMVRuntimeWithoutPromiseFinally(){
+    const f=fixture(1,{legacyPromise:true});
+    await wait(15);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();
+    msg.startMessage();await wait(20);msg.update();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.",
+        "older NW.js without Promise.finally must still translate");
+}
 async function testMVPathFallbackFromActualPluginScript(){
     const original=path.join("/tmp","servidor-qa-juego-日本語",
         "www","js","plugins","IATraductora.js");
@@ -215,6 +231,7 @@ async function testF10ReportsExactBootStageInsteadOfGenericError(){
     assert.ok(!content.includes("IA_INICIO_COMPLEMENTO_FALLIDO"));
 }
 (async()=>{
+    await testOldMVRuntimeWithoutPromiseFinally();
     await testMVPathFallbackFromActualPluginScript();
     await testF10ReportsExactBootStageInsteadOfGenericError();
     await testJapaneseDialogAndF10();

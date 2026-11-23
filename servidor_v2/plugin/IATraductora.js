@@ -151,7 +151,13 @@ function startWorker(){
                 if(sha.digest("hex")!==marker.worker_sha256)throw Error("Firma incorrecta");
                 var env=Object.assign({},process.env);
                 var local=path.join(sidecar,".local"),tmp=path.join(local,"tmp");
-                fs.mkdirSync(tmp,{recursive:true});
+                // Older RPG Maker MV NW.js builds do not support recursive mkdir.
+                try{fs.mkdirSync(tmp);}catch(e){
+                    if(!e||e.code!=="EEXIST")throw e;
+                }
+                var tempInfo=fs.lstatSync(tmp);
+                if(!tempInfo.isDirectory()||tempInfo.isSymbolicLink())
+                    throw Error("IA_TEMP_NO_SEGURO");
                 env.LOCALAPPDATA=local;env.TEMP=tmp;env.TMP=tmp;env.TMPDIR=tmp;
                 proc=spawn(worker,["--game-root",game,"--parent-pid",String(process.pid),
                     "--diagnostic-file",startupFile],
@@ -178,7 +184,7 @@ function translate(source,text){
     if(cache.has(source+"\u0000"+text))return Promise.resolve(cache.get(source+"\u0000"+text));
     if(pending.has(source+"\u0000"+text))return pending.get(source+"\u0000"+text);
     state.requested++;
-    var call=new Promise(function(resolve){
+    var raw=new Promise(function(resolve){
         var beginning=Date.now(),done=false;
         function attempt(){
             if(done)return;
@@ -191,8 +197,15 @@ function translate(source,text){
             }).catch(function(){setTimeout(attempt,1200);});
         }
         attempt();
-    }).finally(function(){pending.delete(source+"\u0000"+text);});
-    pending.set(source+"\u0000"+text,call);
+    });
+    // Promise.finally is absent on many original RPG Maker MV NW.js builds.
+    var key=source+"\u0000"+text;
+    var call=raw.then(function(value){
+        pending.delete(key);return value;
+    },function(error){
+        pending.delete(key);throw error;
+    });
+    pending.set(key,call);
     return call;
 }
 function isJapanese(s){return /[\u3040-\u30ff\u3400-\u9fff]/.test(s||"");}
