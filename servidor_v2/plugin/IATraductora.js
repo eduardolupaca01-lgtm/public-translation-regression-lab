@@ -8,12 +8,18 @@
 "use strict";
 var BRAND="IA Traductora";
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
-var fs=require("fs"),path=require("path"),crypto=require("crypto");
-var http=require("http"),spawn=require("child_process").spawn;
+// A missing Node module must never prevent the game itself from booting.
+var fs,path,crypto,http,spawn;
+try{
+    fs=require("fs");path=require("path");crypto=require("crypto");
+    http=require("http");spawn=require("child_process").spawn;
+}catch(_){return;}
+if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
-var cache=new Map(),pending=new Map(),maxWait=45000;
+var runtimeActivated=false;
+var cache=new Map(),pending=new Map(),maxWait=45000,messageWait=4500;
 // NW.js versions resolve index.html and Game.exe differently. Detect only an
 // actual MV root by checking its original files; never trust a guessed path.
 function resolveMVGame(){
@@ -131,6 +137,9 @@ function request(route,body,timeout){
     });
 }
 function startWorker(){
+    // Loading two large models during the title/boot scene can starve MV.
+    // Start ONLY after the first Scene_Map.update, never during boot.
+    if(!runtimeActivated){state.status="IA espera entrar al mapa";return;}
     // CTranslate2 can take time to load genuine neural weights on Windows.
     // Never start a second model process while our OWN worker is alive.
     if(proc && Number.isInteger(proc.pid) && proc.pid>0 &&
@@ -265,27 +274,40 @@ function hookMessages(){
     var original=Window_Message.prototype.startMessage;
     Window_Message.prototype.startMessage=function(){
         if(this._iaWaiting)return;
-        if(!$gameMessage||!$gameMessage.hasText())return original.apply(this,arguments);
-        var text=$gameMessage.allText();
-        var source=languageFor(text);
-        if(!source)return original.apply(this,arguments);
-        if(cache.has(source+"\u0000"+text)){
-            $gameMessage._texts=cache.get(source+"\u0000"+text).split("\n");state.shown++;
+        // If the engine is unavailable, show the game's original dialogue
+        // immediately instead of freezing the entire message window.
+        if(!state.connected)return original.apply(this,arguments);
+        try{
+            if(!$gameMessage||!$gameMessage.hasText())return original.apply(this,arguments);
+            var text=$gameMessage.allText();
+            var source=languageFor(text);
+            if(!source)return original.apply(this,arguments);
+            if(cache.has(source+"\u0000"+text)){
+                $gameMessage._texts=cache.get(source+"\u0000"+text).split("\n");state.shown++;
+                return original.apply(this,arguments);
+            }
+            var instance=this;
+            instance._iaWaiting={text:text,at:Date.now(),done:false,translated:null};
+            translatePreservingControls(source,text).then(function(out){
+                if(!instance._iaWaiting||instance._iaWaiting.text!==text)return;
+                instance._iaWaiting.done=true;
+                instance._iaWaiting.translated=out;
+            }).catch(function(){
+                state.errors++;
+                if(instance._iaWaiting&&instance._iaWaiting.text===text){
+                    instance._iaWaiting.done=true;
+                }
+            });
+        }catch(_){
+            this._iaWaiting=null;state.errors++;
             return original.apply(this,arguments);
         }
-        var instance=this;
-        instance._iaWaiting={text:text,at:Date.now(),done:false,translated:null};
-        translatePreservingControls(source,text).then(function(out){
-            if(!instance._iaWaiting||instance._iaWaiting.text!==text)return;
-            instance._iaWaiting.done=true;
-            instance._iaWaiting.translated=out;
-        });
     };
     var update=Window_Message.prototype.update;
     Window_Message.prototype.update=function(){
         if(this._iaWaiting){
             var w=this._iaWaiting;
-            if(!w.done&&Date.now()-w.at<maxWait+1500)return;
+            if(!w.done&&Date.now()-w.at<messageWait)return;
             this._iaWaiting=null;
             // A custom dialogue plugin can advance/change text during async inference.
             // Never paste an old translation over the next scene or speaker.
@@ -380,12 +402,22 @@ function setupHud(){
     var create=Scene_Map.prototype.createAllWindows;
     Scene_Map.prototype.createAllWindows=function(){
         create.apply(this,arguments);
-        this._iaMini=new IAMini();this.addWindow(this._iaMini);
-        this._iaPanel=new IAPanel();this.addWindow(this._iaPanel);
+        // Never prevent map startup when a custom UI plugin rejects our HUD.
+        try{
+            this._iaMini=new IAMini();this.addWindow(this._iaMini);
+            this._iaPanel=new IAPanel();this.addWindow(this._iaPanel);
+        }catch(_){
+            state.errors++;state.status="IA_PANEL_OPCIONAL_INCOMPATIBLE";
+            this._iaMini=null;this._iaPanel=null;
+        }
     };
     var updateScene=Scene_Map.prototype.update;
     Scene_Map.prototype.update=function(){
         updateScene.apply(this,arguments);
+        if(!runtimeActivated){
+            runtimeActivated=true;
+            try{refreshConnection();}catch(_){state.errors++;}
+        }
         if(Input.isTriggered("ia-traductora")&&this._iaPanel){
             this._iaPanel.visible=!this._iaPanel.visible;
             this._iaMini.visible=!this._iaPanel.visible;

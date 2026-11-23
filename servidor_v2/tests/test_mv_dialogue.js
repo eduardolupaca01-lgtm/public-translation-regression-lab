@@ -31,12 +31,16 @@ function fixture(translationDelay=0,options={}){
     };
     let spawnCount=0;
     const fakeHTTP={
-        request(options,callback){
+        request(requestOptions,callback){
             const request=new EventEmitter();
             request.setTimeout=()=>{};
             request.destroy=e=>request.emit("error",e);
             request.end=body=>{
-                const result=options.path==="/status"
+                if(options.disconnected){
+                    setTimeout(()=>request.emit("error",Error("IA connection unavailable")),0);
+                    return;
+                }
+                const result=requestOptions.path==="/status"
                     ?{schema:"ia-traductora-bridge-v1",active:true}
                     :responseFor(JSON.parse(body.toString()));
                 const response=new EventEmitter();
@@ -46,7 +50,7 @@ function fixture(translationDelay=0,options={}){
                     callback(response);
                     response.emit("data",Buffer.from(JSON.stringify(result)));
                     response.emit("end");
-                },options.path==="/status"?0:translationDelay);
+                },requestOptions.path==="/status"?0:translationDelay);
             };
             return request;
         }
@@ -88,7 +92,7 @@ function fixture(translationDelay=0,options={}){
     LegacyPromise.resolve=Promise.resolve.bind(Promise);
     LegacyPromise.all=Promise.all.bind(Promise);
     const context={
-        window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
+        window:{location:{pathname:requestOptions.pathname||path.join(root,"www","index.html")}},
         document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
         Utils:{isNwjs:()=>true},
         require(name){
@@ -230,7 +234,38 @@ async function testF10ReportsExactBootStageInsteadOfGenericError(){
     assert.match(content,/IA_INICIO_RUTA_FALLIDO/);
     assert.ok(!content.includes("IA_INICIO_COMPLEMENTO_FALLIDO"));
 }
+async function testOfflineFailOpenNeverWaitsOnModel(){
+    const f=fixture(0,{disconnected:true});
+    await wait(18);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();
+    msg.startMessage();
+    assert.equal(msg.originalStarts,1,
+        "unavailable worker must show original RPG dialogue immediately");
+    assert.equal(msg._iaWaiting,undefined);
+    msg.update();
+    assert.equal(msg.updates,1,"MV native update must not be blocked offline");
+    assert.equal(f.spawnCount(),0,"worker may not start during boot/title");
+}
+async function testSlowTranslationFallsBackWithinSmallBudget(){
+    const f=fixture(60);
+    await wait(12);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();
+    msg.startMessage();
+    assert.equal(msg.originalStarts,0);
+    msg._iaWaiting.at-=5000;
+    msg.update();
+    assert.equal(msg.originalStarts,1,"slow worker must not block RPG message");
+    assert.equal(f.$gameMessage.allText(),"おはようございます。",
+        "unready translation must leave original content intact");
+    await wait(75);
+    assert.equal(f.$gameMessage.allText(),"おはようございます。",
+        "late response must not overwrite already displayed message");
+}
 (async()=>{
+    await testOfflineFailOpenNeverWaitsOnModel();
+    await testSlowTranslationFallsBackWithinSmallBudget();
     await testOldMVRuntimeWithoutPromiseFinally();
     await testMVPathFallbackFromActualPluginScript();
     await testF10ReportsExactBootStageInsteadOfGenericError();
