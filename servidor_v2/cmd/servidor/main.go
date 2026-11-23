@@ -180,7 +180,7 @@ func appendRegistry(reg []byte)([]byte,error){
   "parameters":map[string]string{}}
  raw,_:=json.Marshal(obj)
  // Insert exactly before closing bracket. The original bytes are kept intact.
- prefix:=reg[:finish-1];suffix:=reg[finish-1:]
+ prefix:=reg[:finish];suffix:=reg[finish:]
  sep:="";if len(entries)>0{sep=","}
  return append(append(append([]byte{},prefix...),[]byte(sep+"\n"+string(raw)+"\n")...),suffix...),nil
 }
