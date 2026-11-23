@@ -52,8 +52,7 @@ func fakePackage(t *testing.T)string{
  directory:=t.TempDir();packageEXE:=filepath.Join(directory,"Servidor.exe")
  required:=map[string][]byte{
  "IATraductora.exe":[]byte("fake neutron FOR TEST ONLY"),
- "IATraductora.js":[]byte("◆ IA Traductora · F10 
- IA Traductora · V95"),
+ "IATraductora.js":[]byte("◆ IA Traductora · F10 \n IA Traductora · V95"),
  "models/opus_ja_es/model.bin":[]byte("m"),
  "models/opus_ja_es/source.spm":[]byte("s"),
  "models/opus_ja_es/target.spm":[]byte("t"),
