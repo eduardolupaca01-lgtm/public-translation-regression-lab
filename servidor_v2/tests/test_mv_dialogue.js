@@ -508,8 +508,16 @@ async function testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts(){
     const originals=Object.assign({},state.files);
     const f=fixture(1,{fsState:state,batch:true});
     const title=new f.context.Scene_Title();title.start();assert.equal(title.starts,1);
-    await wait(350);
-    assert.ok(f.posts.some(x=>x.text==="別の町です。"),"never visited map must be translated");
+    // Wait for an observed readiness condition, not a scheduler-dependent
+    // 350ms deadline. The test still fails if the unvisited map never loads.
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&!f.posts.some(x=>x.text==="別の町です。"))await wait(25);
+    const scene=new f.context.Scene_Map();scene.createAllWindows();
+    const diag=scene.windows[1].drawn.map(x=>x.text).join(" | ");
+    assert.ok(f.posts.some(x=>x.text==="別の町です。"),
+        "never visited map must be translated; posts="+JSON.stringify(f.posts.map(x=>x.text))+"; "+diag);
+    // The final network response and cache write may be one turn behind POST.
+    await wait(50);
     assert.ok(f.posts.some(x=>x.text==="ようこそ。"),"common events must be preloaded");
     assert.ok(f.batches.some(n=>n>1&&n<=6),"genuine batch endpoint must group requests");
     assert.ok(!f.posts.some(x=>/実行禁止|絶対読まない|未知の俳優/.test(x.text)),
