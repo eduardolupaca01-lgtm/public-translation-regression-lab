@@ -40,9 +40,17 @@ func TestWinProcSelectorCancelKeepsWindowAlive(t *testing.T){
     previous:=iaSelectFile
     iaSelectFile=func(_ uintptr)(string,error){return "",nil}
     defer func(){iaSelectFile=previous}()
-    previousUI:=iaCurrentUI
-    iaCurrentUI=iaUI{hwnd:0,browse:42,gameFile:"C:\\Games\\Game.exe"}
-    defer func(){iaCurrentUI=previousUI}()
+    originalGame:=iaCurrentUI.gameFile
+    originalBrowse:=iaCurrentUI.browse
+    originalWindow:=iaCurrentUI.hwnd
+    iaCurrentUI.gameFile="C:\\Games\\Game.exe"
+    iaCurrentUI.browse=42
+    iaCurrentUI.hwnd=0
+    defer func(){
+        iaCurrentUI.gameFile=originalGame
+        iaCurrentUI.browse=originalBrowse
+        iaCurrentUI.hwnd=originalWindow
+    }()
     iaWinProc(0,iaWMCommand,iaCmdBrowse,42)
     if iaCurrentUI.gameFile!="C:\\Games\\Game.exe"{
         t.Fatal("cancelling picker must keep previously selected executable")

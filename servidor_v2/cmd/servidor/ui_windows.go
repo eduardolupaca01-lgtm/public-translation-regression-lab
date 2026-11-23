@@ -132,7 +132,7 @@ func iaControl(parent uintptr,klass,title string,style uint32,x,y,width,height,i
     win,_,_:=iaCreateWindow.Call(0,uintptr(unsafe.Pointer(iaUTF16(klass))),
         uintptr(unsafe.Pointer(iaUTF16(title))),uintptr(style)|iaWSVisible|iaWSChild,
         uintptr(x),uintptr(y),uintptr(width),uintptr(height),parent,uintptr(id),0,0)
-    if win!=0{iaApplyControlFont(win,klass,id)}
+    if win!=0{iaApplyControlFont(win,klass,id,title)}
     return win
 }
 func iaSet(hwnd uintptr,text string){

@@ -59,6 +59,7 @@ var (
     iaThemeFontBold uintptr
     iaThemeFontTitle uintptr
     iaThemeFontButton uintptr
+    iaThemeFontSection uintptr
 )
 func iaRGB(red,green,blue uint32)uintptr{return uintptr(red|(green<<8)|(blue<<16))}
 func iaBrush(rgb uintptr)uintptr{
@@ -83,23 +84,29 @@ func iaThemeInit(){
     iaThemeFontNormal=iaFont(17,400)
     iaThemeFontBold=iaFont(18,700)
     iaThemeFontTitle=iaFont(33,700)
+    iaThemeFontSection=iaFont(24,700)
     iaThemeFontButton=iaFont(18,700)
 }
 func iaThemeDestroy(){
     for _,obj:=range []uintptr{
         iaThemeBrushHeader,iaThemeBrushSide,iaThemeBrushPanel,iaThemeBrushWhite,
         iaThemeBrushStatus,iaThemeFontNormal,iaThemeFontBold,iaThemeFontTitle,
-        iaThemeFontButton,
+        iaThemeFontButton,iaThemeFontSection,
     }{
         if obj!=0{iaDeleteObject.Call(obj)}
     }
 }
-func iaApplyControlFont(window uintptr,klass string,id int){
+func iaApplyControlFont(window uintptr,klass string,id int,title string){
     var font=iaThemeFontNormal
     if id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClose||(id>=300&&id<=305){
         font=iaThemeFontButton
     }
-    if klass=="STATIC"&&font!=0{font=iaThemeFontBold}
+    if klass=="STATIC"&&font!=0{
+        font=iaThemeFontBold
+        if title=="Servidor"{font=iaThemeFontTitle}
+        if title=="RPG"{font=iaThemeFontSection}
+        if title=="Listo para instalar el traductor."{font=iaThemeFontNormal}
+    }
     if font!=0{iaSendMessage.Call(window,iaWMSetFont,font,1)}
 }
 func iaRectFill(hdc uintptr,r iaRect,brush uintptr){
