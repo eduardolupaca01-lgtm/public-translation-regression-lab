@@ -59,7 +59,7 @@ class EngineTests(unittest.TestCase):
         for lang,original,output,reason in invalid:
             with self.subTest(reason=reason):
                 self.assertEqual(ia.quality_reason(lang,original,output),reason)
-        self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (08)"))
+        self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (8)"))
         self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
     def test_authentication(self):
         with self.assertRaises(HTTPError) as e:self.http("/status",token="0"*64)
