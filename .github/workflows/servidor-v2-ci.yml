@@ -1,0 +1,67 @@
+name: Servidor v2 - motor y complemento propios (MV)
+on:
+  push:
+    branches:
+      - feature/servidor-v2-identidad-rpg-mv-20261123
+    paths:
+      - "servidor_v2/**"
+      - ".github/workflows/servidor-v2-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine-and-installer:
+    name: Validar motor, instalador y Windows x64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.2"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Sintaxis del complemento independiente
+        run: node --check servidor_v2/assets/IATraductora.js
+      - name: Pruebas locales de motor autenticado (doble neuronal, no modelo real)
+        run: python -m unittest discover -s servidor_v2/tests -p 'test_*.py' -v
+      - name: Pruebas reales de instalador Go con juego MV sintético y rutas japonesas
+        run: |
+          cd servidor_v2
+          go test -v ./...
+      - name: Análisis estático Go
+        run: |
+          cd servidor_v2
+          go vet ./...
+      - name: Compilar Servidor.exe para Windows x64 sin dependencias heredadas
+        run: |
+          mkdir -p servidor_v2/dist
+          cd servidor_v2
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o dist/Servidor.exe ./cmd/servidor
+          test -s dist/Servidor.exe
+      - name: Prohibir nombres heredados activos en nueva aplicación
+        shell: python
+        run: |
+          from pathlib import Path
+          paths=[
+              Path("servidor_v2/worker/IATraductora.py"),
+              Path("servidor_v2/assets/IATraductora.js"),
+              Path("servidor_v2/tools/pack.py")
+          ]
+          for path in paths:
+              txt=path.read_text("utf-8").lower()
+              for bad in ("tenshixgame", "tenshigame", "tx771", "tx777", "tx779"):
+                  if bad in txt:
+                      raise SystemExit("NUEVA_APLICACION_DEPENDENCIA_HEREDADA: "+path.name)
+          print("IDENTIDAD_PROPIA_DEL_MOTOR_Y_PLUGIN_VERIFICADA")
+      - name: Publicar SOLO fuente y ejecutable bootstrap de prueba, sin modelo neuronal
+        uses: actions/upload-artifact@v4
+        with:
+          name: SERVIDOR-V2-BOOTSTRAP-SIN-MODELO-NO-INSTALAR
+          path: servidor_v2/dist/Servidor.exe
+          retention-days: 7
