@@ -61,6 +61,7 @@ jobs:
           python tools/servidor/patch_servidor_v4.py --self-test
           python tools/servidor/patch_servidor_v5.py --self-test
           python tools/servidor/patch_servidor_v6.py --self-test
+          python tools/servidor/probe_game_local_worker.py --self-test
           python tools/publication_guard.py
           echo "EDUARDO_ORIGINAL_PUBLIC_ORCHESTRATION_ONLY_PASS"
 
@@ -482,6 +483,8 @@ jobs:
           [System.IO.File]::WriteAllBytes($gameExe,[byte[]]@(77,90,0,0))
           '{}' | Set-Content -LiteralPath (Join-Path $data 'System.json') -Encoding UTF8
           'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js 'plugins.js') -Encoding UTF8
+          '// synthetic MV engine, not executed' | Set-Content -LiteralPath (Join-Path $js 'rpg_core.js') -Encoding UTF8
+          '// synthetic MV managers, not executed' | Set-Content -LiteralPath (Join-Path $js 'rpg_managers.js') -Encoding UTF8
           Invoke-TX771PortableSmoke -TargetExe $exe -SelectedGame $gameExe -CaseName "cold"
           $folder = Join-Path $game "Tenshixgame-IA"
           $worker = Join-Path $folder ".local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
@@ -495,7 +498,7 @@ jobs:
             throw "TX771_ORIGINAL_PORTABLE_MODEL_SHA_MISMATCH"
           }
           Write-Host "TX771_PORTABLE_ORIGINAL_V95_INSTALL_GAME_VOLUME_PASS"
-          $copy = Join-Path $env:RUNNER_TEMP "tx771-relocated-full-game"
+          $copy = Join-Path $env:RUNNER_TEMP "tx771-relocated-full-game-日本語"
           Copy-Item -LiteralPath $game -Destination $copy -Recurse
           Invoke-TX771PortableSmoke -TargetExe $exe -SelectedGame (Join-Path $copy "Game.exe") -CaseName "relocated"
           $copyWorker=Join-Path $copy "Tenshixgame-IA\.local\TENSHIXGAME-RPG\engine\engine\TenshixgameAI.exe"
@@ -505,6 +508,14 @@ jobs:
           Write-Host "TX771_PORTABLE_RELOCATED_ORIGINAL_V95_SHA_PASS"
           Remove-Item Env:TX771_PORTABLE_GAME_EXE -ErrorAction SilentlyContinue
           Remove-Item Env:TX541_RPG_DIAGNOSTIC_FILE -ErrorAction SilentlyContinue
+
+      - name: SERVIDOR TX781 prove real V95 boots with game-local TEMP and translates Japanese in Unicode MV root
+        shell: pwsh
+        run: |
+          $game=Join-Path $env:RUNNER_TEMP "tx771-relocated-full-game-日本語"
+          python ci/tools/servidor/probe_game_local_worker.py --game-root $game --runner-temp $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_TX781_REAL_V95_IN_GAME_RUNTIME_NOT_PROVEN_HOLD" }
+          Write-Host "SERVIDOR_TX781_GAME_LOCAL_TMP_HTTP_SPANISH_PASS"
 
       - name: Encrypt private original EXE so public Actions never exposes the underlying binary
         shell: pwsh
