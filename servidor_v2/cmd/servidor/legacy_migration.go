@@ -3,8 +3,11 @@ package main
 // Migración verificable desde una instalación anterior, sólo dentro de
 // una COPIA cerrada del juego. No ejecuta ni importa el motor anterior.
 import(
+ "crypto/sha256"
+ "encoding/hex"
  "encoding/json"
  "errors"
+ "io"
  "os"
  "path/filepath"
  "strings"
@@ -47,8 +50,8 @@ func verifiedOldMigration(game,content string,current []byte)(*migrationPlan,err
  }
  worker:=filepath.Join(sidecar,".local","TENSHIXGAME-RPG","engine","engine","TenshixgameAI.exe")
  if !ordinary(worker){return nil,errors.New("IA_MIGRACION_MOTOR_ORIGINAL_AUSENTE")}
- b,err:=os.ReadFile(worker)
- if err!=nil||hash(b)!=owner.WorkerSHA{return nil,errors.New("IA_MIGRACION_FIRMA_ORIGINAL_INVALIDA")}
+ sum,err:=digestFile(worker)
+ if err!=nil||sum!=owner.WorkerSHA{return nil,errors.New("IA_MIGRACION_FIRMA_ORIGINAL_INVALIDA")}
  oldPlugin:=filepath.Join(content,"js","plugins","TenshixgameRPGLive.js")
  if !ordinary(oldPlugin){return nil,errors.New("IA_MIGRACION_COMPLEMENTO_ANTIGUO_NO_VERIFICADO")}
  oldJS,err:=os.ReadFile(oldPlugin)
@@ -66,7 +69,7 @@ func verifiedOldMigration(game,content string,current []byte)(*migrationPlan,err
   receiptBytes,e:=os.ReadFile(journalFile)
   if e!=nil||len(receiptBytes)>4096{continue}
   var journal oldPluginJournal
-  if json.Unmarshal(receiptBytes,&journal)!=nil||journal.Engine!="mv"||
+  if json.Unmarshal(receiptBytes,&journal)!=nil||journal.Schema!="tenshixgame-rpg-live-plugin-v1"||journal.Engine!="mv"||
     journal.Status!="INSTALLED"||len(journal.PluginSHA)!=64||
     len(journal.OriginalSHA)!=64||len(journal.UpdatedSHA)!=64{continue}
   if hash(current)!=journal.UpdatedSHA||hash(oldJS)!=journal.PluginSHA{continue}
@@ -117,4 +120,47 @@ func archiveOldMigration(plan *migrationPlan,newRoot,registry,newPlugin string)e
 }
 func hashMustRead(file string)string{
  b,err:=os.ReadFile(file);if err!=nil{return ""};return hash(b)
+}
+
+
+// Reinstalación idempotente sólo si todos los bytes ya coinciden con el
+// manifiesto que escribió esta aplicación. Nunca confundir nombre con firma.
+func verifiedNewInstallation(root,content string,registry []byte)error{
+    folder:=filepath.Join(root,brandFolder)
+    ownerFile:=filepath.Join(folder,"owner-v1.json")
+    journalFile:=filepath.Join(folder,"install","receipt.json")
+    if !ordinary(ownerFile)||!ordinary(journalFile){
+        return errors.New("IA_NUEVA_INSTALACION_SIN_MARCADOR_VERIFICABLE")
+    }
+    var marker ownerManifest
+    raw,e:=os.ReadFile(ownerFile)
+    if e!=nil||len(raw)>2048||json.Unmarshal(raw,&marker)!=nil||
+       marker.Schema!=ownerSchema{return errors.New("IA_NUEVA_PROPIEDAD_NO_VERIFICADA")}
+    var receipt installReceipt
+    raw,e=os.ReadFile(journalFile)
+    if e!=nil||json.Unmarshal(raw,&receipt)!=nil||
+       receipt.Schema!="ia-traductora-install-v1"||receipt.Status!="INSTALLED"||
+       hash(registry)!=receipt.AfterSHA||marker.PluginSHA!=receipt.PluginSHA{
+        return errors.New("IA_INSTALACION_CAMBIO_REGISTRO")
+    }
+    plugin:=filepath.Join(content,"js","plugins",pluginName+".js")
+    engine:=filepath.Join(folder,".local","Rpg","engine","IATraductora.exe")
+    if !ordinary(plugin)||!ordinary(engine)||hashMustRead(plugin)!=marker.PluginSHA{
+        return errors.New("IA_INSTALACION_COMPLEMENTO_NO_VERIFICADO")
+    }
+    workerSum,err:=digestFile(engine)
+    if err!=nil||workerSum!=marker.WorkerSHA{
+        return errors.New("IA_INSTALACION_MOTOR_NO_VERIFICADO")
+    }
+    if _,err=os.Lstat(filepath.Join(root,"Tenshixgame-IA"));err==nil{
+        return errors.New("IA_MIGRACION_ANTERIOR_AUN_VISIBLE")
+    }
+    return nil
+}
+
+func digestFile(filename string)(string,error){
+    in,e:=os.Open(filename);if e!=nil{return "",e};defer in.Close()
+    h:=sha256.New()
+    if _,e=io.CopyBuffer(h,in,make([]byte,256*1024));e!=nil{return "",e}
+    return hex.EncodeToString(h.Sum(nil)),nil
 }
