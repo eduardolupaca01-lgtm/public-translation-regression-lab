@@ -182,10 +182,35 @@ def publish(service,port):
         if tmp.exists():tmp.unlink()
     return dest
 
-def run(service):
+def monitor_game_lifetime(http, parent_pid):
+    """Follow the real Windows process HANDLE so PID reuse is harmless."""
+    if os.name != "nt" or parent_pid <= 0:
+        return
+    import ctypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    kernel.WaitForSingleObject.restype = ctypes.c_uint32
+    kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel.CloseHandle.restype = ctypes.c_int
+    handle = kernel.OpenProcess(0x00100000, 0, parent_pid)
+    if not handle:
+        raise RuntimeError("IA_PARENT_PID_INVALIDO")
+    def watch():
+        try:
+            if kernel.WaitForSingleObject(handle, 0xFFFFFFFF) == 0:
+                http.shutdown()
+        finally:
+            kernel.CloseHandle(handle)
+    threading.Thread(target=watch, daemon=True, name="IA-Game-Lifetime").start()
+
+def run(service,parent_pid=0):
     http=ThreadingHTTPServer(("127.0.0.1",0),make_handler(service))
     dest=publish(service,http.server_port)
-    try:http.serve_forever(poll_interval=0.5)
+    try:
+        monitor_game_lifetime(http,parent_pid)
+        http.serve_forever(poll_interval=0.5)
     finally:
         http.server_close()
         try:
@@ -199,6 +224,8 @@ def safe_startup_code(error):
     raw = str(error).lower()
     if "version" in raw and ("model" in raw or "binary" in raw):
         return "IA_MODELO_VERSION_INCOMPATIBLE"
+    if "ia_parent_pid_invalido" in raw:
+        return "IA_PARENT_PID_INVALIDO"
     if "sentencepiece" in raw or "ctranslate2" in raw:
         return "IA_LIBRERIA_NEURONAL_FALTANTE"
     if "model" in raw and ("path" in raw or "file" in raw):
@@ -241,7 +268,7 @@ def main():
             raise ValueError("IA_GAME_ROOT_FALTANTE")
         service=Service(args.game_root,engine)
         write_startup_code(args.diagnostic_file,"IA_MODELOS_CARGADOS_SERVICIO_INICIANDO")
-        run(service)
+        run(service,args.parent_pid)
     except Exception as exc:
         write_startup_code(args.diagnostic_file,safe_startup_code(exc))
         raise SystemExit(1)

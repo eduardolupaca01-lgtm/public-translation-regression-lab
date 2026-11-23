@@ -226,3 +226,14 @@ func TestRecoverGameFailClosedOnAlteredUserRegistryAndBackup(t *testing.T){
     !strings.Contains(e.Error(),"RESPALDO_ALTERADO"){t.Fatalf("must reject tampered backup: %v",e)}
   if got,_:=os.ReadFile(registry);!bytes.Equal(got,current){t.Fatal("tampered backup caused changes")}
 }
+
+func TestInactivePluginDoesNotCountAsInstalled(t *testing.T){
+    reg:=[]byte("var $plugins=[{\"name\":\"IATraductora\",\"status\":false,\"parameters\":{}}];")
+    if _,e:=appendRegistry(reg);e==nil||!strings.Contains(e.Error(),"DESACTIVADO"){
+        t.Fatalf("inactive registry must not be silently accepted: %v",e)
+    }
+    duplicate:=[]byte("var $plugins=[{\"name\":\"IATraductora\",\"status\":true},{\"name\":\"IATraductora\",\"status\":true}];")
+    if _,e:=appendRegistry(duplicate);e==nil||!strings.Contains(e.Error(),"DUPLICADO"){
+        t.Fatalf("duplicated own plugin must be rejected: %v",e)
+    }
+}

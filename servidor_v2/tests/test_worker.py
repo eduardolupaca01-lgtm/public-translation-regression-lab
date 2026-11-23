@@ -50,6 +50,11 @@ class EngineTests(unittest.TestCase):
         self.assertLessEqual(ia.decoding_budget("en",400),144)
         self.assertLessEqual(ia.decoding_budget("ja",400),300)
         self.assertGreater(ia.decoding_budget("ja",20),0)
+    def test_parent_lifetime_diagnostic_and_linux_noop(self):
+        self.assertEqual(ia.safe_startup_code(RuntimeError("IA_PARENT_PID_INVALIDO")),
+                         "IA_PARENT_PID_INVALIDO")
+        if ia.os.name!="nt":
+            ia.monitor_game_lifetime(self.server,123456789)
     def test_invalid_languages_fail(self):
         with self.assertRaises(HTTPError) as e:
             self.http("/translate",{"source":"fr","target":"es","text":"Bonjour"})

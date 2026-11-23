@@ -163,6 +163,8 @@ func checkEntries(entries []map[string]json.RawMessage)(bool,error){
   if json.Unmarshal(entry["name"],&name)!=nil{return false,errors.New("IA_COMPLEMENTO_SIN_NOMBRE")}
   _=json.Unmarshal(entry["status"],&enabled)
   if strings.EqualFold(name,pluginName){
+   if installed{return false,errors.New("IA_COMPLEMENTO_REGISTRADO_DUPLICADO")}
+   if !enabled{return false,errors.New("IA_COMPLEMENTO_DESACTIVADO")}
    installed=true
   }
   if enabled&&strings.EqualFold(name,"TenshixgameRPGLive"){

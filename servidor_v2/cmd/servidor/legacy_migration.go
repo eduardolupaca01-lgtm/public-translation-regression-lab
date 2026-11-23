@@ -143,6 +143,10 @@ func verifiedNewInstallation(root,content string,registry []byte)error{
        hash(registry)!=receipt.AfterSHA||marker.PluginSHA!=receipt.PluginSHA{
         return errors.New("IA_INSTALACION_CAMBIO_REGISTRO")
     }
+    _,entries,e:=parseRegistry(registry)
+    if e!=nil{return errors.New("IA_INSTALACION_REGISTRO_NO_VALIDO")}
+    active,e:=checkEntries(entries)
+    if e!=nil||!active{return errors.New("IA_INSTALACION_PLUGIN_NO_ACTIVO")}
     plugin:=filepath.Join(content,"js","plugins",pluginName+".js")
     engine:=filepath.Join(folder,".local","Rpg","engine","IATraductora.exe")
     if !ordinary(plugin)||!ordinary(engine)||hashMustRead(plugin)!=marker.PluginSHA{
