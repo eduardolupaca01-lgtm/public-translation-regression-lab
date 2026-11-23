@@ -57,6 +57,7 @@ var(
     iaPostQuitMessage=iaUser32.NewProc("PostQuitMessage")
     iaRegClass=iaUser32.NewProc("RegisterClassExW")
     iaGetModule=iaKernel32.NewProc("GetModuleHandleW")
+    iaInvalidateRect=iaUser32.NewProc("InvalidateRect")
 )
 type iaWndClass struct{
     Size uint32
@@ -357,6 +358,9 @@ func runUI(){
     ui.status=ui.statusLabel
     ui.copyBtn=iaControl(hwnd,"BUTTON","Copiar diagnóstico",0,230,710,534,36,iaCmdCopy)
     ui.closeBtn=iaControl(hwnd,"BUTTON","Cerrar",0,792,710,218,36,iaCmdClose)
+    // The header STATIC is painted during CreateWindowExW, before titleLabel
+    // receives its HWND. Force a second paint with the dark header brush.
+    if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaLog("[IA_TRADUCTORA_LISTA] Selecciona una copia MV. El motor es local y propio.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
