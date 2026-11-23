@@ -91,11 +91,14 @@ function initPaths(){
     descriptorFile=path.join(content,"data","IATraductora","bridge.json");
     startupFile=path.join(sidecar,".local","Rpg","startup-status.json");
 }
+function integer(v){
+    return typeof v==="number"&&isFinite(v)&&Math.floor(v)===v;
+}
 function descriptor(){
     if(!ordinary(descriptorFile))return null;
     try{
         var d=JSON.parse(fs.readFileSync(descriptorFile,"utf8"));
-        if(d.schema!=="ia-traductora-bridge-v1"||!Number.isInteger(d.port)||
+        if(d.schema!=="ia-traductora-bridge-v1"||!integer(d.port)||
            d.port<1024||d.port>65535||!/^[0-9a-f]{64}$/.test(d.token)||!(d.pid>0))return null;
         return d;
     }catch(_){return null;}
@@ -114,7 +117,10 @@ function request(route,body,timeout){
     return new Promise(function(resolve,reject){
         var d=descriptor();
         if(!d){reject(Error("Sin conexión local"));return;}
-        var payload=body?Buffer.from(JSON.stringify(body),"utf8"):null;
+        // Buffer.from was added after many deployed RPG Maker MV NW.js versions.
+        var payload=body?(typeof Buffer.from==="function"?
+            Buffer.from(JSON.stringify(body),"utf8"):
+            new Buffer(JSON.stringify(body),"utf8")):null;
         var headers={"X-IA-Token":d.token,"Accept":"application/json"};
         if(payload)headers["Content-Type"]="application/json; charset=utf-8";
         var req=http.request({hostname:"127.0.0.1",port:d.port,path:route,
@@ -142,7 +148,7 @@ function startWorker(){
     if(!runtimeActivated){state.status="IA espera entrar al mapa";return;}
     // CTranslate2 can take time to load genuine neural weights on Windows.
     // Never start a second model process while our OWN worker is alive.
-    if(proc && Number.isInteger(proc.pid) && proc.pid>0 &&
+    if(proc && integer(proc.pid) && proc.pid>0 &&
        proc.exitCode===null && !proc.killed){
         state.status="IA cargando modelos";
         return;
@@ -158,7 +164,11 @@ function startWorker(){
         stream.on("end",function(){
             try{
                 if(sha.digest("hex")!==marker.worker_sha256)throw Error("Firma incorrecta");
-                var env=Object.assign({},process.env);
+                var env={};
+                for(var name in process.env){
+                    if(Object.prototype.hasOwnProperty.call(process.env,name))
+                        env[name]=process.env[name];
+                }
                 var local=path.join(sidecar,".local"),tmp=path.join(local,"tmp");
                 // Older RPG Maker MV NW.js builds do not support recursive mkdir.
                 try{fs.mkdirSync(tmp);}catch(e){
