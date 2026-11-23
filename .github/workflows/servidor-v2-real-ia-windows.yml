@@ -129,7 +129,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "IA_SERVIDOR_EXE_NO_COMPILA" }
           } finally { Pop-Location }
           $out=Join-Path $env:RUNNER_TEMP "Servidor.exe"
-          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/assets/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --out $out
+          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --out $out
           if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $out)) {
             throw "IA_SERVIDOR_PROPIO_PAQUETE_INVALIDO"
           }

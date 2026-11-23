@@ -27,7 +27,7 @@ jobs:
         with:
           node-version: "22"
       - name: Sintaxis del complemento independiente
-        run: node --check servidor_v2/assets/IATraductora.js
+        run: node --check servidor_v2/plugin/IATraductora.js
       - name: Pruebas locales de motor autenticado (doble neuronal, no modelo real)
         run: python -m unittest discover -s servidor_v2/tests -p 'test_*.py' -v
       - name: Pruebas reales de instalador Go con juego MV sintético y rutas japonesas
@@ -50,7 +50,7 @@ jobs:
           from pathlib import Path
           paths=[
               Path("servidor_v2/worker/IATraductora.py"),
-              Path("servidor_v2/assets/IATraductora.js"),
+              Path("servidor_v2/plugin/IATraductora.js"),
               Path("servidor_v2/tools/pack.py")
           ]
           for path in paths:
