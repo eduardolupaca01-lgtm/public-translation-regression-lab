@@ -10,6 +10,11 @@ SCHEMA="ia-traductora-bridge-v1"
 MAX_TEXT=1800
 MODELS={"ja":"opus_ja_es","en":"opus_en_es"}
 
+def decoding_budget(language: str, source_tokens: int) -> int:
+    if language == "en":
+        return min(144, max(32, source_tokens*3+16))
+    return min(300, max(48, source_tokens*3+24))
+
 class NeuralOPUS:
     def __init__(self, engine: Path):
         try:
@@ -67,9 +72,19 @@ class NeuralOPUS:
             tokens = source.encode(text, out_type=str)
             if not tokens:
                 raise ValueError("IA_TEXTO_VACIO")
-            result = model.translate_batch([tokens], beam_size=4,
-                                           max_decoding_length=300)
-            return target.decode(result[0].hypotheses[0]).strip()
+            # English model can loop for very short RPG dialogue when the
+            # decoding budget is a flat 300. Bound by source tokens and
+            # explicitly discourage repeated 3-grams on the English route.
+            kwargs = {"beam_size": 4,
+                      "max_decoding_length": decoding_budget(lang, len(tokens))}
+            if lang == "en":
+                kwargs["repetition_penalty"] = 1.15
+                kwargs["no_repeat_ngram_size"] = 3
+            result = model.translate_batch([tokens], **kwargs)
+            output = target.decode(result[0].hypotheses[0]).strip()
+            if lang == "en" and len(output) > min(900, max(180, len(text)*5)):
+                raise RuntimeError("IA_EN_EXCESO_LONGITUD")
+            return output
 
 def game_root(exe_root:Path)->tuple[Path,Path]:
     root=exe_root.resolve(strict=True)

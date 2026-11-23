@@ -70,7 +70,11 @@ def run(game:Path):
         raise RuntimeError("IA_INGLES_SIN_TRADUCCION_REAL")
     if re.search("[\\u3040-\\u30ff\\u3400-\\u9fff\\ufffd]",translated_en):
         raise RuntimeError("IA_INGLES_IDIOMA_INCORRECTO")
-    if len(translated_en)>1000:raise RuntimeError("IA_INGLES_TRADUCCION_NO_ACOTADA")
+    if len(translated_en)>max(180,len(english)*5):
+        raise RuntimeError("IA_INGLES_TRADUCCION_NO_ACOTADA")
+    if not re.search(r"\b(gracias|agradezco|agradecemos|ayuda|asistencia)\b",
+                     translated_en.casefold()):
+        raise RuntimeError("IA_INGLES_CONTENIDO_NO_VALIDADO")
     print("SERVIDOR_V2_REAL_OPUS_INGLES_A_ESPANOL_PASS")
 if __name__=="__main__":
     parser=argparse.ArgumentParser()

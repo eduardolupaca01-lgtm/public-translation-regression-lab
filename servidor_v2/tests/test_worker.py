@@ -45,6 +45,11 @@ class EngineTests(unittest.TestCase):
         before=data.read_bytes()
         self.http("/translate",{"source":"ja","target":"es","text":"おはよう"})
         self.assertEqual(data.read_bytes(),before)
+    def test_bounded_neural_decoding_budgets(self):
+        self.assertEqual(ia.decoding_budget("en",2),32)
+        self.assertLessEqual(ia.decoding_budget("en",400),144)
+        self.assertLessEqual(ia.decoding_budget("ja",400),300)
+        self.assertGreater(ia.decoding_budget("ja",20),0)
     def test_invalid_languages_fail(self):
         with self.assertRaises(HTTPError) as e:
             self.http("/translate",{"source":"fr","target":"es","text":"Bonjour"})
