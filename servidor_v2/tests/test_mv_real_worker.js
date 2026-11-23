@@ -17,10 +17,12 @@ const intervals=[],children=[];
 function Window_Base(){}
 Window_Base.prototype.initialize=function(x,y,width,height){
     this.x=x;this.y=y;this.width=width;this.height=height;
-    this.contents={fontSize:12,outlineWidth:1,clear(){}};
+    this.drawn=[];
+    const self=this;
+    this.contents={fontSize:12,outlineWidth:1,clear(){self.drawn=[];}};
 };
 Window_Base.prototype.contentsWidth=function(){return this.width-24;};
-Window_Base.prototype.drawText=function(){};
+Window_Base.prototype.drawText=function(value){this.drawn.push(String(value));};
 function Window_Message(){this.starts=0;}
 Window_Message.prototype.startMessage=function(){this.starts++;};
 Window_Message.prototype.update=function(){};
@@ -80,6 +82,13 @@ async function run(){
     assert.equal(scene.windows[1].visible,true,"IA_F10_PANEL_NOT_VISIBLE");
     keyPressed=true;scene.update();keyPressed=false;
     assert.equal(scene.windows[1].visible,false,"IA_F10_PANEL_NOT_CLOSED");
+    // In fail-open mode the worker is intentionally not launched during
+    // title/boot. Wait for an actual authenticated connection after Map.update.
+    await until(()=>{
+        if(!scene.windows[1]||typeof scene.windows[1].refresh!=="function")return false;
+        scene.windows[1].refresh();
+        return scene.windows[1].drawn.some(line=>line.indexOf("IA local conectada")!==-1);
+    },120000,"IA_WORKER_DID_NOT_CONNECT_AFTER_MAP");
 
     gameMessage._texts=["\\N[2] おはようございます。"];
     const dialog=new Window_Message();
