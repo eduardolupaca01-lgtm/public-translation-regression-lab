@@ -28,6 +28,8 @@ jobs:
           node-version: "22"
       - name: Sintaxis del complemento independiente
         run: node --check servidor_v2/plugin/IATraductora.js
+      - name: Probar diálogos MV reales en shim NW.js (identidad F10, JA/EN, caché y carreras)
+        run: node servidor_v2/tests/test_mv_dialogue.js
       - name: Pruebas locales de motor autenticado (doble neuronal, no modelo real)
         run: python -m unittest discover -s servidor_v2/tests -p 'test_*.py' -v
       - name: Pruebas reales de instalador Go con juego MV sintético y rutas japonesas
