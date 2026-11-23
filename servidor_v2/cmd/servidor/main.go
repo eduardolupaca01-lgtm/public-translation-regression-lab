@@ -273,8 +273,7 @@ func main(){
  exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
  flag.Parse()
- if *exe==""{fmt.Println("Servidor · IA Traductora · RPG Maker MV
-Uso: Servidor.exe --game C:\ruta\Game.exe");os.Exit(2)}
+ if *exe==""{fmt.Println("Servidor · IA Traductora · RPG Maker MV\nUso: Servidor.exe --game C:\\Juegos\\Game.exe");os.Exit(2)}
  source:=*payload;if source==""{var err error;source,err=os.Executable();if err!=nil{fmt.Fprintln(os.Stderr,"IA_EXE_NO_DISPONIBLE");os.Exit(1)}}
  p,err:=readPackage(source)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
