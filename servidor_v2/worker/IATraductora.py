@@ -224,6 +224,27 @@ class NeuralOPUS:
                 except (RuntimeError,ValueError):
                     # Keep the first-pass successes even if recovery fails.
                     pass
+            # A beam can repeat despite the ordinary N-best search. For
+            # rejected English only, try short per-sentence decoding with
+            # independent budgets. A fallback must pass the same QA; never
+            # accept corrupted or excessively long output just to pass CI.
+            if lang=="en":
+                for i,answer in enumerate(answers):
+                    if answer is not None:
+                        continue
+                    limit=max(12,min(96,len(encoded[i])*2+8))
+                    for beam in (1,3):
+                        options=dict(kwargs,beam_size=beam,num_hypotheses=beam,
+                                     repetition_penalty=1.2,no_repeat_ngram_size=2,
+                                     disable_unk=True,max_decoding_length=limit)
+                        try:
+                            candidates=model.translate_batch([encoded[i]],**options)
+                            if len(candidates)==1:
+                                answers[i]=choose(texts[i],candidates[0])
+                        except (RuntimeError,ValueError,TypeError):
+                            continue
+                        if answers[i] is not None:
+                            break
             return answers
 
     def translate(self,lang:str,text:str)->str:

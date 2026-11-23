@@ -118,6 +118,29 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(len(model.calls),2)
         self.assertEqual(model.calls[1][0],[["明日は雨が降ります。"]])
         self.assertEqual(model.calls[0][1]["beam_size"],4)
+    def test_english_recovery_short_budget_never_accepts_bad_output(self):
+        class Tokenizer:
+            def encode(self,text,out_type):return [text]
+            def decode(self,hyp):return hyp[0]
+        class Model:
+            def __init__(self):self.calls=[]
+            def translate_batch(self,source,**kw):
+                self.calls.append((source,kw))
+                return [SimpleNamespace(hypotheses=[[
+                    "Buenos días." if t[0]=="Good morning." else
+                    "Gracias por tu ayuda." if kw["beam_size"]==1 else
+                    "Gracias gracias gracias <<<W>"
+                ]]) for t in source]
+        model=Model()
+        backend=ia.NeuralOPUS.__new__(ia.NeuralOPUS)
+        backend.lock=threading.RLock()
+        backend.models={"en":(model,Tokenizer(),Tokenizer())}
+        backend.roots={}
+        result=backend.translate_many("en",["Good morning.","Thank you for your help."])
+        self.assertEqual(result,["Buenos días.","Gracias por tu ayuda."])
+        self.assertEqual([c[1]["beam_size"] for c in model.calls],[4,6,1])
+        self.assertEqual(model.calls[-1][0],[["Thank you for your help."]])
+        self.assertLess(model.calls[-1][1]["max_decoding_length"],model.calls[0][1]["max_decoding_length"])
     def test_historical_early_not_young_semantic_gate(self):
         source="お前はいつも早過ぎなんだよ。"
         self.assertEqual(ia.quality_reason("ja",source,
