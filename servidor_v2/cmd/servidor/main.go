@@ -237,7 +237,21 @@ func Install(gameEXE string,pkg *packageReader)error{
  old,err:=os.ReadFile(registry);if err!=nil||len(old)>4*1024*1024{
   return errors.New("IA_REGISTRO_NO_SE_PUEDE_LEER")
  }
- updated,err:=appendRegistry(old);if err!=nil{return err}
+ updated,err:=appendRegistry(old)
+ var previous *migrationPlan
+ if err!=nil {
+  switch err.Error() {
+  case "IA_PLUGIN_YA_REGISTRADO":
+   return verifiedNewInstallation(root,content,old)
+  case "IA_MIGRACION_PREVIA_REQUERIDA":
+   previous,err=verifiedOldMigration(root,content,old)
+   if err!=nil{return err}
+   updated,err=appendRegistry(previous.OriginalRegistry)
+   if err!=nil{return err}
+  default:
+   return err
+  }
+ }
  if _,e:=os.Lstat(jsfile);!os.IsNotExist(e){return errors.New("IA_COMPLEMENTO_AJENO_EXISTE")}
  script,err:=readZip(pkg.files["IATraductora.js"],1024*1024)
  if err!=nil||hash(script)!=pkg.manifest.Files["IATraductora.js"]{
@@ -267,7 +281,14 @@ func Install(gameEXE string,pkg *packageReader)error{
  if hash(onDisk)!=receipt.PluginSHA||hash(list)!=receipt.AfterSHA{
   return errors.New("IA_INSTALACION_NO_VERIFICADA")
  }
- return nil
+ if previous!=nil {
+  if err=archiveOldMigration(previous,sidecar,registry,jsfile);err!=nil {
+   // No deletion or forced overwrite. A valid new plugin is installed,
+   // but do not claim completion while the old runtime remains visible.
+   return fmt.Errorf("IA_MIGRACION_NO_SE_PUDO_ARCHIVAR: %w",err)
+  }
+ }
+ return verifiedNewInstallation(root,content,list)
 }
 func main(){
  exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV")
