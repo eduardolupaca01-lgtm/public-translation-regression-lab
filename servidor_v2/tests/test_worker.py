@@ -62,6 +62,20 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(ia.quality_reason(lang,original,output),reason)
         self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (8)"))
         self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
+    def test_english_bad_cached_markup_and_repetition(self):
+        import hashlib
+        src="There is a sound at the gate."
+        bad="Hay una voz <<<W wordwordWrap> Hay Hay Hay una voz."
+        self.assertEqual(ia.quality_reason("en",src,bad),"IA_QUALITY_EN_MARKUP")
+        self.assertEqual(ia.quality_reason("en",src,"Una voz voz voz."),"IA_QUALITY_REPEATED_GENERATION")
+        self.assertIsNone(ia.quality_reason("en",src,"Se oye un ruido en la entrada."))
+        key=hashlib.sha256(("en\0"+src).encode()).hexdigest()
+        self.s.memory.db.execute("INSERT INTO translations VALUES (?,?,?,?,?,?)",
+           (key,ia.CACHE_SCHEMA,"en",src,bad,0))
+        self.s.memory.db.commit()
+        self.assertIsNone(self.s.memory.get(key,"en",src))
+        self.assertTrue(self.s.memory.put(key,"en",src,"Se oye un ruido en la entrada."))
+        self.assertEqual(self.s.memory.get(key,"en",src),"Se oye un ruido en la entrada.")
     def test_laughter_is_not_a_translation_for_a_question(self):
         self.assertEqual(ia.quality_reason("ja","明日は行くの？","(Risas)"),
                          "IA_QUALITY_LAUGHTER_INVENTED")

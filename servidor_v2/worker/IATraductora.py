@@ -26,6 +26,21 @@ def quality_reason(lang, original, output):
         return "IA_QUALITY_NUMBER_MISSING"
     if lang=="ja" and re.search(r"[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff\uff66-\uff9d]",output):
         return "IA_QUALITY_JAPANESE_RESIDUAL"
+    if lang=="en":
+        # The bridge is responsible for native controls, not the model.
+        # Reject stale model responses with invented tags and runaway output.
+        if re.search(r"[<>]",output) and not re.search(r"[<>]",original):
+            return "IA_QUALITY_EN_MARKUP"
+        if re.search(r"word\s*wrap|wordwordwrap",output,re.I) and not re.search(r"word\s*wrap",original,re.I):
+            return "IA_QUALITY_EN_MARKUP"
+        if re.search(r"</?wordwrap>",original,re.I):
+            return "IA_QUALITY_EN_CONTROL_INPUT"
+        source_words=re.findall(r"[a-zA-Z']+",original)
+        words=re.findall(r"[a-záéíóúüñ]+",output.lower())
+        if len(output)>max(48,len(original)*2.8+24) or len(words)>max(12,len(source_words)*2.5+6):
+            return "IA_QUALITY_EN_LENGTH"
+        if any(words[i]==words[i-1]==words[i-2] for i in range(2,len(words))):
+            return "IA_QUALITY_REPEATED_GENERATION"
     # A stage direction is not a substitute for dialogue. Use a conservative
     # exact output match, only when the source has no laughter indication.
     if lang=="ja" and re.fullmatch(r"[\s(\[（【「『]*?(?:risas?|jajaja|ja ja ja)[.!…\s]*[)\]）】」』]*",
@@ -193,9 +208,9 @@ class NeuralOPUS:
                         return output
                 return None
             answers=[choose(original,result) for original,result in zip(texts,results)]
-            # Only failed Japanese segments receive a second pass. Accepted
+            # Only failed segments receive a second pass. Accepted
             # results, model files and the usual fast path stay unchanged.
-            rejected=[i for i,answer in enumerate(answers) if answer is None and lang=="ja"]
+            rejected=[i for i,answer in enumerate(answers) if answer is None]
             if rejected:
                 retry_tokens=[encoded[i] for i in rejected]
                 retry=dict(kwargs,beam_size=6,num_hypotheses=5,disable_unk=True,

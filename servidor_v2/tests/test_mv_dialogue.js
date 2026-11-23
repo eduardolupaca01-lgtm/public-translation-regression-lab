@@ -89,6 +89,8 @@ function fixture(translationDelay=0,options={}){
     };
     function responseFor(body){
         posts.push(body);
+        if(options.responses&&Object.prototype.hasOwnProperty.call(options.responses,body.text))
+            return {translated:options.responses[body.text]};
         if(options.namedResponse&&body.text.indexOf("Natsumi")>=0)
             return {translated:"Natsumi vive al lado."};
         return {translated:body.source==="ja"?"Buenos días.":"Hello"===body.text?"Hola.":"Buenos días."};
@@ -129,6 +131,13 @@ function fixture(translationDelay=0,options={}){
     };
     Window_Message.prototype.startMessage=function(){this.originalStarts++};
     Window_Message.prototype.update=function(){this.updates++};
+    if(options.nativeWait){
+        Window_Message.prototype.startWait=function(n){this._waitCount=n;};
+        Window_Message.prototype.updateWait=function(){
+            if(this._waitCount>0){this._waitCount--;return true;}
+            return false;
+        };
+    }
     function Scene_Map(){this.windows=[]}
     Scene_Map.prototype.createAllWindows=function(){};
     Scene_Map.prototype.update=function(){};
@@ -638,6 +647,74 @@ async function testR3P2KnownLinesNotHiddenByOnePendingLine(){
     assert.equal(second.originalStarts,2);
 }
 
+async function testR4EnglishFormatContextAndStaleCache(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語");
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const plain="A visitor opens the gate and enters the hall.";
+    const raw="<WordWrap>A visitor opens the \\m[things]gate\\c[0] and enters the \\c[6]hall\\c[0].";
+    const bad="Hay un sonido <<<W wordwordWrap> Hay Hay Hay \\m[things]gate\\c[0] \\c[6]hall\\c[0].";
+    const old=JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:bad,composed:true})+"\n";
+    const shared={files:{[journal]:old},dirs:{[folder]:true}};
+    const responses={};responses[plain]="Un visitante abre la puerta y entra en el salón.";
+    responses.gate="puerta";responses.hall="salón";
+    const f=fixture(1,{fsState:shared,responses,nativeWait:true});await wait(30);
+    const m=new f.context.Window_Message();
+    f.$gameMessage._texts=[raw];m.startMessage();
+    assert.equal(m.originalStarts,0,"new English message yields before its native start");
+    assert.equal(m.updateWait(),true,"native loop has a one-frame wait");
+    await wait(35);m.startMessage();
+    assert.equal(m.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),
+        "<WordWrap>Un visitante abre la \\m[things]puerta\\c[0] y entra en el \\c[6]salón\\c[0].");
+    assert.ok(f.posts.some(x=>x.text===plain),"model sees complete natural context");
+    assert.ok(f.posts.some(x=>x.text==="gate")&&f.posts.some(x=>x.text==="hall"),
+        "short colored words are no longer skipped");
+    assert.ok(f.posts.every(x=>!/[<>\\]/.test(x.text)),"never send controls to model");
+    await wait(30);
+    const reopened=fixture(1,{fsState:shared,disconnected:true});await wait(35);
+    reopened.$gameMessage._texts=[raw];new reopened.context.Window_Message().startMessage();
+    assert.equal(reopened.$gameMessage.allText(),f.$gameMessage.allText());
+    assert.equal(reopened.posts.length,0);
+}
+async function testR4InkAndCsvReadOnlyPreload(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const ink=path.join(data,"ink"),loc=path.join(data,"localization");
+    const state={files:{},dirs:{[data]:true,[ink]:true,[loc]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    const story="There is a sound at the gate.";
+    const plain="A traveler enters the hall.";
+    state.files[path.join(ink,"main.json")]=JSON.stringify({inkVersion:21,root:[
+        ["ev","str","^this is an internal value","/str","/ev","#","^this is a private tag","/#",
+        "^There is a sound at the (mt:gate).","\n",null],
+        {branch:["^A traveler enters the (mp:hall).","\n",null],
+         "global decl":["^this is global data",null]}
+    ],listDefs:{example:{"this is a key":1}}});
+    state.files[path.join(ink,"test.json")]=JSON.stringify({inkVersion:21,root:["^this is a test backup",null]});
+    state.files[path.join(loc,"strings.csv")]='id,en,es\r\nK1,"Hello, how are you today?",\r\nK2,"We are here.",\r\nK3,"=this is a formula",';
+    state.files[path.join(loc,"unrelated.csv")]="id,script\r\nA,this is a command";
+    const originals=Object.assign({},state.files);
+    const responses={[story]:"Se oye un ruido en la puerta.",[plain]:"Un viajero entra en el salón.",
+        gate:"puerta",hall:"salón","Hello, how are you today?":"Hola, ¿cómo estás hoy?",
+        "We are here.":"Estamos aquí."};
+    const f=fixture(1,{fsState:state,batch:true,responses,nativeWait:true});
+    new f.context.Scene_Title().start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&![story,plain,"We are here."].every(v=>f.posts.some(x=>x.text===v)))await wait(25);
+    await wait(70);
+    assert.ok([story,plain,"We are here."].every(v=>f.posts.some(x=>x.text===v)),
+        "preload compiled unseen story and schema-validated CSV");
+    assert.ok(!f.posts.some(x=>/internal value|private tag|global data|test backup|formula|command/.test(x.text)));
+    for(const k of Object.keys(originals))assert.equal(state.files[k],originals[k],"data files are read-only");
+    const m=new f.context.Window_Message();
+    f.$gameMessage._texts=["<WordWrap>A traveler enters the \\m[places]hall\\c[0]."];m.startMessage();
+    assert.equal(m.originalStarts,1,"unvisited compiled text is ready on first draw");
+    assert.equal(f.$gameMessage.allText(),"<WordWrap>Un viajero entra en el \\m[places]salón\\c[0].");
+    const smart="“We are here.”";
+    f.$gameMessage._texts=[smart];m.startMessage();await wait(30);m.startMessage();
+    assert.ok(f.posts.some(x=>x.text===smart&&x.source==="en"),"typographic quotes detected");
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -682,6 +759,8 @@ async function testBoundedMapPrefetchAndPressure(){
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testR3PatchRepairsStandardNoticeAndKeepsColor();
     await testR3P2NoticeVariantsOnFirstNativeDraw();
+    await testR4EnglishFormatContextAndStaleCache();
+    await testR4InkAndCsvReadOnlyPreload();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();

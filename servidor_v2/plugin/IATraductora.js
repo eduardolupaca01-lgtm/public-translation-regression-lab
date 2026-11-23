@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R3P2-20261123"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4-20261123"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -250,11 +250,12 @@ function containsNames(output,expected){
     return true;
 }
 // One HTTP batch at a time. Older verified workers still support /translate.
-var wireQueue=[],wireBusy=false,wireScheduled=false;
+var wireQueue=[],wireBusy=false,wireScheduled=false,foregroundDepth=0;
 function wireTranslate(source,text){
     if(!state.batch)return request("/translate",{source:source,target:"es",text:text},30000);
     return new Promise(function(resolve,reject){
-        wireQueue.push({source:source,text:text,resolve:resolve,reject:reject});
+        var job={source:source,text:text,resolve:resolve,reject:reject};
+        if(foregroundDepth)wireQueue.unshift(job);else wireQueue.push(job);
         if(!wireScheduled&&!wireBusy){
             wireScheduled=true;setTimeout(flushWire,3);
         }
@@ -301,7 +302,12 @@ function translate(source,text){
     if(typeof existing==="string"&&validTranslation(source,text,existing,false))
         return Promise.resolve(existing);
     if(existing!==undefined)cache.delete(key);
-    if(pending.has(key))return pending.get(key);
+    if(pending.has(key)){
+        if(foregroundDepth){for(var i=0;i<wireQueue.length;i++){
+            if(wireQueue[i].source===source&&wireQueue[i].text===text){wireQueue.unshift(wireQueue.splice(i,1)[0]);break;}
+        }}
+        return pending.get(key);
+    }
     if(rejectedKeys.has(key)&&rejectedKeys.get(key)>Date.now())return Promise.resolve(null);
     if(pending.size>=96){rejectedKeys.set(key,Date.now()+1500);return Promise.resolve(null);}
     state.requested++;
@@ -349,6 +355,7 @@ function validTranslation(source,original,result,composed){
     var fixed=stableDisplay(original,false);
     if(fixed!==null&&fixed!==result)return false;
     if(source==="ja"&&(spuriousLaughter(original,result)||spuriousApplause(original,result)))return false;
+    if(source==="en"&&badEnglishOutput(visibleProse(original),visibleProse(result)))return false;
     if(/(?:\\|\x1b)[NVP]\[[0-9]+\](?=[A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/i.test(result))return false;
     if(source==="ja"){
         var visibleOriginal=protectedParts(original).filter(function(c){return !c.locked;}).map(function(c){return c.value;}).join("");
@@ -510,19 +517,31 @@ function startPersistentCache(){
 }
 
 function isJapanese(s){return /[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff\uff66-\uff9d]/.test(s||"");}
+var englishUi={"Yes":"Sí","No":"No","New Game":"Nueva partida","Continue":"Continuar",
+    "Options":"Opciones","Save":"Guardar","Load":"Cargar","Cancel":"Cancelar",
+    "Items":"Objetos","Equipment":"Equipo","Exit":"Salir","Quit Game":"Salir del juego"};
+function englishLabel(text){
+    return Object.prototype.hasOwnProperty.call(englishUi,text)?englishUi[text]:null;
+}
+function visibleProse(text){
+    return protectedParts(text).filter(function(p){return !p.locked;}).map(function(p){return p.value;}).join("");
+}
 function languageFor(s){
-    if(typeof s!=="string" || s.length===0 || s.length>1800)return null;
+    if(typeof s!=="string"||!s||s.length>1800)return null;
     if(isJapanese(s))return "ja";
-    // English detection must be conservative: never send player names,
-    // numerical menus, short labels, or Spanish text to an English model.
-    if(/[áéíóúñ¿¡]/i.test(s) || /[^\x09\x0a\x0d\x20-\x7e]/.test(s))return null;
-    var words=s.match(/[A-Za-z']+/g)||[];
-    if(words.length<3 || s.trim().length<12)return null;
-    if(/\b(?:the|you|are|have|this|that|with|your|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning)\b/i.test(s))return "en";
+    if(actorNames[s])return null;
+    var visible=visibleProse(s);
+    if(englishLabel(visible.trim())!==null)return "en";
+    var prose=visible.replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
+        .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...").replace(/\u00a0/g," ");
+    if(/[áéíóúñ¿¡]/i.test(prose)||/[^\x09\x0a\x0d\x20-\x7e]/.test(prose))return null;
+    var words=prose.match(/[A-Za-z']+/g)||[];
+    if(words.length<2||prose.trim().length<5)return null;
+    if(/\b(?:the|you|your|are|have|this|that|with|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning|and|of|from|into|there|here|was|were|will|must|he|she|they|their|his|her|my|our|is)\b/i.test(prose))return "en";
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
-var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[A-Za-z]+\[[0-9]{1,8}\]|[{}!])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n/g;
+var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[A-Za-z]+\[[0-9]{1,8}\]|[{}!])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<\/?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
 // Brackets at a segment's edges are presentation, not instructions for OPUS.
 // Preserve them byte-for-byte, including an opening/closing bracket on separate
 // native lines. Internal punctuation stays in the sentence for grammar.
@@ -605,10 +624,71 @@ function standardNotice(text){
         return lead+"Además, esta obra incluye elementos de tipo "+m[1]+(m[2]||"")+m[3]+(m[4]||"")+m[5]+". Tenlo en cuenta."+tail;
     return null;
 }
-function translatePreservingControls(source,text){
+function badEnglishOutput(original,result){
+    if(/[<>]/.test(result)&&!/[<>]/.test(original))return true;
+    if(/word\s*wrap|wordwordwrap/i.test(result)&&!/word\s*wrap/i.test(original))return true;
+    var sw=original.match(/[A-Za-z']+/g)||[],words=result.toLowerCase().match(/[a-záéíóúüñ]+/g)||[];
+    if(result.length>Math.max(48,original.length*2.8+24)||words.length>Math.max(12,sw.length*2.5+6))return true;
+    for(var i=2;i<words.length;i++)if(words[i]===words[i-1]&&words[i]===words[i-2])return true;
+    return false;
+}
+// A context-preserving formatting plan for ordinary color/macro spans.
+// If the translated span cannot be aligned unambiguously, fail back to
+// the original segment path, never move or invent a control.
+function englishFormatPlan(text){
+    var parts=protectedParts(text),plain="",spans=[],prefix="",suffix="",active=null,seen=false;
+    if(parts.length<2||text.indexOf("\n")>=0)return null;
+    for(var i=0;i<parts.length;i++){
+        var p=parts[i],v=p.value;
+        if(!p.locked){plain+=v;if(v.trim())seen=true;if(active)active.text+=v;continue;}
+        if(!seen&&!active&&/^<[A-Za-z][A-Za-z .'\-]{0,48}>$/i.test(v)){prefix+=v;continue;}
+        if(!active&&/^<\/wordwrap>$/i.test(v)&&i===parts.length-1){suffix+=v;continue;}
+        if(!active&&/^(?:\\|\x1b)(?:c\[\d+\]|m\[[A-Za-z][A-Za-z0-9 _\-]{0,60}\])$/i.test(v)&&!/^(?:\\|\x1b)c\[0\]$/i.test(v)){active={open:v,text:"",close:""};continue;}
+        if(active&&/^(?:\\|\x1b)c\[0\]$/i.test(v)&&active.text.trim()){active.close=v;spans.push(active);active=null;continue;}
+        return null;
+    }
+    if(active||!plain.trim()||(!prefix&&!suffix&&!spans.length))return null;
+    return {plain:plain,prefix:prefix,suffix:suffix,spans:spans};
+}
+function renderEnglishPlan(plan,whole,spanValues){
+    var out="",cursor=0,lower=whole.toLowerCase();
+    for(var i=0;i<plan.spans.length;i++){
+        var v=spanValues[i];if(typeof v!=="string"||!v.trim())return null;
+        v=v.trim();var needle=v.toLowerCase(),at=lower.indexOf(needle,cursor);
+        if(at<0||lower.indexOf(needle,at+needle.length)>=0)return null;
+        if((at>0&&/[A-Za-zÀ-ÿ]/.test(whole.charAt(at-1)))||
+           (at+v.length<whole.length&&/[A-Za-zÀ-ÿ]/.test(whole.charAt(at+v.length))))return null;
+        out+=whole.slice(cursor,at)+plan.spans[i].open+whole.slice(at,at+v.length)+plan.spans[i].close;
+        cursor=at+v.length;
+    }
+    return plan.prefix+out+whole.slice(cursor)+plan.suffix;
+}
+function englishPlanReady(text,plan){
+    var whole=cachedPart("en",plan.plain);if(whole===null)return null;
+    var values=plan.spans.map(function(span){var k=span.text.trim();return actorNames[k]?k:cachedPart("en",k);});
+    if(values.some(function(x){return x===null;}))return null;
+    var out=renderEnglishPlan(plan,whole,values);
+    return out&&acceptCache("en",text,out,true,true)?cache.get("en\u0000"+text):null;
+}
+function englishPlanTranslate(text,plan){
+    var tasks=[translate("en",plan.plain)];
+    plan.spans.forEach(function(span){var k=span.text.trim();tasks.push(actorNames[k]?Promise.resolve(k):translate("en",k));});
+    return Promise.all(tasks).then(function(values){
+        if(values.some(function(v){return v===null;}))return null;
+        var out=renderEnglishPlan(plan,values[0],values.slice(1));
+        return out&&acceptCache("en",text,out,true,true)?cache.get("en\u0000"+text):null;
+    });
+}
+function hasProse(source,text){return source==="ja"?hasJapaneseProse(text):/[A-Za-z]{2}/.test(visibleProse(text))&&!actorNames[text];}
+
+function translatePreservingControls(source,text,skipPlan){
     var key=source+"\u0000"+text;
     var ready=readyText(source,text);
     if(ready!==null)return Promise.resolve(ready);
+    var plan=source==="en"&&!skipPlan?englishFormatPlan(text):null;
+    if(plan)return englishPlanTranslate(text,plan).then(function(out){
+        return out!==null?out:translatePreservingControls(source,text,true);
+    });
     // Separate a native speaker header before OPUS sees any dialogue body.
     // No variable codes, name-entry values or event state are rewritten.
     var speaker=source==="ja"?speakerHeader(text):null;
@@ -620,12 +700,12 @@ function translatePreservingControls(source,text){
             return acceptCache(source,text,joint,true,true)?joint:null;
         });
     }
-    if(source==="ja"&&text.indexOf("\n")>=0){
+    if((source==="ja"||source==="en")&&text.indexOf("\n")>=0){
         var lines=text.split(/(\r?\n)/);
         // Prefer complete line keys so reviewed text and color spans
         // remain available even when another line needs neural inference.
         return Promise.all(lines.map(function(line,index){
-            return index%2||!hasJapaneseProse(line)?Promise.resolve(line):
+            return index%2||!hasProse(source,line)?Promise.resolve(line):
                 translatePreservingControls(source,line);
         })).then(function(parts){
             if(parts.some(function(part){return part===null;})){
@@ -655,7 +735,7 @@ function translatePreservingControls(source,text){
         var after=(chunk.value.match(/\s*$/)||[""])[0];
         var body=chunk.value.slice(before.length,chunk.value.length-after.length);
         var eligible=source==="ja"?isJapanese(body):
-            /[A-Za-z]{2}/.test(body)&&body.length>=8;
+            /[A-Za-z]{2}/.test(body)&&!actorNames[body];
         if(!eligible)return Promise.resolve(chunk.value);
         return translate(source,body).then(function(out){
             return out?before+out+after:null;
@@ -777,6 +857,7 @@ function stableDisplay(text,identity){
     var name=nameInSpanish(text,identity);
     if(name!==null)return name;
     if(Object.prototype.hasOwnProperty.call(knownUi,text))return knownUi[text];
+    var label=englishLabel(text);if(label!==null)return label;
     var notice=standardNotice(text);if(notice!==null)return notice;
     var m=/^デフォルト名は[『「]([^』」\r\n]{1,24})[』」]\s*[（(]([ぁ-ゖァ-ヶー]{1,30})[）)]です[。．.]?$/.exec(text);
     if(m){var first=nameInSpanish(m[1],true);return "El nombre predeterminado es «"+first+"».";}
@@ -805,13 +886,15 @@ function hasJapaneseProse(text){
 function readyText(source,text){
     var exact=cachedPart(source,text);
     if(exact!==null)return exact;
+    var plan=source==="en"?englishFormatPlan(text):null;
+    if(plan){var rendered=englishPlanReady(text,plan);if(rendered!==null)return rendered;}
     // The scanner stores native full lines as well as message blocks.
     // Reuse a translated whole line (including inline colors) before
     // splitting it into shorter fragments. Existing exact hits win.
-    if(source==="ja"&&text.indexOf("\n")>=0){
+    if((source==="ja"||source==="en")&&text.indexOf("\n")>=0){
         var lines=text.split(/(\r?\n)/),complete=true,translatedAny=false;
         for(var n=0;n<lines.length;n+=2){
-            if(!hasJapaneseProse(lines[n]))continue;
+            if(!hasProse(source,lines[n]))continue;
             var line=readyText(source,lines[n]);
             if(line===null){complete=false;break;}
             if(line!==lines[n])translatedAny=true;
@@ -831,7 +914,7 @@ function readyText(source,text){
         var before=(c.value.match(/^\s*/)||[""])[0];
         var after=(c.value.match(/\s*$/)||[""])[0];
         var body=c.value.slice(before.length,c.value.length-after.length);
-        if(!body||!(source==="ja"?isJapanese(body):/[A-Za-z]{2}/.test(body)&&body.length>=8)){
+        if(!body||!(source==="ja"?isJapanese(body):/[A-Za-z]{2}/.test(body)&&!actorNames[body])){
             parts.push(c.value);continue;
         }
         var result=cachedPart(source,body);
@@ -939,8 +1022,15 @@ function hookNativeSurface(){
             Window_Base.prototype[method]=function(){
                 var args=Array.prototype.slice.call(arguments),identity=!!this._iaNameSurface;
                 try{
-                    if(typeof args[0]==="string"&&!identityDrawDepth)
+                    if(typeof args[0]==="string"&&!identityDrawDepth){
                         args[0]=translatedNativeLabel(args[0],identity);
+                        if(!identity&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
+                           !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
+                           languageFor(args[0])==="en"){
+                            var cachedEnglish=readyText("en",args[0]);
+                            if(cachedEnglish!==null)args[0]=cachedEnglish;
+                        }
+                    }
                 }catch(_){state.errors++;}
                 if(identity)identityDrawDepth++;
                 try{return original.apply(this,args);}
@@ -985,7 +1075,7 @@ function hookNativeSurface(){
 }
 
 function readyIndependentLines(source,text){
-    if(source!=="ja"||text.indexOf("\n")<0||speakerHeader(text))return null;
+    if((source!=="ja"&&source!=="en")||text.indexOf("\n")<0||speakerHeader(text))return null;
     // This narrow fallback is for ordinary prose and color formatting only.
     // Do not touch identity, variable, icon, timing or plugin control blocks.
     if(protectedParts(text).some(function(part){
@@ -995,13 +1085,16 @@ function readyIndependentLines(source,text){
     var lines=text.split(/(\r?\n)/),changed=false,missing=false;
     for(var i=0;i<lines.length;i+=2){
         var original=lines[i];
-        if(!hasJapaneseProse(original))continue;
+        if(!hasProse(source,original))continue;
         var result=readyText(source,original);
         if(result!==null&&result!==original&&validTranslation(source,original,result,true)){
             lines[i]=result;changed=true;
         }else missing=true;
     }
     return changed&&missing?lines.join(""):null;
+}
+function requestVisible(source,text){
+    foregroundDepth++;try{return translatePreservingControls(source,text);}finally{foregroundDepth--;}
 }
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
@@ -1015,13 +1108,27 @@ function hookMessages(){
                 if(source){
                     var old=readyText(source,text);
                     if(typeof old==="string"&&old!==text){
+                        this._iaEnGate=null;
                         $gameMessage._texts=old.split("\n");
                         state.shown++;
                     }else{
                         // Submit the original Japanese, never the partially
                         // localized presentation. Do not restart this event.
-                        if(state.connected)translatePreservingControls(source,text).catch(function(){state.errors++;});
-                        else addPrefetch(text,true);
+                        // One request per pending native message. startWait(1)
+                        // yields to MV's normal updateWait; no active repaint.
+                        var canWait=source==="en"&&state.connected&&(inkStats.detected||englishFormatPlan(text))&&
+                            typeof this.startWait==="function"&&typeof this.updateWait==="function"&&!this._textState;
+                        var gate=this._iaEnGate;
+                        if(!gate||gate.message!==$gameMessage||gate.text!==text){
+                            gate={message:$gameMessage,text:text,until:Date.now()+3000};
+                            this._iaEnGate=gate;
+                            if(state.connected)requestVisible(source,text).catch(function(){state.errors++;});
+                            else addPrefetch(text,true);
+                        }
+                        if(canWait&&Date.now()<gate.until&&rejectedKeys.get(source+"\u0000"+text)!==Infinity){
+                            this.startWait(1);return;
+                        }
+                        this._iaEnGate=null;
                         var partial=readyIndependentLines(source,text);
                         if(partial!==null)$gameMessage._texts=partial.split("\n");
                     }
@@ -1065,10 +1172,162 @@ var prefetchedMap=null,discovered=new Map(),priorityQueue=[],prefetchQueue=[];
 var initialMapFile="",initialMapScanned=false,initialKeys=new Map(),collectInitial=false;
 var scanStats={files:0,totalFiles:0,ready:0,rejected:0,skipped:0,done:false,limited:false};
 var scanStarted=false,prefetchBusy=false,MAX_DISCOVERED=40000;
-function addPrefetch(text,priority){
+var inkStats={detected:false,files:0,candidates:0,excluded:0};
+var tableStats={files:0,candidates:0};
+function inkDisplayText(value){
+    if(typeof value!=="string"||value.charAt(0)!=="^")return null;
+    var raw=value.slice(1);
+    // Known shaped display macros: keep the payload as a candidate word.
+    // We do NOT execute the macro, change Ink values, or rewrite JSON.
+    var spans=[];
+    var plain=raw.replace(/\((m[a-z]|gp|ob|ic|wp|stat):([A-Za-z][A-Za-z0-9 '\-]{0,55})\)/gi,function(_,kind,label){
+        spans.push(label);return label;
+    });
+    if(/\([A-Za-z]{1,12}:|\{[^}]*\}|^\s*[A-Za-z_][\w.]*:/.test(plain))return null;
+    if(languageFor(plain)!=="en"&&languageFor(plain)!=="ja")return null;
+    return {text:plain,spans:spans};
+}
+function walkInkStory(data,done){
+    if(!data||!integer(data.inkVersion)||data.inkVersion<18||data.inkVersion>21||!Array.isArray(data.root)){
+        scanStats.skipped++;done();return;
+    }
+    var stack=[{values:data.root,index:0,evalMode:false,tag:false}],visited=0;
+    function addContainer(v,mode,tag){
+        if(Array.isArray(v))stack.push({values:v,index:0,evalMode:mode,tag:tag});
+    }
+    function slice(){
+        var budget=700;
+        while(stack.length&&budget--&&discovered.size<MAX_DISCOVERED&&visited<1500000){
+            var f=stack[stack.length-1];
+            if(f.index>=f.values.length){stack.pop();continue;}
+            var v=f.values[f.index++];visited++;
+            if(v==="ev"){f.evalMode=true;continue;}
+            if(v==="/ev"){f.evalMode=false;continue;}
+            if(v==="#"){f.tag=true;continue;}
+            if(v==="/#"){f.tag=false;continue;}
+            if(typeof v==="string"){
+                if(v.charAt(0)!=="^")continue;
+                if(f.evalMode||f.tag){inkStats.excluded++;continue;}
+                var item=inkDisplayText(v);
+                if(!item){inkStats.excluded++;continue;}
+                inkStats.candidates++;addPrefetch(item.text,false);
+                // Individual formatting spans use a dedicated trusted path.
+                item.spans.forEach(function(x){addPrefetch(x,false,"en");});
+            }else if(Array.isArray(v))addContainer(v,f.evalMode,f.tag);
+            else if(v&&typeof v==="object"&&f.index===f.values.length&&!f.evalMode&&!f.tag){
+                // Only named child containers; never inspect variable fields,
+                // tags, choice targets, list definitions or global declarations.
+                Object.keys(v).reverse().forEach(function(k){
+                    if(k!=="global decl"&&k!=="#f"&&k!=="#n")addContainer(v[k],false,false);
+                });
+            }
+        }
+        if(stack.length&&discovered.size<MAX_DISCOVERED&&visited<1500000){setTimeout(slice,0);return;}
+        if(stack.length)scanStats.limited=true;
+        inkStats.files++;scanStats.files++;done();
+    }
+    slice();
+}
+function regularUnder(base,file,max){
+    try{
+        var st=fs.lstatSync(file),rel=path.relative(base,fs.realpathSync(file));
+        return st.isFile()&&!st.isSymbolicLink()&&st.size<=max&&rel&&
+            !path.isAbsolute(rel)&&rel.split(/[\\\/]/).indexOf("..")<0;
+    }catch(_){return false;}
+}
+function directoryUnder(base,dir){
+    try{
+        var st=fs.lstatSync(dir),rel=path.relative(base,fs.realpathSync(dir));
+        return st.isDirectory()&&!st.isSymbolicLink()&&rel&&
+            !path.isAbsolute(rel)&&rel.split(/[\\\/]/).indexOf("..")<0;
+    }catch(_){return false;}
+}
+// RFC-4180-style bounded CSV reader. Only a localization table with an
+// explicit source column and id/key is accepted. No formulas are evaluated.
+function csvRows(raw){
+    var rows=[],row=[],cell="",quoted=false,closed=false;
+    for(var i=0;i<raw.length;i++){
+        var ch=raw.charAt(i);
+        if(quoted){
+            if(ch==='"'){if(raw.charAt(i+1)==='"'){cell+='"';i++;}else{quoted=false;closed=true;}}
+            else cell+=ch;
+            continue;
+        }
+        if(closed&&ch!==","&&ch!=="\r"&&ch!=="\n")return null;
+        if(ch==='"'){if(cell)return null;quoted=true;closed=false;continue;}
+        if(ch===","){row.push(cell);cell="";closed=false;continue;}
+        if(ch==="\r"||ch==="\n"){
+            if(ch==="\r"&&raw.charAt(i+1)==="\n")i++;
+            row.push(cell);rows.push(row);row=[];cell="";closed=false;
+            if(rows.length>25000)return null;
+        }else cell+=ch;
+    }
+    if(quoted)return null;
+    if(cell||row.length){row.push(cell);rows.push(row);}
+    return rows;
+}
+function scanLocaleCsv(raw,done){
+    var rows=csvRows(raw.replace(/^\uFEFF/,""));
+    if(!rows||rows.length<2){scanStats.skipped++;done();return;}
+    var header=rows.shift().map(function(v){return v.trim().toLowerCase();});
+    var id=header.indexOf("key");if(id<0)id=header.indexOf("id");
+    var column=header.indexOf("en");if(column<0)column=header.indexOf("source");
+    if(column<0)column=header.indexOf("text");
+    if(id<0||column<0){scanStats.skipped++;done();return;}
+    var at=0;
+    function slice(){
+        var end=Math.min(at+200,rows.length);
+        for(;at<end&&discovered.size<MAX_DISCOVERED;at++){
+            var row=rows[at],value=row[column];
+            if(row.length!==header.length||!row[id]||typeof value!=="string"||/^\s*[=+@]/.test(value))continue;
+            if(languageFor(value)){tableStats.candidates++;addPrefetch(value,false);}
+        }
+        if(at<rows.length&&discovered.size<MAX_DISCOVERED){setTimeout(slice,0);return;}
+        if(at<rows.length)scanStats.limited=true;
+        tableStats.files++;scanStats.files++;done();
+    }
+    slice();
+}
+function scanExtraSources(dataDir,done){
+    var tasks=[],inkDir=path.join(dataDir,"ink"),localeDir=path.join(dataDir,"localization");
+    // main.json is a conventional compiled story, not a source script or
+    // test/backup. Additional ambiguous formats are not guessed or executed.
+    var main=path.join(inkDir,"main.json");
+    if(directoryUnder(dataDir,inkDir)&&regularUnder(inkDir,main,20*1024*1024)){
+        inkStats.detected=true;tasks.push({file:main,type:"ink",base:inkDir});
+    }
+    function run(){
+        scanStats.totalFiles+=tasks.length;
+        function next(){
+            if(!tasks.length||discovered.size>=MAX_DISCOVERED){if(tasks.length)scanStats.limited=true;done();return;}
+            var t=tasks.shift();
+            if(!regularUnder(t.base,t.file,t.type==="ink"?20*1024*1024:2*1024*1024)){
+                scanStats.skipped++;setTimeout(next,0);return;
+            }
+            fs.readFile(t.file,"utf8",function(err,raw){
+                if(err||typeof raw!=="string"){scanStats.skipped++;next();return;}
+                try{
+                    if(t.type==="ink")walkInkStory(JSON.parse(raw.replace(/^\uFEFF/,"")),next);
+                    else scanLocaleCsv(raw,next);
+                }catch(_){scanStats.skipped++;next();}
+            });
+        }
+        next();
+    }
+    if(directoryUnder(dataDir,localeDir)){
+        fs.readdir(localeDir,function(err,names){
+            if(!err)names.filter(function(n){return /^[A-Za-z0-9_.\-]{1,100}\.csv$/i.test(n);}).sort().slice(0,32).forEach(function(n){
+                tasks.push({file:path.join(localeDir,n),type:"csv",base:localeDir});
+            });else scanStats.skipped++;
+            run();
+        });
+    }else run();
+}
+
+function addPrefetch(text,priority,trustedLang){
     if(typeof text!=="string"||!text)return;
     learnReadings(text);
-    var source=languageFor(text);
+    var source=languageFor(text)||(trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 \'\-]{0,55}$/.test(text)&&!actorNames[text]?"en":null);
     if(!source)return;
     var key=source+"\u0000"+text,item=discovered.get(key);
     if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
@@ -1178,10 +1437,11 @@ function startFullScan(){
             return (i<0?99:i)-(j<0?99:j)||a.localeCompare(b);
         });
         scanStats.totalFiles=files.length;
+        inkStats.detected=directoryUnder(dataDir,path.join(dataDir,"ink"))&&regularUnder(path.join(dataDir,"ink"),path.join(dataDir,"ink","main.json"),20*1024*1024);
         if(files.length>5000){files=files.slice(0,5000);scanStats.limited=true;}
         function step(){
             if(!files.length||discovered.size>=MAX_DISCOVERED){
-                scanStats.done=true;nextPrefetch();return;
+                scanExtraSources(dataDir,function(){scanStats.done=true;nextPrefetch();});return;
             }
             var name=files.shift(),file=path.join(dataDir,name);
             try{
@@ -1378,7 +1638,7 @@ function setupHud(){
             "Solicitudes: "+state.requested,
             "Recibidas: "+state.received+"   Mostradas: "+state.shown,
             "Caché cargada: "+diskStats.loaded+"   Guardada: "+diskStats.saved,
-            "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+"   Omitidos: "+scanStats.skipped,
+            "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+"   Omitidos: "+scanStats.skipped+(inkStats.detected?" · Ink":"") ,
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
