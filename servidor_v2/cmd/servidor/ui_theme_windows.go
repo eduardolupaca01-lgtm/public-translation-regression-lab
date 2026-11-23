@@ -50,6 +50,8 @@ var (
     iaCreateBrush=iaGdi.NewProc("CreateSolidBrush")
     iaDeleteObject=iaGdi.NewProc("DeleteObject")
     iaCreateFontProc=iaGdi.NewProc("CreateFontW")
+    iaGetCurrentProcess=iaKernel32.NewProc("GetCurrentProcess")
+    iaReadProcessMemory=iaKernel32.NewProc("ReadProcessMemory")
     iaThemeBrushSide uintptr
     iaThemeBrushHeader uintptr
     iaThemeBrushPanel uintptr
@@ -150,7 +152,16 @@ func iaColorControl(device,window uintptr)uintptr{
 }
 func iaDrawButton(param uintptr)bool{
     if param==0{return false}
-    data:=(*iaDrawItemStruct)(unsafe.Pointer(param))
+    // Drawitem data is owned by USER32. Copy the validated bytes with the
+    // Win32 API instead of casting a callback uintptr to unsafe.Pointer.
+    // The direct conversion triggers go vet and a bad LPARAM could fault.
+    var data iaDrawItemStruct
+    var read uintptr
+    current,_,_:=iaGetCurrentProcess.Call()
+    ok,_,_:=iaReadProcessMemory.Call(
+        current,param,uintptr(unsafe.Pointer(&data)),
+        unsafe.Sizeof(data),uintptr(unsafe.Pointer(&read)))
+    if ok==0 || read!=uintptr(unsafe.Sizeof(data)){return false}
     id:=int(data.ControlID)
     var text string
     var background uintptr
