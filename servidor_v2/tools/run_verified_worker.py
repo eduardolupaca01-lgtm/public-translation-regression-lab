@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import re
 import subprocess
@@ -55,8 +56,11 @@ def launch(exe: Path, arguments: list[str], diagnostic_file: Path, timeout: int)
                 try:
                     prove_spanish(game)
                     return 0
-                except Exception:
-                    print("IA_REAL_JA_ES_HTTP_NO_VALIDADO")
+                except Exception as exc:
+                    code=str(exc)
+                    if not re.fullmatch(r"IA_[A-Z0-9_]{4,90}",code):
+                        code="IA_HTTP_ERROR_RESERVADO"
+                    print("IA_SAFE_TRANSLATION_CODE="+code)
                     return 1
             time.sleep(0.4)
         print("IA_SAFE_GAME_BOOT_CATEGORY=" + diagnostic(diagnostic_file))

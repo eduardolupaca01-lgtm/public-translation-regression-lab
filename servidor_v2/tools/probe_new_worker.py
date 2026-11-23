@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse,json,re,time
 from pathlib import Path
 from urllib.request import Request, build_opener,ProxyHandler
+from urllib.error import HTTPError
 
 def read_bridge(file):
     if not file.is_file() or file.is_symlink() or file.stat().st_size>4096:return None
@@ -55,8 +56,14 @@ def run(game:Path):
     if len(translated)>1000:raise RuntimeError("IA_TRADUCCION_NO_ACOTADA")
     print("SERVIDOR_V2_REAL_OPUS_JAPONES_A_ESPANOL_PASS")
     english="Thank you for your help."
-    response=call(opener,base+"/translate",d["token"],
-                  {"source":"en","target":"es","text":english})
+    try:
+        response=call(opener,base+"/translate",d["token"],
+                      {"source":"en","target":"es","text":english})
+    except HTTPError as exc:
+        if exc.code==503:raise RuntimeError("IA_INGLES_MODELO_HTTP_503") from None
+        raise RuntimeError("IA_INGLES_HTTP_RECHAZADO") from None
+    except OSError:
+        raise RuntimeError("IA_INGLES_CONEXION_INTERRUMPIDA") from None
     translated_en=response.get("translated") if isinstance(response,dict) else None
     if (not isinstance(translated_en,str) or not translated_en.strip()
         or translated_en.casefold().strip()==english.casefold().strip()):
