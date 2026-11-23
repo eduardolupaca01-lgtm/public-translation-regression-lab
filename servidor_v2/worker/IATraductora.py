@@ -26,6 +26,11 @@ def quality_reason(lang, original, output):
         return "IA_QUALITY_NUMBER_MISSING"
     if lang=="ja" and re.search(r"[\u3040-\u30ff\u3400-\u9fff]",output):
         return "IA_QUALITY_JAPANESE_RESIDUAL"
+    # TX716's bilingual holdout found 早過ぎ -> "too young" rather
+    # than "too early". Reject this time-vs-age confusion, not the game.
+    if lang=="ja" and re.search(r"(早過ぎ|早すぎ|遅過ぎ|遅すぎ)",original) and re.search(
+            r"\b(joven|viejo|edad|niño|niña)\b",output.lower()):
+        return "IA_QUALITY_TIME_AGE_CONFUSION"
     if len(original)>30 and original.count("。")+original.count("！")+original.count("？")>=2 and len(output)<12:
         return "IA_QUALITY_MULTICLAUSE_COMPRESSED"
     words=re.findall(r"[a-záéíóúñ]{2,}",output.lower())
@@ -175,6 +180,7 @@ class Service:
         self.token=secrets.token_hex(32)
         self.translations=0
         self.failures=0
+        self.quality_rejected=0
         self.cache=OrderedDict()
         self.lock=threading.Lock()
         self.memory=TranslationMemory(self.game)
@@ -195,6 +201,7 @@ class Service:
         output=self.neural.translate(lang,text)
         reason=quality_reason(lang,text,output)
         if reason is not None:
+            with self.lock:self.quality_rejected+=1
             raise RuntimeError(reason)
         # No text is called translated until its validated bytes are committed.
         self.memory.put(key,lang,text,output)
@@ -226,7 +233,8 @@ def make_handler(service:Service):
             if self.path!="/status":return self.send(404,{"error":"IA_RUTA_INVALIDA"})
             self.send(200,{"schema":SCHEMA,"active":True,
                 "translated":service.translations,"failed":service.failures,
-                "cache":len(service.cache)})
+                "cache":len(service.cache),
+                "quality_rejected":service.quality_rejected})
         def do_POST(self):
             if not self.allowed():return self.send(403,{"error":"IA_TOKEN_INVALIDO"})
             if self.path!="/translate":return self.send(404,{"error":"IA_RUTA_INVALIDA"})
