@@ -1,4 +1,5 @@
 import importlib.util, json, tempfile, threading, unittest
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -61,6 +62,34 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(ia.quality_reason(lang,original,output),reason)
         self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (8)"))
         self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
+    def test_historical_early_not_young_semantic_gate(self):
+        source="お前はいつも早過ぎなんだよ。"
+        self.assertEqual(ia.quality_reason("ja",source,
+            "Siempre eres demasiado joven."),"IA_QUALITY_TIME_AGE_CONFUSION")
+        self.assertIsNone(ia.quality_reason("ja",source,
+            "Siempre llegas demasiado temprano."))
+    def test_neural_selects_structurally_safe_beam_without_losing_codes(self):
+        class SourceTokenizer:
+            def encode(self,text,out_type):return ["__source__"]
+        class TargetTokenizer:
+            def decode(self,hyp):return hyp[0]
+        class FakeCandidateModel:
+            def translate_batch(self,source,**kwargs):
+                self.kwargs=kwargs
+                return [SimpleNamespace(hypotheses=[
+                    ["Siempre eres demasiado joven."],
+                    ["Siempre llegas demasiado temprano."],
+                    ["いつも早過ぎなんだよ。"]
+                ])]
+        backend=ia.NeuralOPUS.__new__(ia.NeuralOPUS)
+        backend.lock=threading.RLock()
+        model=FakeCandidateModel()
+        backend.models={"ja":(model,SourceTokenizer(),TargetTokenizer())}
+        backend.roots={}
+        result=backend.translate("ja","お前はいつも早過ぎなんだよ。")
+        self.assertEqual(result,"Siempre llegas demasiado temprano.")
+        self.assertEqual(model.kwargs["num_hypotheses"],3)
+        self.assertGreater(model.kwargs["repetition_penalty"],1.0)
     def test_authentication(self):
         with self.assertRaises(HTTPError) as e:self.http("/status",token="0"*64)
         self.assertEqual(e.exception.code,403)
