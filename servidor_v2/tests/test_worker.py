@@ -18,6 +18,7 @@ class EngineTests(unittest.TestCase):
         self.engine=self.root/"IA Traductora"/".local"/"Rpg"/"engine"
         self.engine.mkdir(parents=True)
         self.s=ia.Service(self.root,self.engine,neural=FakeNeural())
+        self.addCleanup(self.s.close)
         self.server=ia.ThreadingHTTPServer(("127.0.0.1",0),ia.make_handler(self.s))
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True)
         self.thread.start();self.addCleanup(self.server.server_close);self.addCleanup(self.server.shutdown)
@@ -32,6 +33,34 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(self.http("/translate",msg)["translated"],"Buenos días")
         self.assertEqual(self.http("/translate",msg)["translated"],"Buenos días")
         self.assertEqual(self.s.translations,1)
+    def test_cache_survives_full_worker_restart(self):
+        original="おはようございます。"
+        first=self.http("/translate",{"source":"ja","target":"es","text":original})
+        self.assertEqual(first["translated"],"Buenos días")
+        class NoInference:
+            count=0
+            def translate(self,*_):
+                self.count+=1
+                raise AssertionError("NEURAL_WORK_SHOULD_NOT_REPEAT")
+        backend=NoInference()
+        again=ia.Service(self.root,self.engine,neural=backend)
+        self.addCleanup(again.close)
+        self.assertEqual(again.translate("ja",original),"Buenos días")
+        self.assertEqual(backend.count,0)
+        self.assertTrue((self.engine.parent/"cache"/"translation-memory-v2.sqlite3").is_file())
+    def test_quality_gate_no_numbers_lost_or_japanese_leaked(self):
+        invalid=[
+            ("ja","8月24日","24 de agosto","IA_QUALITY_NUMBER_MISSING"),
+            ("ja","今日は学校に行きます。","今日は学校に行きます。","IA_QUALITY_UNCHANGED"),
+            ("ja","早く行こう。","Vamos \ufffd","IA_QUALITY_CORRUPT"),
+            ("ja","夏実は来た。","Natsumi 夏実 vino.","IA_QUALITY_JAPANESE_RESIDUAL"),
+            ("ja","こんにちは！","hola hola hola hola hola hola", "IA_QUALITY_REPEATED_GENERATION"),
+        ]
+        for lang,original,output,reason in invalid:
+            with self.subTest(reason=reason):
+                self.assertEqual(ia.quality_reason(lang,original,output),reason)
+        self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (08)"))
+        self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
     def test_authentication(self):
         with self.assertRaises(HTTPError) as e:self.http("/status",token="0"*64)
         self.assertEqual(e.exception.code,403)
