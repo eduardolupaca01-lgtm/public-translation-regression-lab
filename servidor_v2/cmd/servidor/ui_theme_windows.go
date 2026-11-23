@@ -177,11 +177,12 @@ func iaDrawButton(param uintptr)bool{
     case iaCmdInstall: text="2. INSTALAR TRADUCTOR AUTOMÁTICO"
     case iaCmdClose: text="Cerrar"
     case iaCmdCopy: text="Copiar diagnóstico"
+    case iaCmdRecover: text="Recuperar inicio MV"
     default: return false
     }
     if id==iaCmdInstall||id==iaCmdBrowse||id==301{
         background=iaRGB(0,96,225)
-    }else if id==iaCmdClose||id==iaCmdCopy{
+    }else if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{
         background=iaRGB(221,230,244)
         foreground=iaRGB(12,45,82)
     }else{
@@ -191,7 +192,7 @@ func iaDrawButton(param uintptr)bool{
         }
     }
     if data.ItemState&1!=0{
-        if id==iaCmdClose||id==iaCmdCopy{background=iaRGB(194,213,237)}else{background=iaRGB(0,72,180)}
+        if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{background=iaRGB(194,213,237)}else{background=iaRGB(0,72,180)}
     }
     brush:=iaBrush(background)
     if brush!=0{

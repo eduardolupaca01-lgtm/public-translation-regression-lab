@@ -267,7 +267,14 @@ func Install(gameEXE string,pkg *packageReader)error{
 func main(){
  exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
+ recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV (no necesita modelos)")
  flag.Parse()
+ if *recoverGame{
+  if *exe==""{fmt.Fprintln(os.Stderr,"IA_RECUPERACION_GAME_EXE_REQUERIDO");os.Exit(1)}
+  if err:=RecoverGame(*exe);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+  fmt.Println("IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA")
+  return
+ }
  if *exe==""{runUI();return}
  source:=*payload;if source==""{var err error;source,err=os.Executable();if err!=nil{fmt.Fprintln(os.Stderr,"IA_EXE_NO_DISPONIBLE");os.Exit(1)}}
  p,err:=readPackage(source)

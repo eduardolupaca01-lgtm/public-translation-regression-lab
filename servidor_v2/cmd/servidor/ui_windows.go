@@ -38,6 +38,7 @@ const(
     iaCmdInstall=101
     iaCmdClose=102
     iaCmdCopy=103
+    iaCmdRecover=104
 )
 var(
     iaUser32=syscall.NewLazyDLL("user32.dll")
@@ -116,6 +117,7 @@ type iaUI struct{
     browse uintptr
     closeBtn uintptr
     copyBtn uintptr
+    recoverBtn uintptr
     titleLabel uintptr
     sectionLabel uintptr
     statusLabel uintptr
@@ -178,6 +180,12 @@ func iaFriendlyInstall(code string)string{
         return "La carpeta contiene archivos de otra versión. No se han sobrescrito."
     case "IA_MODELO_SHA_NO_COINCIDE":
         return "El modelo no coincide con su firma. No se continuará."
+    case "IA_RECUPERACION_REGISTRO_CAMBIADO":
+        return "El registro fue editado tras instalar. No se sobrescribió."
+    case "IA_RECUPERACION_RESPALDO_ALTERADO":
+        return "El respaldo no coincide con su SHA. No se ha restaurado."
+    case "IA_RECUPERACION_ESTADO_NO_VERIFICADO":
+        return "No se reconoció una instalación nuestra. Nada fue modificado."
     default:
         return "Instalación detenida. Pulsa Copiar diagnóstico para enviar el código."
     }
@@ -246,6 +254,32 @@ func iaStartInstall(){
         }
     }()
 }
+func iaStartRecover(){
+    ui:=&iaCurrentUI
+    if ui.gameFile==""{
+        iaLog("[IA_RECUPERACION_GAME_EXE_REQUERIDO] Selecciona Game.exe.")
+        return
+    }
+    if ui.busy{return}
+    ui.busy=true
+    iaEnableWindow.Call(ui.install,0)
+    iaEnableWindow.Call(ui.browse,0)
+    iaEnableWindow.Call(ui.recoverBtn,0)
+    iaSet(ui.status,"Comprobando respaldo original...")
+    iaLog("[IA_RECUPERACION_INICIADA] Solo el registro original de esta copia MV.")
+    game:=ui.gameFile
+    go func(){
+        info:="IA_RECUPERACION_ERROR_NO_CLASIFICADO"
+        defer func(){
+            if recover()!=nil{info="IA_RECUPERACION_PANICO_RECUPERADO"}
+            ui.mu.Lock();ui.result=info;ui.mu.Unlock()
+            iaPostMessage.Call(ui.hwnd,iaWMAppDone,0,0)
+        }()
+        if err:=RecoverGame(game);err!=nil{info=err.Error()}else{
+            info="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"
+        }
+    }()
+}
 func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
     defer func(){
         if recover()!=nil{
@@ -292,6 +326,8 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             }
         case iaCmdInstall:
             if lparam==ui.install {iaStartInstall()}
+        case iaCmdRecover:
+            if lparam==ui.recoverBtn {iaStartRecover()}
         case iaCmdCopy:
             if lparam==ui.copyBtn{
                 if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{
@@ -309,8 +345,13 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         ui.mu.Lock();result:=ui.result;ui.mu.Unlock()
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
+        iaEnableWindow.Call(ui.recoverBtn,1)
         code:=iaSafeInstallCode(result)
-        if code=="IA_INSTALACION_COMPLETADA_VERIFICADA"{
+        if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
+            iaLog("[IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA] Registro original restaurado. Los archivos del traductor se conservaron.")
+            iaSet(ui.status,"Registro MV original recuperado. Abre la copia del juego.")
+            iaEnableWindow.Call(ui.install,0)
+        }else if code=="IA_INSTALACION_COMPLETADA_VERIFICADA"{
             iaLog("[IA_INSTALACION_COMPLETADA_VERIFICADA] Listo para iniciar la copia del juego.")
             iaSet(ui.status,"Instalación completa. Reinicia la copia del juego y prueba F10.")
         }else{
@@ -356,7 +397,8 @@ func runUI(){
         iaESReadOnly|iaESAutoVScroll,230,414,782,236,0)
     ui.statusLabel=iaControl(hwnd,"STATIC","Listo para instalar el traductor.",0,230,664,773,39,0)
     ui.status=ui.statusLabel
-    ui.copyBtn=iaControl(hwnd,"BUTTON","Copiar diagnóstico",0,230,710,534,36,iaCmdCopy)
+    ui.copyBtn=iaControl(hwnd,"BUTTON","Copiar diagnóstico",0,230,710,264,36,iaCmdCopy)
+    ui.recoverBtn=iaControl(hwnd,"BUTTON","Recuperar inicio MV",0,501,710,274,36,iaCmdRecover)
     ui.closeBtn=iaControl(hwnd,"BUTTON","Cerrar",0,792,710,218,36,iaCmdClose)
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.

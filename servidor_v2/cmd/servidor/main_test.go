@@ -180,3 +180,49 @@ func TestTamperedModelPreventsOwnedUpgrade(t *testing.T){
         t.Fatal("tampered model caused destructive worker upgrade")
     }
 }
+
+
+func TestRecoverGameOriginalRegistryAndPreservePlayerSaves(t *testing.T){
+  pkgPath:=fakePackage(t)
+  pkg,e:=readPackage(pkgPath);if e!=nil{t.Fatal(e)};defer pkg.Close()
+  game:=createFixture(t)
+  source:=filepath.Join(game,"Game.exe")
+  registry:=filepath.Join(game,"www","js","plugins.js")
+  original,_:=os.ReadFile(registry)
+  save:=filepath.Join(game,"www","save","File1.rpgsave")
+  if e=os.MkdirAll(filepath.Dir(save),0700);e!=nil{t.Fatal(e)}
+  if e=os.WriteFile(save,[]byte("PLAYER GAME SAVE"),0600);e!=nil{t.Fatal(e)}
+  if e=Install(source,pkg);e!=nil{t.Fatal(e)}
+  installed,_:=os.ReadFile(registry)
+  if bytes.Equal(original,installed){t.Fatal("MV fixture was not installed")}
+  if e=RecoverGame(source);e!=nil{t.Fatal(e)}
+  restored,_:=os.ReadFile(registry)
+  if !bytes.Equal(restored,original){t.Fatal("original plugins.js was not restored byte-identically")}
+  if e=RecoverGame(source);e!=nil{t.Fatalf("repeat recovery rejected: %v",e)}
+  saved,_:=os.ReadFile(save)
+  if string(saved)!="PLAYER GAME SAVE"{t.Fatal("player save was modified")}
+  if !ordinary(filepath.Join(game,"www","js","plugins","IATraductora.js")){
+    t.Fatal("recovery removed the translator plugin instead of safely deactivating it")
+  }
+  snapshot:=filepath.Join(game,"IA Traductora","install","recovery",hash(installed)+".plugins.js")
+  persisted,_:=os.ReadFile(snapshot)
+  if !bytes.Equal(persisted,installed){t.Fatal("installed registry snapshot missing")}
+}
+func TestRecoverGameFailClosedOnAlteredUserRegistryAndBackup(t *testing.T){
+  path:=fakePackage(t);pkg,e:=readPackage(path);if e!=nil{t.Fatal(e)};defer pkg.Close()
+  game:=createFixture(t)
+  registry:=filepath.Join(game,"www","js","plugins.js")
+  if e=Install(filepath.Join(game,"Game.exe"),pkg);e!=nil{t.Fatal(e)}
+  current,_:=os.ReadFile(registry)
+  modified:=append(append([]byte{},current...),[]byte("\n// user edit")...)
+  if e=os.WriteFile(registry,modified,0600);e!=nil{t.Fatal(e)}
+  if e=RecoverGame(filepath.Join(game,"Game.exe"));e==nil||
+    !strings.Contains(e.Error(),"REGISTRO_CAMBIADO"){t.Fatalf("must refuse changed MV registry: %v",e)}
+  if got,_:=os.ReadFile(registry);!bytes.Equal(got,modified){t.Fatal("user registry overwritten")}
+  if e=os.WriteFile(registry,current,0600);e!=nil{t.Fatal(e)}
+  backup:=filepath.Join(game,"IA Traductora","install","original-plugins.js")
+  if e=os.WriteFile(backup,[]byte("tampered"),0600);e!=nil{t.Fatal(e)}
+  if e=RecoverGame(filepath.Join(game,"Game.exe"));e==nil||
+    !strings.Contains(e.Error(),"RESPALDO_ALTERADO"){t.Fatalf("must reject tampered backup: %v",e)}
+  if got,_:=os.ReadFile(registry);!bytes.Equal(got,current){t.Fatal("tampered backup caused changes")}
+}
