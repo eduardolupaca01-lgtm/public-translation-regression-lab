@@ -382,7 +382,7 @@ jobs:
             $log = Join-Path $env:RUNNER_TEMP "servidor-mv-guard-private.log"
             go mod tidy *> $log
             if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_INTEGRATED_GO_MODULE_DEPENDENCY_HOLD" }
-            go test . -run 'TestServidor(MV|Picker|Preparacion|Portable|Integrated)' -count=1 *> $log
+            go test . -run 'TestServidor(MV|Picker|Preparacion|Portable|Integrated|F10)' -count=1 *> $log
             if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_MV_SIGNATURE_GUARD_TEST_HOLD" }
             go vet . *> $log
             if ($LASTEXITCODE -ne 0) { throw "SERVIDOR_MV_GO_VET_HOLD" }
