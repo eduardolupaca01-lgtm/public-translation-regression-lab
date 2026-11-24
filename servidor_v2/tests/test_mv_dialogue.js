@@ -1891,9 +1891,17 @@ async function testR6FirstViewNativeGate(mz){
     const m=f.$gameMessage,w=new f.context.Window_Message();
     m._texts=[text];m.setChoices([choice]);
     w.update();
-    assert.equal(w.originalStarts,1,"cold neural text must never block native message start");
+    if(mz){
+        assert.equal(w.originalStarts,0,"MZ keeps its bounded first-view contract");
+        const limit=Date.now()+4000;
+        while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
+        assert.equal(w.originalStarts,1,"MZ native start occurs exactly once");
+        assert.equal(w._textState.text,"¿Adónde vas?");
+    }else{
+        assert.equal(w.originalStarts,1,"cold MV neural text must never block native message start");
+        assert.equal(w._textState.text,text,"MV first paint keeps source text while translation runs asynchronously");
+    }
     assert.equal(w.updates,1,"native update loop keeps running");
-    assert.equal(w._textState.text,text,"first paint keeps source text while translation runs asynchronously");
     assert.equal(m.allText(),text,"translation cannot mutate native message data");
 
     const actual=new f.context.Window_ChoiceList(m._choices);
@@ -1904,14 +1912,21 @@ async function testR6FirstViewNativeGate(mz){
     assert.equal(actual._list[0].name,choice,"choice source label remains unchanged");
     assert.equal(actual._list[0].ext,0,"choice branch index remains unchanged");
 
-    // A standalone choice must open immediately, even while its first
-    // translation is still in flight.
+    // A standalone choice follows the same engine-specific policy.
     m.clear();m.setChoices([cold]);
     const only=new f.context.Window_Message();only.update();
-    assert.ok(only._choice,"cold standalone choice must remain immediately selectable");
-    await wait(180);
-    only._choice.drawItem(0);
-    assert.equal(only._choice.painted[only._choice.painted.length-1],"Cierra la ventana, por favor.");
+    if(mz){
+        assert.equal(only._choice,undefined,"MZ waits for its bounded first-view result");
+        const choiceLimit=Date.now()+4000;
+        while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
+        assert.ok(only._choice);
+        assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
+    }else{
+        assert.ok(only._choice,"cold MV standalone choice must remain immediately selectable");
+        await wait(180);
+        only._choice.drawItem(0);
+        assert.equal(only._choice.painted[only._choice.painted.length-1],"Cierra la ventana, por favor.");
+    }
 }
 async function testR6OfflineDeadlineAndForm(){
     const f=fixture(0,{mz:true,disconnected:true,configure(c){
@@ -1938,8 +1953,9 @@ async function testR6OfflineDeadlineAndForm(){
     }});
     await wait(25);const c=f.context,m=f.$gameMessage,w=new c.Window_Message();
     m._texts=["Where are you going?"];
-    assert.equal(w.updateWait(),false,"offline neural inference must never block native UI");
-    assert.equal(w.updateWait(),false,"repeated frames remain non-blocking while the worker is offline");
+    assert.equal(w.updateWait(),true);
+    w._iaFirstGate.started-=9000;
+    assert.equal(w.updateWait(),false,"offline MZ deadline must release native UI");
     new c.Game_Interpreter()._inputForm();
     const input=c.__form.nodes._111_input,submit=c.__form.nodes._111_submit;
     input.fire("keydown","c");input.fire("keyup","c");input.fire("keypress","c");
