@@ -37,6 +37,25 @@ Scene_Map.prototype.createAllWindows=function(){};
 Scene_Map.prototype.update=function(){};
 Scene_Map.prototype.addWindow=function(window){this.windows.push(window);};
 
+// Match the real Galv Scene_Map factory contract, with a private caption
+// class and layout that does not call any inherited drawText hook.
+(function(){
+    function Window_GalvCaption(target,time,textArray,data,delay,skin,yoffset){
+        this.target=target;this._time=time+delay;this._txtArray=textArray;
+        this.data=data;this.skin=skin;this.yoffset=yoffset;this.active=true;
+        this.imagesLoaded=true;this.layoutCount=0;this.setWindowDimensions();
+    }
+    Window_GalvCaption.prototype.setWindowDimensions=function(){
+        this.layoutCount++;this.painted=this._txtArray.slice();
+        this.width=240;
+    };
+    Window_GalvCaption.prototype.update=function(){this._time--;};
+    Scene_Map.prototype.createCaptionWindow=function(target,time,textArray,data,delay,skin,yoffset){
+        const w=new Window_GalvCaption(target,time,textArray,data,delay,skin,yoffset);
+        (this._captionWindows||(this._captionWindows=[])).push(w);
+        w.parent=this;this.addWindow(w);
+    };
+})();
 const gameMessage=new Game_Message();
 let keyPressed=false;
 const ctx={
@@ -59,7 +78,8 @@ const ctx={
     Graphics:{boxWidth:1280},
     Input:{keyMapper:{},isTriggered(){return keyPressed;}},
     SceneManager:{_scene:null},
-    $gameMessage:gameMessage
+    $gameMessage:gameMessage,
+    $plugins:[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}]
 };
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate,limitMs,code){
@@ -120,6 +140,26 @@ async function run(){
     assert.equal(gameMessage._choices.length,2,"IA_CHOICE_COUNT_CHANGED");
     assert.ok(gameMessage._choices.every(v=>typeof v==="string"&&v.trim()),
         "IA_NATIVE_CHOICES_EMPTY");
+    const captionText="Please wait here.",list=[captionText],meta=["",0,0,2],target={id:1};
+    scene.createCaptionWindow(target,360,list,meta,0,"Window",-40);
+    const caption=scene._captionWindows[0];
+    await until(()=>{
+        for(let i=0;i<4;i++)caption.update();
+        // If the original timed caption has expired, a new native display
+        // uses the durable result instead of reviving an old window.
+        if(caption.painted[0]!==captionText)return true;
+        return false;
+    },20000,"IA_NATIVE_GALV_CAPTION_TIMEOUT");
+    assert.ok(/esper|aguard/i.test(caption.painted[0]),"IA_NATIVE_GALV_CAPTION_NOT_SPANISH");
+    assert.equal(list[0],captionText,"IA_NATIVE_GALV_INPUT_CHANGED");
+    assert.equal(caption.target,target,"IA_NATIVE_GALV_TARGET_CHANGED");
+    assert.equal(caption.data,meta,"IA_NATIVE_GALV_METADATA_CHANGED");
+    assert.equal(caption.skin,"Window","IA_NATIVE_GALV_SKIN_CHANGED");
+    assert.equal(caption.yoffset,-40,"IA_NATIVE_GALV_OFFSET_CHANGED");
+    assert.equal(scene._captionWindows.length,1,"IA_NATIVE_GALV_DUPLICATE");
+    scene.createCaptionWindow(target,60,list,meta,0,"Window",-40);
+    assert.equal(scene._captionWindows[1].painted[0],caption.painted[0],"IA_NATIVE_GALV_REPLAY_FAILED");
+    console.log("SERVIDOR_V2_REAL_OPUS_NATIVE_GALV_CAPTION_PASS");
     console.log("SERVIDOR_V2_REAL_OPUS_PASSIVE_NATIVE_CACHE_TEXT_AND_CHOICES_PASS");
 }
 run().catch(err=>{

@@ -1121,6 +1121,100 @@ async function testR4P5BFormattedMessageBodyReplay(){
     assert.equal(scene.windows.length,0);assert.equal(f.posts.length,0);
 }
 
+
+// This fixture reproduces the published Galv factory contract: a closure-
+// private caption, third argument textArray, native layout before addWindow,
+// and the actual _captionWindows / _time lifecycle. No third-party source
+// or commercial game assets are redistributed.
+function configurePrivateGalv(c){
+    const nativeDraw=c.Window_Base.prototype.drawTextEx;
+    function Window_GalvCaption(target,time,textArray,data,delay,skin,yoffset,actor){
+        this.initialize(0,0,1280,100);
+        this.target=target;this._time=time+delay;this._delayTime=time;
+        this._txtArray=textArray;this.data=data;this.delay=delay;this.skin=skin;
+        this.yoffset=yoffset;this.actor=actor;this.active=true;this.visible=true;
+        this.imagesLoaded=true;this.contents=new c.Bitmap(1280,100);
+        this.layoutCount=0;this.setWindowDimensions();
+    }
+    Window_GalvCaption.prototype=Object.create(c.Window_Base.prototype);
+    Window_GalvCaption.prototype.constructor=Window_GalvCaption;
+    Window_GalvCaption.prototype.setWindowDimensions=function(){
+        this.layoutCount++;
+        this.contents.clearRect(0,0,1280,100);
+        this.painted=this._txtArray.map((line,i)=>{
+            // A cached alias to the original native draw bypasses later
+            // Window_Base.prototype wrappers, just like a custom renderer.
+            nativeDraw.call(this,line,0,i*32);
+            this.contents.drawText(line,0,i*32,1280,32);
+            return line;
+        });
+        this.width=Math.max(...this.painted.map(v=>v.length*12))+24;
+    };
+    Window_GalvCaption.prototype.update=function(){this._time--;this.x=(this.x||0)+1;return "updated";};
+    c.Scene_Map.prototype.createCaptionWindow=function(target,time,textArray,data,delay,skin,yoffset,actor){
+        const w=new Window_GalvCaption(target,time,textArray,data,delay,skin,yoffset,actor);
+        (this._captionWindows||(this._captionWindows=[])).push(w);w.parent=this;
+        this.addWindow(w);return "native-created";
+    };
+}
+async function testR4P6GalvRealFactoryContract(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const original="Please wait, \\c[5]friend\\c[0].",translated="Espera, \\c[5]amigo\\c[0].";
+    const late="Stay near the door.",lateEs="Quédate cerca de la puerta.";
+    const short="Wait here, friend.",shortEs="Espera aquí, amigo.";
+    const dyn="Please close the gate.",dynEs="Por favor, cierra la puerta.";
+    const state={files:{},dirs:{[data]:true,[folder]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original,translated,composed:true})+"\n";
+    let dynamic=dyn;
+    const plugins=[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}];
+    const f=fixture(20,{fsState:state,plugins,responses:{[late]:lateEs,[short]:shortEs,[dyn]:dynEs},configure(c){
+        configurePrivateGalv(c);
+        c.$gameVariables={value(id){assert.equal(id,49);return dynamic;}};
+    }});
+    await wait(90);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    const target={id:7},metadata=["",0,0,2],list=[original],before=JSON.stringify(list);
+    assert.equal(scene.createCaptionWindow(target,100,list,metadata,5,"WindowSpeech",-40,false),"native-created");
+    const win=scene._captionWindows[0];
+    assert.equal(c.window.Window_GalvCaption,undefined,"native class is not a browser global");
+    assert.equal(win.painted[0],translated,"cached translation must reach first native layout");
+    assert.equal(win.target,target);assert.equal(win.data,metadata);assert.equal(win._time,105);
+    assert.equal(win.skin,"WindowSpeech");assert.equal(win.yoffset,-40);
+    assert.equal(win.layoutCount,1);assert.equal(scene.windows.length,1);
+    assert.equal(JSON.stringify(list),before);
+    assert.ok(!f.posts.some(p=>p.text===original));
+    const raw=[late,original];scene.createCaptionWindow(target,100,raw,metadata,0,"WindowSpeech",-40,false);
+    const w=scene._captionWindows[1],bitmap=w.contents;
+    assert.equal(w.painted[0],late);assert.equal(w.painted[1],translated);
+    // An independently expiring native caption cannot be resurrected.
+    scene.createCaptionWindow(target,2,[short],metadata,0,"WindowSpeech",-40,false);
+    const expired=scene._captionWindows[2];expired.update();expired.update();expired.active=false;
+    // Variable-only message is resolved as visual text; variable never written.
+    scene.createCaptionWindow(target,120,["\\v[49]"],metadata,0,"WindowSpeech",-40,false);
+    const variable=scene._captionWindows[3];
+    await wait(180);
+    for(let i=0;i<8;i++){assert.equal(w.update(),"updated");expired.update();variable.update();}
+    assert.equal(w.painted[0],lateEs);assert.equal(w.painted[1],translated);
+    assert.equal(w.contents,bitmap);assert.equal(w._time,92);
+    assert.equal(w.layoutCount,2);assert.equal(w.x,8);
+    assert.ok(!bitmap.ops.some(v=>v.text===late),"native redraw erased the original");
+    assert.equal(expired.layoutCount,1);assert.equal(expired.painted[0],short);
+    assert.equal(variable.painted[0],dynEs);assert.equal(dynamic,dyn);
+    assert.equal(scene.windows.length,4,"no extra window from translation");
+    assert.deepEqual(raw,[late,original]);
+    const second=[late];scene.createCaptionWindow(target,60,second,metadata,0,"WindowSpeech",-40,false);
+    assert.equal(scene._captionWindows[4].painted[0],lateEs,"repeat uses cache at first paint");
+    assert.equal(f.posts.filter(p=>p.text===late).length,1);
+    assert.ok(f.posts.some(p=>p.text===dyn),"resolved visual variable reaches inference");
+    assert.ok(f.posts.every(p=>!p.text.includes("v[49]")));
+    const old=scene._captionWindows[4];c.SceneManager._scene=new c.Scene_Map();
+    old.update();assert.equal(old.layoutCount,1);
+    assert.equal(f.$gameMessage.allText(),"");
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -1179,6 +1273,7 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P5QuestOverrideAndCaptionAlias();
     await testR4P5DynamicNativeCaptionConversion();
     await testR4P5BFormattedMessageBodyReplay();
+    await testR4P6GalvRealFactoryContract();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();

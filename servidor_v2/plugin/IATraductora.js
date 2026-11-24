@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P5B-20261124"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P6-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -1483,6 +1483,153 @@ function hookCaptionInterpreter(){
         try{return original.apply(this,arguments);}finally{if(copy&&this._list===copy)this._list=list;}
     };
 }
+// Galv 1.7--2.0 declares its caption class inside a private closure. The
+// stable map factory receives textArray after interpreter/author scripts
+// assemble the text, and before the original class measures the layout.
+// Observe that actual API, not a global Window_GalvCaption constructor.
+var nativeCaptionPending=new Map();
+function nativeCaptionScope(receiver,fn,args){
+    surfaceDepth++;identityDrawDepth++;
+    try{return fn.apply(receiver,args);}finally{identityDrawDepth--;surfaceDepth--;}
+}
+function sameCaptionLines(a,b){
+    return Array.isArray(a)&&Array.isArray(b)&&a.length===b.length&&
+        a.every(function(v,i){return v===b[i];});
+}
+function nativeCaptionInput(raw){
+    // Only resolve an entire display-only text variable, not arbitrary
+    // expressions, script calls, event variables or numeric game state.
+    var m=/^(?:\\|\x1b)v\[(\d{1,6})\]$/i.exec(raw);
+    if(m&&typeof $gameVariables!=="undefined"&&$gameVariables&&typeof $gameVariables.value==="function"){
+        var id=Number(m[1]),value=$gameVariables.value(id);
+        if(typeof value==="string"&&value.length<=1800&&captionSource(value))
+            return {raw:raw,text:value,source:captionSource(value),variable:id};
+    }
+    return {raw:raw,text:raw,source:captionSource(raw),variable:null};
+}
+function captionInputCurrent(input){
+    return input.variable===null||
+        (typeof $gameVariables!=="undefined"&&$gameVariables&&typeof $gameVariables.value==="function"&&
+         $gameVariables.value(input.variable)===input.text);
+}
+function nativeCaptionValue(input){
+    if(!input.source||!captionInputCurrent(input))return null;
+    var result=captionReady(input.source,input.text);
+    return typeof result==="string"&&validTranslation(input.source,input.text,result,true)?result:null;
+}
+function requestNativeCaption(input){
+    if(!input.source||!captionInputCurrent(input))return;
+    var env=captionEnvelope(input.text),body=env?env.body:input.text;
+    addPrefetch(body,true,input.source);
+    var key=input.source+"\u0000"+body,blocked=rejectedKeys.get(key);
+    if(state.connected&&pending.size<96&&nativeCaptionPending.size<24&&
+       !nativeCaptionPending.has(key)&&!(blocked&&blocked>Date.now())){
+        nativeCaptionPending.set(key,true);ambientStats.requested++;
+        captionRequest(input.source,input.text).then(function(){
+            nativeCaptionPending.delete(key);
+        },function(){nativeCaptionPending.delete(key);state.errors++;});
+    }
+    nextPrefetch();
+}
+function attachNativeCaption(scene,win,inputs,displayed){
+    if(!win||!hasNativeClass(win,/^Window_GalvCaption$/)||
+       !sameCaptionLines(win._txtArray,displayed)||
+       typeof win.setWindowDimensions!=="function"||typeof win.update!=="function")return;
+    // Layout may happen immediately or later when the skin has loaded.
+    // In either case let Galv measure and paint its own existing bitmap
+    // without secondary interception of each color span or glyph.
+    var layout=win.setWindowDimensions;
+    win.setWindowDimensions=function(){
+        return nativeCaptionScope(this,layout,arguments);
+    };
+    var update=win.update,shown=displayed.slice(),tick=0,tries=0,finished=false;
+    var remaining=inputs.some(function(input,i){return input.source&&shown[i]===input.raw;});
+    if(!remaining)return;
+    win.update=function(){
+        var output=update.apply(this,arguments);
+        if(finished||this!==win)return output;
+        try{
+            if(typeof SceneManager==="undefined"||SceneManager._scene!==scene||
+               !Array.isArray(scene._captionWindows)||scene._captionWindows.indexOf(win)<0||
+               !win.parent||win.active===false||win._disable||
+               typeof win._time!=="number"||win._time<=0||
+               !sameCaptionLines(win._txtArray,shown)){
+                finished=true;return output;
+            }
+            if(++tick%4!==0)return output;
+            var next=shown.slice(),changed=0,missing=false;
+            inputs.forEach(function(input,i){
+                if(!input.source||shown[i]!==input.raw||!captionInputCurrent(input))return;
+                var value=nativeCaptionValue(input);
+                if(value!==null){next[i]=value;changed++;}
+                else {
+                    missing=true;
+                    if(tick%20===0&&tries<4)requestNativeCaption(input);
+                }
+            });
+            if(tick%20===0)tries++;
+            if(changed){
+                var old=win._txtArray;
+                // A pending skin will use the new display array at its
+                // normal first draw. An already-painted bubble is cleared
+                // and remeasured only by its own native layout method.
+                win._txtArray=next;
+                try{
+                    if(win.imagesLoaded!==false){
+                        win.setWindowDimensions();
+                        var max=typeof Graphics!=="undefined"&&(Graphics.boxWidth||Graphics.width);
+                        if(typeof max==="number"&&max>0&&typeof win.width==="number"&&win.width>max)
+                            throw Error("IA_CAPTION_LAYOUT_TOO_WIDE");
+                    }
+                    shown=next;ambientStats.shown+=changed;state.shown+=changed;
+                }catch(_){
+                    win._txtArray=old;
+                    try{if(win.imagesLoaded!==false)win.setWindowDimensions();}catch(__){}
+                    state.errors++;finished=true;
+                }
+            }
+            if(!missing)finished=true;
+        }catch(_){state.errors++;finished=true;}
+        return output;
+    };
+}
+function hookGalvCaptionFactory(){
+    if(!pluginEnabled(/^GALV_TimedMessagePopups$/i)||typeof Scene_Map==="undefined"||
+       !Scene_Map.prototype||typeof Scene_Map.prototype.createCaptionWindow!=="function")return false;
+    var original=Scene_Map.prototype.createCaptionWindow;
+    Scene_Map.prototype.createCaptionWindow=function(){
+        var args=Array.prototype.slice.call(arguments),raw=args[2],before,inputs,displayed,ready=0;
+        if(!Array.isArray(raw)||!raw.length||raw.length>16||
+           !raw.every(function(v){return typeof v==="string"&&v.length<=1800;}))
+            return original.apply(this,arguments);
+        try{
+            // Copy only the presentation list, never the event data or
+            // other factory arguments (target, time, delay, skin, offset).
+            before=Array.isArray(this._captionWindows)?this._captionWindows.slice():[];
+            inputs=raw.map(nativeCaptionInput);
+            displayed=inputs.map(function(input){
+                var found=nativeCaptionValue(input);
+                if(found!==null){ready++;return found;}
+                if(input.source)requestNativeCaption(input);
+                return input.raw;
+            });
+            if(!inputs.some(function(input){return !!input.source;}))
+                return original.apply(this,arguments);
+            args[2]=displayed.slice();ambientStats.factory=(ambientStats.factory||0)+1;
+        }catch(_){state.errors++;return original.apply(this,arguments);}
+        // Exactly one native creation. No wait, no duplicate window.
+        var result=nativeCaptionScope(this,original,args);
+        try{
+            ambientStats.shown+=ready;state.shown+=ready;
+            var scene=this,newWindows=Array.isArray(scene._captionWindows)?
+                scene._captionWindows.filter(function(w){return before.indexOf(w)<0;}):[];
+            if(newWindows.length===1)attachNativeCaption(scene,newWindows[0],inputs,displayed);
+        }catch(_){state.errors++;}
+        return result;
+    };
+    return true;
+}
+
 function ambientDraw(win,method,args,original){
     var text=args[0],source=null,found=null,epoch=(win._iaCaptionEpoch||0)+1;
     win._iaCaptionEpoch=epoch;
@@ -1565,7 +1712,8 @@ function hookNativeSurface(){
             };
         });
     }
-    hookSpecificSurfaces();hookCaptionInterpreter();
+    hookSpecificSurfaces();
+    if(!hookGalvCaptionFactory())hookCaptionInterpreter();
     // The author's name window is created as a subwindow of Window_Message.
     // Mark that instance, not an arbitrary class or all Japanese short labels.
     if(typeof Window_Message!=="undefined"&&Window_Message.prototype){
@@ -2533,7 +2681,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
-            "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · F10"
+            "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · C:"+String(ambientStats.factory||0)
         ];
         for(var i=0;i<lines.length;i++){
             if(i===4&&lines[i].length>32)this.contents.fontSize=16;
