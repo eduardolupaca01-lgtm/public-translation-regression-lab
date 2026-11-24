@@ -79,7 +79,7 @@ const ctx={
     Input:{keyMapper:{},isTriggered(){return keyPressed;}},
     SceneManager:{_scene:null},
     $gameMessage:gameMessage,
-    $plugins:[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}]
+    $plugins:[{name:"GALV_TimedMessagePopups",status:true,parameters:{}},{name:"KNS_CsvReader",status:true,parameters:{}}]
 };
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate,limitMs,code){
@@ -92,6 +92,16 @@ async function until(predicate,limitMs,code){
 }
 function japanese(value){return /[\u3040-\u30ff\u3400-\u9fff]/.test(value);}
 async function run(){
+    // This is the CI-created synthetic acceptance game, not a user's game.
+    const root=path.join(content,"csv"),sheet=path.join(root,"sheet.csv");
+    const csvMessage="\\c[2]The lantern is on the table.\\I[17]",csvChoice="Open the wooden gate";
+    const csvJa="橋を渡ってください。";
+    const cells=[["","Script","日本語","英語","スペイン語","",""],["$map99","","","","","",""],["$event1","","","","","",""],["$page1","","","","","",""],
+        ["$text1","","",csvMessage,"","",""],["$text2","","",csvChoice,"","",""],["$text3","",csvJa,"","","",""],
+        ["$text4","$v[5] = 9","","if(s[10]) Internal event condition","","",""]];
+    const csvRaw=cells.map(row=>row.map(v=>'"'+v.replace(/"/g,'""')+'"').join(",")).join("\r\n")+"\r\n";
+    fs.mkdirSync(root,{recursive:true});fs.writeFileSync(sheet,csvRaw,"utf8");
+    fs.writeFileSync(path.join(content,"data","System.json"),JSON.stringify({locale:"en_US",startMapId:1}),"utf8");
     vm.runInNewContext(source,ctx,{filename:"IATraductora.js"});
     assert.equal(ctx.Input.keyMapper[121],"ia-traductora","IA_F10_MAPPER_MISSING");
     const scene=new Scene_Map();
@@ -109,6 +119,27 @@ async function run(){
         scene.windows[1].refresh();
         return scene.windows[1].drawn.some(line=>line.indexOf("IA local conectada")!==-1);
     },120000,"IA_WORKER_DID_NOT_CONNECT_AFTER_MAP");
+
+    // No dialogue/choice from this external file has been visited.
+    // Require its real neural prefetch to finish before first native paint.
+    await until(()=>{
+        scene.windows[1].refresh();
+        const labels=scene.windows[1].drawn;
+        return labels.some(v=>/Inventario terminado/.test(v))&&labels.some(v=>{
+            const m=/Textos listos:\s*(\d+)\/(\d+)/.exec(v);
+            return m&&Number(m[2])>=3&&m[1]===m[2];
+        });
+    },120000,"IA_EXTERNAL_CSV_PREFETCH_TIMEOUT");
+    const preloaded=new Window_Message();
+    gameMessage._texts=[csvMessage];preloaded.startMessage();
+    assert.equal(preloaded.starts,1,"IA_EXTERNAL_CSV_FIRST_PAINT_RESTARTED");
+    assert.ok(/^\\c\[2\]/.test(gameMessage.allText())&&/\\I\[17\]$/.test(gameMessage.allText())&&/linterna|farol|lámpara/i.test(gameMessage.allText())&&/mesa/i.test(gameMessage.allText()),"IA_EXTERNAL_CSV_EN_DIALOG_FAIL");
+    gameMessage.setChoices([csvChoice],0,1);
+    assert.ok(/abr/i.test(gameMessage._choices[0])&&/madera/i.test(gameMessage._choices[0]),"IA_EXTERNAL_CSV_EN_CHOICE_FAIL");
+    gameMessage._texts=[csvJa];new Window_Message().startMessage();
+    assert.ok(!japanese(gameMessage.allText())&&/puente/i.test(gameMessage.allText()),"IA_EXTERNAL_CSV_JA_DIALOG_FAIL");
+    assert.equal(fs.readFileSync(sheet,"utf8"),csvRaw,"IA_EXTERNAL_CSV_SOURCE_CHANGED");
+    console.log("SERVIDOR_V2_REAL_OPUS_EXTERNAL_CSV_PREPARED_FIRST_PAINT_PASS");
 
     const sourceText="\\N[2] おはようございます。";
     gameMessage._texts=[sourceText];

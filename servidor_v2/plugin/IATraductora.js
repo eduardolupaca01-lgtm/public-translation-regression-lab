@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P7-20261124"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P7B-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -600,6 +600,7 @@ function repairDisplayTerms(source,original,result){
 }
 function languageFor(s){
     if(typeof s!=="string"||!s||s.length>1800)return null;
+    if(typeof tableStats!=="undefined"&&tableStats.root&&csvExecutableSyntax(s))return null;
     if(typeof csvKnown!=="undefined"&&csvKnown.has(s)&&!actorNames[s])return csvKnown.get(s);
     if(isJapanese(s))return "ja";
     if(actorNames[s])return null;
@@ -1683,6 +1684,18 @@ function withQuestGlyphs(bitmap,text,draw){
     bitmap.fontFace="Georgia, serif";
     try{return draw();}finally{bitmap.fontFace=font;}
 }
+// Exact display-only CSV labels can also be painted directly on a bitmap
+// by a custom UI without passing through the native Window_Base methods.
+function csvPlainLabel(text){
+    if(!tableStats.root||surfaceDepth||identityDrawDepth||typeof text!=="string"||
+       /[\r\n\\\x1b<>]/.test(text)||actorNames[text]||csvExecutableSyntax(text)||
+       (typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name))
+        return null;
+    var source=csvKnown.get(text);
+    if(!source)return null;
+    var value=readyText(source,text);
+    return typeof value==="string"&&validTranslation(source,text,value,true)?value:null;
+}
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
         hookSurfaceConversion(Window_Base.prototype,false);
@@ -1749,13 +1762,18 @@ function hookNativeSurface(){
             var args=Array.prototype.slice.call(arguments);
             try{
                 if(!identityDrawDepth&&typeof args[0]==="string"&&args[0].length>=2)
-                    {var label=questCachedLabel(args[0]);args[0]=label!==null?label:translatedNativeLabel(args[0],false);}
+                    {var label=questCachedLabel(args[0]);
+                     if(label===null)label=csvPlainLabel(args[0]);
+                     args[0]=label!==null?label:translatedNativeLabel(args[0],false);}
             }catch(_){state.errors++;}
             var bitmap=this;return withQuestGlyphs(bitmap,args[0],function(){return bitmapDraw.apply(bitmap,args);});
         };
         var measure=Bitmap.prototype.measureTextWidth;
         if(typeof measure==="function")Bitmap.prototype.measureTextWidth=function(text){
-            var bitmap=this,args=arguments;return withQuestGlyphs(bitmap,text,function(){return measure.apply(bitmap,args);});
+            var bitmap=this,args=Array.prototype.slice.call(arguments),label=null;
+            try{label=csvPlainLabel(text);}catch(_){}
+            if(label!==null)args[0]=label;
+            return withQuestGlyphs(bitmap,args[0],function(){return measure.apply(bitmap,args);});
         };
     }
 }
@@ -2277,9 +2295,8 @@ function detectRootCsv(){
     if(!content)return false;
     var dir=path.join(content,"csv");
     if(!directoryUnder(content,dir))return false;
-    if(!pluginEnabled(/^(?:KNS_CsvReader|KNS_RgssTranslator|MEO_Csv|MEO_VXACE_CSV_LogSheet)$/i)&&
-       !regularUnder(dir,path.join(dir,"sheet.csv"),16*1024*1024)&&
-       !regularUnder(dir,path.join(dir,"commonSheet.csv"),16*1024*1024))return false;
+    // A root CSV directory is inventoried even without a known loader;
+    // each file must still match an explicit display schema.
     tableStats.root=true;
     // Bounded larger inventory/cache only for the detected external tables.
     MAX_DISCOVERED=90000;MAX_CACHE_ENTRIES=150000;CACHE_LIMIT=128*1024*1024;
@@ -2295,8 +2312,12 @@ function csvForms(value){
     // escape codes inside each block, and never alter the source file.
     return csvNormalize(value).split(/\/\n/).filter(function(v){return v.trim();});
 }
+function csvExecutableSyntax(value){
+    return typeof value==="string"&&(/\b(?:if|en)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|\\(?:eval|script)\b/i.test(value)||
+        /(?:^|\n)\s*(?:[\w.]+\s*=\s*[^=]|(?:function|var|let|const)\s+[A-Za-z_$])/i.test(value));
+}
 function csvCandidate(value,declared){
-    if(typeof value!=="string"||!value.trim()||value.length>1800||actorNames[value])return null;
+    if(typeof value!=="string"||!value.trim()||value.length>1800||actorNames[value]||csvExecutableSyntax(value))return null;
     if(/^\s*(?:※|\/\/|[#=$@+]|(?:if|en|eval|function|return|var|let|const)\s*[\s(])/i.test(value)||
        /\b(?:if|en)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|(?:^|\n)\s*[\w.]+\s*=\s*[^=]/i.test(value)||
        /\b(?:eval|set_mlog|setTimeout)\s*\(/i.test(value))return null;
@@ -2394,6 +2415,23 @@ function rootCsvSchema(relative,rows){
     }
     if(/^common\/event_\d+\.csv$/.test(name)&&exact(0,/^0$/)&&exact(1,/^日本語$/)&&exact(2,/^English$/i))
         return {type:"numeric",start:1,width:h.length,groups:[[1,2,-1]]};
+    // Explicit legacy display layouts, only if filename and field
+    // signatures agree. Numeric IDs, switches and asset names stay intact.
+    if(name==="db_npcjob.csv"&&h.length===3&&h.every(function(v){return !v.trim();})&&
+       rows[1]&&/^\d+$/.test(rows[1][0]))
+        return {type:"numeric",start:1,width:3,groups:[[1,2,-1]]};
+    if(name==="status.csv"&&h.length===3&&h[0]==="species"&&isJapanese(h[1])&&/^Species\s*:/i.test(h[2]))
+        return {type:"generic",id:0,start:0,width:3,groups:[[1,2,-1]]};
+    if(name==="npc/npc_misc.csv"&&h.length===3&&h[0]==="基本情報"&&h[1]==="Personal Information")
+        return {type:"generic",id:0,start:0,width:3,groups:[[0,1,-1]]};
+    if(name==="window_ero_status_simple.csv"&&h.length===2&&/^\d+$/.test(h[0])&&
+       rows.every(function(row){return row.length===2&&(!row[0]||/^\d+$/.test(row[0]));}))
+        return {type:"numeric",start:0,width:2,groups:[[-1,1,-1]]};
+    if(name==="profile.csv"&&h.length===5&&h[0]==="Empty"&&h[1]==="0"&&h.slice(2).every(function(v){return !v.trim();}))
+        return {type:"profile",start:1,width:5,groups:[[2,3,-1]]};
+    if(/^(?:db_actor|db_enemy)\.csv$/.test(name)&&h.length===10&&h[0]==="$id=0"&&
+       h[1]==="JPN_NAME"&&h[4]==="ENG_NAME"&&h[7]==="SPN_NAME"&&h[3]===h[6]&&h[6]===h[9]&&h[3]==="desc")
+        return {type:"db",start:1,width:10,groups:[[3,6,9]]}; // descriptions only, never names
     // Only explicitly identified translation columns in other tables.
     // Exclude database IDs, developer variable names, raw maps, assets and
     // headerless/private profile data whose meaning is not established.
@@ -2428,6 +2466,7 @@ function scanRootCsvFile(relative,raw,done){
             else if(schema.type==="numeric"&&!/^\d+$/.test(key))continue;
             else if(schema.type==="npc"&&(!/^\d+$/.test(r[1])||!/^\d+$/.test(r[2])))continue;
             else if(schema.type==="log"&&(!key||!/^[A-Za-z0-9_.\-]+$/.test(key)))continue;
+            else if(schema.type==="profile"&&(!/^[A-Za-z0-9_.-]+$/.test(key)||!/^\d+$/.test(r[1])))continue;
             else if(schema.type==="generic"&&!r[schema.id])continue;
             schema.groups.forEach(function(g){
                 var jp=r[g[0]],en=r[g[1]],es=r[g[2]];
@@ -2465,6 +2504,7 @@ function scanRootCsv(done){
         var d=dirs.shift();
         fs.readdir(d.path,function(err,names){
             if(err){scanStats.skipped++;tableStats.rootSkipped++;enumerate();return;}
+            if(names.length>512)scanStats.limited=true;
             names.sort().slice(0,512).forEach(function(n){
                 if(!/^[A-Za-z0-9_.-]{1,100}$/.test(n)||n==="."||n==="..")return;
                 var full=path.join(d.path,n);

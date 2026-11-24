@@ -1241,8 +1241,10 @@ async function testR4P7ExternalSheetPreparesBeforeFirstGame(){
     state.files[path.join(csv,"sheet.csv")]=csvFixtureRows(rows);
     state.files[path.join(csv,"DB_Variable.csv")]=csvFixtureRows([["$id=0","JPN_NAME","ENG_NAME","SPN_NAME"],["$id=17","内部値","Internal event value",""]]);
     state.files[path.join(csv,"DB_Item.csv")]=csvFixtureRows([["$id=0","free","JPN_NAME","DESCRIPTION","ENG_NAME","DESCRIPTION","SPN_NAME","DESCRIPTION"],["$id=5","","鍵","古い鍵","Old key","A key, made of iron.","",""]]);
+    state.files[path.join(csv,"DB_NPCJob.csv")]=csvFixtureRows([["","",""],["12","配達人","Courier"]]);
+    state.files[path.join(csv,"status.csv")]=csvFixtureRows([["species","種族","Species:"],["species_value","人間","Human"]]);
     const saved=Object.assign({},state.files);
-    const responses={"Please bring the lantern.":"Por favor, trae la linterna.",[other]:"Rechazar el encargo","Wait by the bridge.":"Espera junto al puente.",[late]:"El ferry sale mañana.","Old key":"Llave antigua","A key, made of iron.":"Una llave, hecha de hierro."};
+    const responses={"Courier":"Mensajero","Species:":"Especie:","Human":"Humano","Please bring the lantern.":"Por favor, trae la linterna.",[other]:"Rechazar el encargo","Wait by the bridge.":"Espera junto al puente.",[late]:"El ferry sale mañana.","Old key":"Llave antigua","A key, made of iron.":"Una llave, hecha de hierro."};
     const plugins=[{name:"KNS_CsvReader",status:true,parameters:{}}];
     const f=fixture(2,{fsState:state,batch:true,responses,plugins});
     const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();title.commandNewGame();
@@ -1258,6 +1260,15 @@ async function testR4P7ExternalSheetPreparesBeforeFirstGame(){
     assert.equal(f.$gameMessage.allText(),"\\c[2][\\n[7]]\\c[0]\nPor favor, trae la linterna.\\I[17]");
     f.$gameMessage.setChoices([choice,other],0,1);
     assert.deepEqual(Array.from(f.$gameMessage._choices),["Aceptar el encargo","Rechazar el encargo"]);
+    const conditional="Take the ferry if(s[10])";
+    f.$gameMessage.setChoices([conditional,choice],0,1);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),[conditional,"Aceptar el encargo"]);
+    await wait(30);
+    assert.ok(!f.posts.some(p=>p.text.includes("if(s[10])")),"executable choice condition is never sent to inference");
+    const bitmap=new f.context.Bitmap(640,100);
+    assert.equal(bitmap.measureTextWidth("Courier"),"Mensajero".length*12);
+    bitmap.drawText("Courier",0,0,600,36);
+    assert.equal(bitmap.lastText,"Mensajero");
     // Alternate source from the same bilingual row has the same exact
     // control contract and is reusable without a second neural inference.
     f.$gameMessage._texts=["明日出発する。"];w.startMessage();
