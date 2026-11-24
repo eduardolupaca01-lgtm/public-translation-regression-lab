@@ -1,11 +1,7 @@
 name: Servidor v2 - modelo OPUS real - Windows propietario cifrado
 on:
-  push:
-    branches:
-      - feature/servidor-v2-identidad-rpg-mv-20261123
-    paths:
-      - "servidor_v2/**"
-      - ".github/workflows/servidor-v2-real-ia-windows.yml"
+  # The unified MV/MZ branch is the only automatic distribution build.
+  # Keep this workflow available for an explicit MV-only diagnostic.
   workflow_dispatch:
 
 permissions:
