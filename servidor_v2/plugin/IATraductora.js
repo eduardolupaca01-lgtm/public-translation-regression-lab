@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R6-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R7-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -2258,6 +2258,13 @@ function firstViewMissing(win,raw,choice){
         // Never substitute an unrelated language column to satisfy the wait.
         return false;
     }
+    if(!choice){
+        var scripted=scriptMessagePlan(raw);
+        if(scripted){
+            if(authoredRead(scripted,true)!==null)return false;
+            return rejectedKeys.get(scripted.source+"\u0000"+scripted.body)!==Infinity;
+        }
+    }
     if(choice&&choiceDisplay(win,raw,true)!==null)return false;
     if(choice&&(externalTables()||isMZ)){
         var variable=/^(?:\\|\x1b)v\[(\d{1,6})\]$/i.exec(raw);
@@ -2282,7 +2289,7 @@ function firstViewWait(win){
     choices=Array.isArray(choices)&&choices.length<=24?choices.slice():[];
     if(!raw&&!choices.length){win._iaFirstGate=null;return false;}
     var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null,
-        key=JSON.stringify([raw,choices,m._iaFirstGeneration||0]),now=Date.now(),g=win._iaFirstGate;
+        key=JSON.stringify([raw,choices,m._iaFirstGeneration||0,(scriptMessagePlan(raw)||{}).body||""]),now=Date.now(),g=win._iaFirstGate;
     if(!g||g.message!==m||g.scene!==scene||g.key!==key)
         g=win._iaFirstGate={message:m,scene:scene,key:key,started:now,checked:0,waiting:true};
     if(g.done)return false;
@@ -2347,6 +2354,182 @@ function hookInputForm(){
     };
 }
 
+// R7: explicitly authored MZ display fields. Never execute a script
+// during inventory or translate an entire script, filename, or variable ID.
+var authoredDisplay=new Map(),scriptLocale="",scriptSystem=false,scriptProfile=false;
+var scriptStats={dialogues:0,pictures:0,shown:0};
+function enabledTextPicture(){
+    return isMZ&&typeof $plugins!=="undefined"&&Array.isArray($plugins)&&$plugins.some(function(p){return p&&p.status&&p.name==="TextPicture";});
+}
+function scriptSystemContract(data){
+    var v=data&&data.variables;
+    return isMZ&&Array.isArray(v)&&v[21]==="MESSAGE HOLDER"&&v[25]==="MESSAGE HOLDER"&&v[26]==="SYNTAX HOLDER";
+}
+function scriptEventContract(data){
+    if(!Array.isArray(data))return false;
+    return data.some(function(e){
+        if(!e||!Array.isArray(e.list))return false;
+        var lines=e.list;
+        var read=lines.some(function(c,i){
+            if(c.code!==355||!c.parameters||c.parameters[0]!=='var slice = $gameVariables.value(21).indexOf(".");')return false;
+            var want=["var message = $gameVariables.value(21).slice(slice + 1);","var syntax = $gameVariables.value(21).slice(0,slice);","$gameVariables.setValue(25, message);","$gameVariables.setValue(26, syntax);"];
+            return want.every(function(s,j){var n=lines[i+j+1];return n&&n.code===655&&n.parameters&&n.parameters[0]===s;});
+        });
+        return read&&lines.some(function(c){return c.code===401&&c.parameters&&/^\\v\[25\](?:\\Wait\[\d+\])?$/i.test(c.parameters[0]);});
+    });
+}
+function scriptProfileActive(){
+    if(!isMZ)return false;
+    if(scriptProfile)return true;
+    if(typeof $dataSystem!=="undefined"&&scriptSystemContract($dataSystem)&&
+       typeof $dataCommonEvents!=="undefined"&&$dataCommonEvents){
+        if(scriptEventContract($dataCommonEvents)){scriptProfile=true;scriptLocale=$dataSystem.locale||"";}
+    }
+    return scriptProfile;
+}
+function authoredSource(text,declared){
+    if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
+       csvExecutableSyntax(text)||/[\u0000\uFFFD]|^\s*(?:\/[A-Za-z]|\/\/|[=$@#])|(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
+    var prose=visibleProse(text).trim();
+    if(!prose||/^[A-Za-z0-9_./-]+\.(?:js|json|png|jpg|webm|ogg|mp4)$/i.test(prose))return null;
+    if(isJapanese(prose))return "ja";
+    var source=languageFor(text);
+    if(source)return source;
+    var english=declared||/^en(?:[_-]|$)/i.test(scriptLocale)||
+        (typeof $dataSystem!=="undefined"&&$dataSystem&&/^en(?:[_-]|$)/i.test($dataSystem.locale||""));
+    return english&&/[A-Za-z]{2}/.test(prose)&&(/[.!?,…]/.test(prose)||/[A-Za-z]\s+[A-Za-z]/.test(prose))&&!/^[A-Z0-9_ -]+$/.test(prose)?"en":null;
+}
+function authoredRemember(source,text,priority){
+    if(!source)return;
+    if(authoredDisplay.size<MAX_DISCOVERED||authoredDisplay.has(text))authoredDisplay.set(text,source);
+    addPrefetch(text,priority,source);
+}
+function authoredRead(plan,requestMissing){
+    if(!plan)return null;
+    if(!authoredDisplay.has(plan.body)&&authoredDisplay.size<MAX_DISCOVERED)authoredDisplay.set(plan.body,plan.source);
+    var translated=readyText(plan.source,plan.body);
+    if(translated!==null&&validTranslation(plan.source,plan.body,translated,true))
+        return plan.prefix+translated+plan.suffix;
+    if(requestMissing)firstViewRequest(plan.source,plan.body);
+    return null;
+}
+function scriptDialogueBody(value){
+    if(typeof value!=="string"||value.length>1850)return null;
+    var m=/^\s*[A-Za-z0-9!@#%<>{}^]{1,48}\.([\s\S]+)$/.exec(value);
+    return m&&m[1].trim()?m[1]:null;
+}
+function scriptDialoguePlan(body,suffix){
+    if(typeof body!=="string"||/(?:^|\s)\/[A-Za-z]/.test(body))return null;
+    // This authored token is substituted with actor 1 by the verified
+    // common-event dialect. Reuse the engine's protected actor escape;
+    // the chosen player's name never enters OPUS or the translation key.
+    var canonical=body.replace(/1Hero/g,"\\N[1]"),source=authoredSource(canonical,true);
+    return source?{source:source,body:canonical,prefix:"",suffix:suffix||""}:null;
+}
+function scriptMessagePlan(raw){
+    if(!isMZ||typeof raw!=="string"||!/^\\v\[25\](?:\\Wait\[\d+\])?$/i.test(raw)||!scriptProfileActive()||
+       typeof $gameVariables==="undefined"||!$gameVariables||typeof $gameVariables.value!=="function")return null;
+    var original=scriptDialogueBody($gameVariables.value(21)),current=$gameVariables.value(25);
+    if(original===null||typeof current!=="string")return null;
+    if(original!==current){
+        if(original.indexOf("1Hero")<0||typeof $gameActors==="undefined"||!$gameActors||typeof $gameActors.actor!=="function")return null;
+        var actor=$gameActors.actor(1),name=actor&&typeof actor.name==="function"?actor.name():null;
+        if(typeof name!=="string"||!name||name.length>100||/[\r\n\\\x1b<>]/.test(name)||
+           original.split("1Hero").join(name)!==current)return null;
+    }
+    return scriptDialoguePlan(original,raw.replace(/^\\v\[25\]/i,""));
+}
+function scriptLiteral(raw){
+    if(typeof raw!=="string"||raw.length>4000)return null;
+    // A single literal statement only. JSON.parse decodes the quoted
+    // string; never evaluate concatenation, comments, template literals,
+    // conditionals, nested commands or arbitrary JavaScript.
+    var m=/^\s*\$gameVariables\.setValue\(\s*21\s*,\s*("(?:[^"\\\r\n]|\\.)*")\s*\)\s*;?\s*$/.exec(raw);
+    if(!m)return null;
+    try{return scriptDialogueBody(JSON.parse(m[1]));}catch(_){return null;}
+}
+function picturePlan(raw){
+    if(typeof raw!=="string"||raw.length>1800||!raw.trim()||tsvRef(raw))return null;
+    var prefix="",body=raw;
+    // Only explicitly defined display variables for the verified dialect;
+    // names, money, counters and generic game variables are NOT translated.
+    var dynamic=/^((?:\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{1,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[{}]))*)\\v\[(64|266|275)\]$/i.exec(raw);
+    if(dynamic&&scriptProfileActive()&&typeof $gameVariables!=="undefined"&&$gameVariables&&typeof $gameVariables.value==="function"){
+        body=$gameVariables.value(Number(dynamic[2]));prefix=dynamic[1];
+        if(typeof body!=="string"||actorNames[body])return null;
+    }else if(/(?:\\|\x1b)[VP]\[\d+\]/i.test(raw))return null;
+    // An explicit speaker label belongs to the picture, not the model.
+    var speaker=/^((?:\\N\[\d+\]|[A-Z][A-Za-z0-9'’ -]{0,35}):[ \t]+)([\s\S]+)$/.exec(body);
+    if(speaker){prefix+=speaker[1];body=speaker[2];}
+    var source=authoredSource(body,false);
+    return source?{source:source,body:body,prefix:prefix,suffix:""}:null;
+}
+function scriptScanCommand(cmd,next,priority){
+    if(!isMZ||!cmd||!Array.isArray(cmd.parameters))return;
+    var a=cmd.parameters,plan=null;
+    if(cmd.code===357&&enabledTextPicture()&&a[0]==="TextPicture"&&a[1]==="set"&&a[3]&&typeof a[3].text==="string"){
+        // Dynamic pictures are handled at presentation, not against
+        // arbitrary variable values during the static inventory.
+        if(!/(?:\\|\x1b)[VP]\[\d+\]/i.test(a[3].text))plan=picturePlan(a[3].text);
+        if(plan)scriptStats.pictures++;
+    }else if(cmd.code===355&&scriptProfileActive()&&(!next||next.code!==655)){
+        var body=scriptLiteral(a[0]);if(body!==null)plan=scriptDialoguePlan(body,"");
+        if(plan)scriptStats.dialogues++;
+    }
+    if(plan)authoredRemember(plan.source,plan.body,priority);
+}
+function hookAuthoredMZ(){
+    if(!isMZ)return;
+    if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&typeof Game_Interpreter.prototype.setup==="function"){
+        var setup=Game_Interpreter.prototype.setup;
+        Game_Interpreter.prototype.setup=function(list){
+            var out=setup.apply(this,arguments);
+            if(Array.isArray(list))try{
+                for(var i=0;i<Math.min(list.length,256);i++)scriptScanCommand(list[i],list[i+1],true);
+                nextPrefetch();
+            }catch(_){state.errors++;}
+            return out;
+        };
+    }
+    if(!enabledTextPicture()||typeof Sprite_Picture==="undefined"||!Sprite_Picture.prototype||
+       typeof Sprite_Picture.prototype.updateBitmap!=="function"||typeof Sprite_Picture.prototype.picture!=="function")return;
+    var update=Sprite_Picture.prototype.updateBitmap;
+    Sprite_Picture.prototype.updateBitmap=function(){
+        var pic=null,raw=null,projected=null;
+        try{
+            pic=this.picture();
+            if(!inputFormActive()&&pic&&pic._name===""&&typeof pic.mzkp_text==="string"&&pic.mzkp_text){
+                raw=pic.mzkp_text;
+                var plan=picturePlan(raw);
+                if(plan){
+                    var key=JSON.stringify([raw,plan.prefix,plan.body]),ticket=this._iaPictureProjection,now=Date.now();
+                    if(!ticket||ticket.pic!==pic||ticket.key!==key)
+                        ticket=this._iaPictureProjection={pic:pic,key:key,checked:0,out:null};
+                    if(!ticket.checked||now-ticket.checked>=100){
+                        ticket.checked=now;ticket.out=authoredRead(plan,true);
+                    }
+                    projected=ticket.out;
+                    if(typeof projected!=="string"||projected===raw)projected=null;
+                }else this._iaPictureProjection=null;
+            }else this._iaPictureProjection=null;
+        }catch(_){state.errors++;projected=null;}
+        if(projected===null)return update.apply(this,arguments);
+        // The existing TextPicture sprite recomputes dimensions and
+        // replaces its own bitmap when its display string changes. The
+        // saved Game_Picture retains the original text, all timing, IDs
+        // and animation state. No callbacks repaint expired pictures.
+        var before=this.mzkp_text;pic.mzkp_text=projected;identityDrawDepth++;
+        try{
+            var result=update.apply(this,arguments);
+            if(this.mzkp_text===projected&&before!==projected){scriptStats.shown++;state.shown++;}
+            return result;
+        }finally{
+            identityDrawDepth--;
+            if(pic.mzkp_text===projected)pic.mzkp_text=raw;
+        }
+    };
+}
+
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var proto=Window_Message.prototype,original=proto.startMessage;
@@ -2370,7 +2553,13 @@ function hookMessages(){
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
                 var text=$gameMessage.allText(),source=languageFor(text),keys=tsvRawMessage();
                 this._iaSourceMessage=text;
-                if(tsv.detected&&tsvRef(keys)){
+                var scripted=scriptMessagePlan(keys);
+                if(scripted){
+                    var projected=authoredRead(scripted,true);
+                    if(projected!==null)projection={message:$gameMessage,raw:text,text:projected,used:false,scripted:true};
+                    source=null;
+                }
+                if(!scripted&&tsv.detected&&tsvRef(keys)){
                     var resolved=tsvMessageEntry(keys,text);
                     var locale=resolved?resolved.source:tsvProbeLocale(this);
                     if(locale)tsv.language=locale;
@@ -2409,7 +2598,7 @@ function hookMessages(){
         tsvProjection=projection;
         try{out=original.apply(this,arguments);}
         finally{tsvProjection=previousProjection;}
-        if(projection&&projection.used){state.shown++;tsv.shown++;}
+        if(projection&&projection.used){state.shown++;if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
         if(tsv.detected)try{tsvLateTicket(this);}catch(_){state.errors++;}
         if(this._iaLateTicket)try{snapshotMessage(this,this._iaLateTicket);}catch(_){hideLate(this);}
         return out;
@@ -3678,7 +3867,7 @@ function addPrefetch(text,priority,trustedLang){
     if(tsvRef(text)){if(priority)tsvPrioritize(text);return;}
     if(tsvExcluded(text))return;
     learnReadings(text);
-    var source=languageFor(text)||(trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
+    var source=authoredDisplay.get(text)||languageFor(text)||(trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
     if(!source)return;
     var key=source+"\u0000"+text,item=discovered.get(key);
     if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
@@ -3715,8 +3904,10 @@ function scanCommands(list,priority){
         var cmd=list[i];
         if(!cmd||!Array.isArray(cmd.parameters))continue;
         if(isMZ&&cmd.code===101){protectMZName(cmd.parameters[4]);continue;}
-        // Structured plugin commands may contain executable arguments.
-        if(isMZ&&cmd.code===357)continue;
+        // Only registered display fields and verified literal dialects.
+        if(isMZ&&(cmd.code===357||cmd.code===355)){
+            scriptScanCommand(cmd,list[i+1],priority);continue;
+        }
         if(cmd.code===401||cmd.code===405){
             var parts=[],code=cmd.code;
             while(cmd&&cmd.code===code&&Array.isArray(cmd.parameters)&&parts.length<4){
@@ -3765,6 +3956,7 @@ function scanDatabase(name,data){
     }
     if(name==="System.json"){
         if(!data||typeof data!=="object")return;
+        if(isMZ){scriptLocale=data.locale||"";scriptSystem=scriptSystemContract(data);}
         addPrefetch(data.gameTitle,true);addPrefetch(data.currencyUnit,true);
         var terms=data.terms||{};
         ["basic","commands","params"].forEach(function(k){
@@ -3777,6 +3969,10 @@ function scanDatabase(name,data){
     if(!Array.isArray(data))return;
     if(name==="CommonEvents.json"){
         commonEventLists=data;
+        if(scriptSystem&&scriptEventContract(data)){
+            scriptProfile=true;
+            if(prefetchedMap)scanMap(prefetchedMap,true);
+        }
         commonDeferred.forEach(function(initial,id){priorityCommon(id,initial);});commonDeferred.clear();
     }
     data.forEach(function(row){
@@ -3842,7 +4038,12 @@ function startFullScan(){
                         var first="Map"+("000"+data.startMapId).slice(-Math.max(3,String(data.startMapId).length))+".json";
                         initialMapFile=first;
                         var p=files.indexOf(first);
-                        if(p>=0){files.splice(p,1);files.unshift(first);}
+                        if(p>=0){
+                            files.splice(p,1);
+                            var commonIndex=files.indexOf("CommonEvents.json");
+                            if(scriptSystemContract(data)&&commonIndex>=0)files.splice(commonIndex+1,0,first);
+                            else files.unshift(first);
+                        }
                     }
                     scanDatabase(name,data);scanStats.files++;
                     if(name==="System.json"&&data)csvPreferred=/^ja(?:[_-]|$)/i.test(data.locale||"")?"ja":"en";
@@ -4143,7 +4344,7 @@ try{
     if(engineAt(content)!==ENGINE_ID)throw Error("IA_NUCLEO_RPG_NO_ENCONTRADO");
     state.phase="MENSAJES";hookMessages();
     state.phase="OPCIONES";hookChoices();hookCsvChoiceLabels();
-    state.phase="INTERFAZ";hookInputForm();hookNativeSurface();hookTitleStart();
+    state.phase="INTERFAZ";hookInputForm();hookNativeSurface();hookAuthoredMZ();hookTitleStart();
     state.phase="CONEXION";startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.

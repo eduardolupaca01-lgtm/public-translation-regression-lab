@@ -1922,7 +1922,86 @@ async function testR6OfflineDeadlineAndForm(){
     assert.equal(c.Input.form_mode,false);
 }
 
+
+async function testR7AuthoredScriptAndPicture(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),dir=path.join(root,"data");
+    const variables=[];variables[21]="MESSAGE HOLDER";variables[25]="MESSAGE HOLDER";variables[26]="SYNTAX HOLDER";
+    const command=(code,...parameters)=>({code,parameters});
+    const parser=[command(355,'var slice = $gameVariables.value(21).indexOf(".");'),
+        command(655,"var message = $gameVariables.value(21).slice(slice + 1);"),
+        command(655,"var syntax = $gameVariables.value(21).slice(0,slice);"),
+        command(655,"$gameVariables.setValue(25, message);"),
+        command(655,"$gameVariables.setValue(26, syntax);"),command(401,"\\v[25]\\Wait[5]")];
+    const one="Where are you going?",two="Please wait here.",caption="Please check the door.",nameText="1Hero, open the gate.";
+    const mapList=[command(355,'$gameVariables.setValue(21, "AAHaOp<<.'+one+'");'),
+        command(355,'$gameVariables.setValue(21, "ABFrEx.'+nameText+'");'),
+        command(355,'$gameVariables.setValue(48, "VoiceAssetFile");'),
+        command(355,'$gameVariables.setValue(21, "Never execute " + secret());'),
+        command(357,"TextPicture","set","Set Text Picture",{text:"Guide: "+caption}),
+        command(357,"OtherPlugin","set","Not text",{text:"Private script parameter"}),
+        command(657,"Text = editor annotation")];
+    const fsState={files:{[path.join(dir,"System.json")]:JSON.stringify({locale:"en_US",variables,startMapId:1}),
+        [path.join(dir,"CommonEvents.json")]:JSON.stringify([null,{id:1,name:"Message parser",list:parser}]),
+        [path.join(dir,"Map001.json")]:JSON.stringify({events:[null,{pages:[{list:mapList}]}]})},dirs:{[dir]:true}};
+    const values={21:"AAHaOp<<."+one,25:one};let writes=0,name="PlayerChosen";
+    const f=fixture(70,{mz:true,nativePaint:true,batch:true,fsState,plugins:[{name:"TextPicture",status:true,parameters:{}}],
+        responses:{[one]:"¿Adónde vas?",[two]:"Espera aquí.",[caption]:"Revisa la puerta.",", open the gate.":", abre la puerta."},
+        configure(c){
+            c.$gameVariables={value:i=>values[i],setValue(){writes++;throw Error("game write")}};
+            c.$gameActors={actor:()=>({name:()=>name})};
+            c.$dataSystem={locale:"en_US",variables};c.$dataCommonEvents=[null,{list:parser}];
+            const p=c.Window_Message.prototype,base=p.startMessage;
+            p.updateWait=function(){return false;};p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+            p.update=function(){this.updates++;if(!this.updateWait()&&this.canStart())this.startMessage();};
+            p.startMessage=function(){
+                base.apply(this,arguments);
+                this._textState.text=this._textState.text.replace(/\\v\[25\]/gi,values[25]).replace(/\\N\[1\]/gi,name);
+            };
+            function Sprite_Picture(pic){this.pic=pic;this.mzkp_text="";this.paints=[];}
+            Sprite_Picture.prototype.picture=function(){return this.pic;};
+            Sprite_Picture.prototype.updateBitmap=function(){
+                const pic=this.picture();
+                if(!pic||pic._name!==""){this.mzkp_text="";return;}
+                if(this.mzkp_text!==pic.mzkp_text||pic.mzkp_textChanged){
+                    this.mzkp_text=pic.mzkp_text;this.paints.push(this.mzkp_text);
+                    this.bitmap={text:this.mzkp_text};pic.mzkp_textChanged=false;
+                }
+            };
+            c.Sprite_Picture=Sprite_Picture;
+        }});
+    const c=f.context;await wait(20);c.$gameMessage._texts=["\\v[25]\\Wait[5]"];
+    const w=new c.Window_Message();w.update();
+    assert.equal(w.originalStarts,0);
+    const until=async pred=>{const end=Date.now()+5000;while(!pred()&&Date.now()<end)await wait(50);assert.ok(pred());};
+    await until(()=>{w.update();return w.originalStarts===1;});
+    assert.equal(w._textState.text,"¿Adónde vas?\\Wait[5]");
+    assert.equal(c.$gameMessage.allText(),"\\v[25]\\Wait[5]");
+    assert.equal(values[21],"AAHaOp<<."+one);assert.equal(values[25],one);
+    // Same raw variable reference, different value, no scene replay.
+    values[21]="ABHaOp."+two;values[25]=two;
+    const next=new c.Window_Message();next.update();
+    await until(()=>{next.update();return next.originalStarts===1;});
+    assert.equal(next._textState.text,"Espera aquí.\\Wait[5]");
+    values[21]="ABFrEx."+nameText;values[25]=nameText.replace("1Hero",name);
+    const n=new c.Window_Message();n.update();
+    await until(()=>{n.update();return n.originalStarts===1;});
+    assert.equal(n._textState.text,name+", abre la puerta.\\Wait[5]");
+    const pic={_name:"",mzkp_text:"Guide: "+caption,mzkp_textChanged:true,angle:9};
+    const spr=new c.Sprite_Picture(pic);
+    await until(()=>{spr.updateBitmap();return spr.bitmap&&spr.bitmap.text==="Guide: Revisa la puerta.";});
+    assert.equal(pic.mzkp_text,"Guide: "+caption);assert.equal(pic.angle,9);
+    const paintCount=spr.paints.length;for(let i=0;i<8;i++)spr.updateBitmap();
+    assert.equal(spr.paints.length,paintCount,"cached picture must not repaint every frame");
+    const cold={_name:"",mzkp_text:"Guide: Please open the window.",mzkp_textChanged:true};
+    spr.pic=cold;spr.updateBitmap();spr.pic={_name:"real_image.png",mzkp_text:"Guide: "+caption};
+    await wait(150);spr.updateBitmap();assert.equal(spr.mzkp_text,"","expired image must not be revived");
+    assert.equal(writes,0);
+    assert.ok(!f.posts.some(x=>/AAHaOp|ABFrEx|VoiceAssetFile|Private script parameter|Never execute|editor annotation|PlayerChosen|1Hero|\\v\[25\]/.test(x.text)));
+    assert.ok(f.posts.some(x=>x.text===caption));
+}
+
 (async()=>{
+    await testR7AuthoredScriptAndPicture();
     await testR6FirstViewNativeGate(false);
     await testR6FirstViewNativeGate(true);
     await testR6OfflineDeadlineAndForm();
