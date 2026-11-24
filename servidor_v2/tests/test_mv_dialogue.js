@@ -2070,8 +2070,13 @@ async function testR8GeneralDisplaySurfaces(){
     const profile="Sophia is my \\N[7], a woman of breathtaking beauty and elegance.\nShe has always been incredibly kind, She holds herself to an impossibly high standard, always perfectly composed.";
     const ben="Ben is the steady one in Sophia's life. He's caring, playful, and a little too proud of how good his Sophia looks. Sometimes he pushes the fun further than he realizes. He trusts Sophia completely. Whether that trust is a safety net or a blind spot depends on her choices.";
     const floating="Shopia: Okay, okay! Stop before my head gets too big to fit through the door♡\\pop[-1]";
-    const choices=["Accept \\b[2]","Let me Out!! \\b[4]","Shop","Read Me","Change Relationship",
-        "Text Skip Speed setting","Romantic Idea <If Love Capped> \\b[2]"];
+    const choices=[
+        "Accept \\b[2]","Let me Out!! \\b[4]","Shop","Read Me","Change Relationship",
+        "Change \"Sophia\" Name","Text Skip Speed setting","Tell Me About Yourself \\b[2]",
+        "Never Mind","Romantic Idea <If Love Capped> \\b[2]",
+        "Naughty Idea <If Corrupt Capped> \\b[2]","Exposing Idea <If Exhibitions Capped> \\b[2]",
+        "Dar un cumplido","¿Qué piensas de mí?"
+    ];
     const command=(code,...parameters)=>({code,parameters});
     const system={locale:"en_US",startMapId:1,variables:[]};
     const actors=[null,{id:1,name:"Sophia",profile:profile},{id:2,name:"Ben",profile:ben}];
@@ -2086,9 +2091,13 @@ async function testR8GeneralDisplaySurfaces(){
         [path.join(dir,"Map001.json")]:JSON.stringify(map)
     },dirs:{[dir]:true}};
     const responses={
-        "Accept ":"Aceptar ","Let me Out!! ":"¡Déjame salir! ","Shop":"Tienda","Read Me":"Leerme",
-        "Change Relationship":"Cambiar relación","Text Skip Speed setting":"Ajuste de velocidad de omisión de texto",
-        "Romantic Idea ":"Idea romántica ","If Love Capped":"Si el amor está al máximo",
+        "Accept":"Aceptar","Let me Out!!":"¡Déjame salir!","Shop":"Tienda","Read Me":"Léeme",
+        "Change Relationship":"Cambiar relación","Change \"Sophia\" Name":"Cambiar nombre de \"Sophia\"",
+        "Text Skip Speed setting":"Ajuste de velocidad de omisión de texto",
+        "Tell Me About Yourself":"Cuéntame sobre ti","Never Mind":"No importa",
+        "Romantic Idea":"Idea romántica","If Love Capped":"Si el amor está al máximo",
+        "Naughty Idea":"Idea traviesa","If Corrupt Capped":"Si la corrupción está al máximo",
+        "Exposing Idea":"Idea de exhibicionismo","If Exhibitions Capped":"Si el exhibicionismo está al máximo",
         "One year earlier.":"Un año antes.",
         "City Courthouse, Courtroom 4.":"Palacio de justicia de la ciudad, sala 4.",
         "Shopia: Okay, okay! Stop before my head gets too big to fit through the door♡":
@@ -2107,7 +2116,7 @@ async function testR8GeneralDisplaySurfaces(){
         base.createContents=function(){this.contents=new c.Bitmap(900,400);};
         base.refresh=function(){this.refreshes=(this.refreshes||0)+1;if(this._iaRefreshText)this.drawText(this._iaRefreshText,0,0,700,"left");};
         function ChoiceList(items){
-            this._list=items.map(name=>({name:name,ext:0,symbol:"choice",enabled:true}));
+            this._list=items.map((name,ext)=>({name:name,ext:ext,symbol:"choice",enabled:true}));
             this.active=true;this.openness=255;this.painted=[];
         }
         ChoiceList.prototype.drawItem=function(i){this.painted[i]=this._list[i].name;};
@@ -2129,16 +2138,24 @@ async function testR8GeneralDisplaySurfaces(){
 
     f.$gameMessage.setChoices(choices);
     const choice=new c.Window_ChoiceList(choices);
-    choices.forEach((_,i)=>choice.drawItem(i));
-    assert.equal(choice.painted[0],"Aceptar \\b[2]");
-    assert.equal(choice.painted[1],"¡Déjame salir! \\b[4]");
-    assert.equal(choice.painted[2],"Tienda");
-    assert.equal(choice.painted[3],"Leerme");
-    assert.equal(choice.painted[4],"Cambiar relación");
-    assert.equal(choice.painted[5],"Ajuste de velocidad de omisión de texto");
-    assert.equal(choice.painted[6],"Idea romántica <Si el amor está al máximo> \\b[2]");
-    assert.equal(choice._list[0].name,choices[0],"choice source and branch index must remain untouched");
-    assert.equal(choice._list[6].name,choices[6],"conditional tag source must remain untouched");
+    const expectedChoices=[
+        "Aceptar \\b[2]","¡Déjame salir! \\b[4]","Tienda","Léeme","Cambiar relación",
+        "Cambiar nombre de \"Sophia\"","Ajuste de velocidad de omisión de texto",
+        "Cuéntame sobre ti \\b[2]","No importa",
+        "Idea romántica <Si el amor está al máximo> \\b[2]",
+        "Idea traviesa <Si la corrupción está al máximo> \\b[2]",
+        "Idea de exhibicionismo <Si el exhibicionismo está al máximo> \\b[2]",
+        "Dar un cumplido","¿Qué piensas de mí?"
+    ];
+    await until(()=>{
+        choices.forEach((_,i)=>choice.drawItem(i));
+        return choice.painted.length===expectedChoices.length&&
+            choice.painted.every((value,index)=>value===expectedChoices[index]);
+    });
+    assert.deepEqual(choice._list.map(item=>item.name),choices,
+        "all original choice labels must remain untouched");
+    assert.deepEqual(choice._list.map(item=>item.ext),choices.map((_,index)=>index),
+        "choice branch indices must remain untouched");
 
     const profileExpanded=profile.replace("\\N[7]","Stepmom");
     const profileBitmap=new c.Bitmap(900,400);
