@@ -2,7 +2,7 @@ name: Servidor v2 - modelo OPUS real - Windows propietario cifrado
 on:
   push:
     branches:
-      - feature/servidor-v2-identidad-rpg-mv-20261123
+      - feature/servidor-v2-rpg-mz-20261124
     paths:
       - "servidor_v2/**"
       - ".github/workflows/servidor-v2-real-ia-windows.yml"
@@ -31,7 +31,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Exigir regresiones de presentacion MV antes de preparar el EXE
+      - name: Exigir regresiones de presentacion MV/MZ antes de preparar el EXE
         shell: pwsh
         run: |
           node --check servidor_v2/plugin/IATraductora.js
@@ -199,6 +199,30 @@ jobs:
           $game=Join-Path $env:RUNNER_TEMP "ia-v2-acceptance-juego-日本語"
           node servidor_v2/tests/test_mv_real_worker.js $game
           if ($LASTEXITCODE -ne 0) { throw "IA_COMPLEMENTO_JUEGO_NO_CONECTA_CON_MODELO_REAL" }
+      - name: Instalar y probar MZ raíz con el mismo ejecutable y los modelos reales
+        shell: pwsh
+        run: |
+          $game=Join-Path $env:RUNNER_TEMP "ia-v2-mz-acceptance-日本語"
+          $js=Join-Path $game "js"
+          $data=Join-Path $game "data"
+          New-Item -ItemType Directory -Force -Path (Join-Path $js "plugins"),$data | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $game "Game.exe"),[byte[]]@(77,90,0,0))
+          'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js 'plugins.js') -Encoding UTF8
+          foreach($name in @("rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows")){
+            '// MZ synthetic fixture - not executed' | Set-Content -LiteralPath (Join-Path $js "$name.js") -Encoding UTF8
+          }
+          '{}' | Set-Content -LiteralPath (Join-Path $data 'System.json') -Encoding UTF8
+          $exe=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          $out=Join-Path $env:RUNNER_TEMP "ia-v2-mz-output.txt"
+          $err=Join-Path $env:RUNNER_TEMP "ia-v2-mz-errors.txt"
+          $arg='--game "'+(Join-Path $game "Game.exe")+'"'
+          $p=Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru -RedirectStandardOutput $out -RedirectStandardError $err -ErrorAction Stop
+          if ($null -eq $p -or $p.ExitCode -ne 0) { throw "IA_SERVIDOR_NO_INSTALO_MZ" }
+          if (!(Test-Path (Join-Path $js "plugins\IATraductora.js")) -or !(Test-Path (Join-Path $game "IA Traductora\.local\Rpg\engine\IATraductora.exe"))) {
+            throw "IA_MZ_COMPONENTES_NO_INSTALADOS"
+          }
+          node servidor_v2/tests/test_mv_real_worker.js $game
+          if ($LASTEXITCODE -ne 0) { throw "IA_MZ_MODELO_REAL_Y_PRESENTACION_FALLO" }
       - name: Cifrar siempre la versión final antes de publicarla en GitHub
         shell: pwsh
         run: |
@@ -206,19 +230,19 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MV-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R1-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MV-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
-          'Servidor v2: modelo propio CT2 OPUS; solo MV, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R1-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          'Servidor v2: modelo propio CT2 OPUS; MV y MZ, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v4
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MV-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R1-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error

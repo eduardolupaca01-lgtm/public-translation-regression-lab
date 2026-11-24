@@ -8,14 +8,17 @@ const assert=require("node:assert/strict");
 const cp=require("node:child_process");
 
 const game=path.resolve(process.argv[2]||"");
-const content=fs.existsSync(path.join(game,"www","js","rpg_core.js"))?
-    path.join(game,"www"):game;
+const wrapped=path.join(game,"www");
+const content=["rpg_core.js","rmmz_core.js"].some(n=>fs.existsSync(path.join(wrapped,"js",n)))?wrapped:game;
+const isMZ=fs.existsSync(path.join(content,"js","rmmz_core.js"));
 const plugin=path.join(content,"js","plugins","IATraductora.js");
 const source=fs.readFileSync(plugin,"utf8");
 const intervals=[],children=[];
 
-function Window_Base(){}
+function Rectangle(x,y,width,height){Object.assign(this,{x,y,width,height});}
+function Window_Base(rect){if(isMZ&&rect)this.initialize(rect);}
 Window_Base.prototype.initialize=function(x,y,width,height){
+    if(isMZ){assert.ok(x instanceof Rectangle,"IA_MZ_RECTANGLE_MISSING");[x,y,width,height]=[x.x,x.y,x.width,x.height];}
     this.x=x;this.y=y;this.width=width;this.height=height;
     this.drawn=[];
     const self=this;
@@ -23,10 +26,16 @@ Window_Base.prototype.initialize=function(x,y,width,height){
 };
 Window_Base.prototype.contentsWidth=function(){return this.width-24;};
 Window_Base.prototype.drawText=function(value){this.drawn.push(String(value));};
+function Window_NameBox(rect){this.initialize(rect);}
+Window_NameBox.prototype=Object.create(Window_Base.prototype);
+Window_NameBox.prototype.constructor=Window_NameBox;
+Window_NameBox.prototype.setName=function(v){this._name=v;this.refresh();};
+Window_NameBox.prototype.refresh=function(){this.drawText(this._name);};
 function Window_Message(){this.starts=0;}
 Window_Message.prototype.startMessage=function(){this.starts++;};
 Window_Message.prototype.update=function(){};
 function Game_Message(){this._texts=[];this._choices=[];}
+Game_Message.prototype.setSpeakerName=function(v){this._speakerName=v;};
 Game_Message.prototype.hasText=function(){return this._texts.length>0;};
 Game_Message.prototype.allText=function(){return this._texts.join("\n");};
 Game_Message.prototype.setChoices=function(choices){
@@ -68,6 +77,8 @@ Window_ChoiceList.prototype.convertEscapeCharacters=function(text){
     return text.replace(/\\v\[(\d+)\]/gi,(_,id)=>choiceValues[id]);
 };
 Window_ChoiceList.prototype.textWidthEx=function(text){return this.convertEscapeCharacters(text).length*10;};
+Window_ChoiceList.prototype.textSizeEx=function(text){return {width:this.convertEscapeCharacters(text).length*10,height:32};};
+Window_ChoiceList.prototype.itemLineRect=function(){return {width:800};};
 Window_ChoiceList.prototype.drawItem=function(i){this.painted[i]=this.convertEscapeCharacters(this._list[i].name);};
 Window_ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
 Window_ChoiceList.prototype.itemRectForText=function(){return {width:800};};
@@ -75,7 +86,7 @@ Window_ChoiceList.prototype.update=function(){};
 let keyPressed=false;
 const ctx={
     window:{location:{pathname:"/"+path.join(content,"index.html").replace(/\\/g,"/")}},
-    Utils:{isNwjs:()=>true},
+    Utils:{isNwjs:()=>true,RPGMAKER_NAME:isMZ?"MZ":"MV"},Rectangle,ColorManager:{textColor:i=>"color-"+i},
     require(name){
         if(name==="child_process"){
             return {spawn(command,args,opts){
@@ -89,7 +100,7 @@ const ctx={
     process,Buffer,Promise,Date,Number,Map,Error,
     setTimeout,clearTimeout,
     setInterval(fn,ms){const id=setInterval(fn,ms);intervals.push(id);return id;},
-    Window_Base,Window_Message,Game_Message,Scene_Map,Window_ChoiceList,
+    Window_Base,Window_Message,Game_Message,Scene_Map,Window_ChoiceList,Window_NameBox,
     $gameVariables:{value(id){return choiceValues[id];},setValue(){throw Error("IA_UNEXPECTED_GAME_WRITE");}},
     Graphics:{boxWidth:1280},
     Input:{keyMapper:{},isTriggered(){return keyPressed;}},
@@ -151,7 +162,13 @@ async function run(){
     assert.equal(preloaded.starts,1,"IA_EXTERNAL_CSV_FIRST_PAINT_RESTARTED");
     assert.ok(/^\\c\[2\]/.test(gameMessage.allText())&&/\\I\[17\]$/.test(gameMessage.allText())&&/linterna|farol|lámpara/i.test(gameMessage.allText())&&/mesa/i.test(gameMessage.allText()),"IA_EXTERNAL_CSV_EN_DIALOG_FAIL");
     gameMessage.setChoices([csvChoice],0,1);
-    assert.ok(/abr/i.test(gameMessage._choices[0])&&/madera/i.test(gameMessage._choices[0]),"IA_EXTERNAL_CSV_EN_CHOICE_FAIL");
+    if(isMZ){
+        assert.equal(gameMessage._choices[0],csvChoice,"IA_MZ_CHOICE_ORIGINAL_CHANGED");
+        const nativeChoice=new Window_ChoiceList();nativeChoice._list[0].name=csvChoice;
+        nativeChoice.drawItem(0);
+        assert.ok(/abr/i.test(nativeChoice.painted[0])&&/madera/i.test(nativeChoice.painted[0]),"IA_MZ_NATIVE_CHOICE_FAIL");
+        assert.equal(nativeChoice._list[0].name,csvChoice);
+    }else assert.ok(/abr/i.test(gameMessage._choices[0])&&/madera/i.test(gameMessage._choices[0]),"IA_EXTERNAL_CSV_EN_CHOICE_FAIL");
     choiceValues[61]=csvChoice;
     const choice=new Window_ChoiceList(),originalChoice=JSON.stringify(choice._list);
     gameMessage.setChoices(["\\v[61]"],0,1);
@@ -187,15 +204,34 @@ async function run(){
 
     const sourceChoices=["はい、お願いします。","いいえ、けっこうです。"];
     gameMessage.setChoices(sourceChoices,0,1);
-    assert.ok(gameMessage._choices.every(japanese),
-        "IA_UNCACHED_CHOICES_CANNOT_REPAINT_LIVE_PROMPT");
+    assert.ok(gameMessage._choices.every(japanese),"IA_UNCACHED_CHOICES_CHANGED");
     await until(()=>{
         gameMessage.setChoices(sourceChoices,0,1);
-        return gameMessage._choices.every(v=>!japanese(v));
+        if(!isMZ)return gameMessage._choices.every(v=>!japanese(v));
+        const w=new Window_ChoiceList();
+        w._list=sourceChoices.map((name,ext)=>({name,symbol:"choice",enabled:true,ext}));
+        w.drawItem(0);w.drawItem(1);
+        assert.deepEqual(w._list.map(v=>v.name),sourceChoices);
+        return w.painted.length===2&&w.painted.every(v=>!japanese(v));
     },120000,"IA_NATIVE_CHOICES_CACHE_TIMEOUT");
     assert.equal(gameMessage._choices.length,2,"IA_CHOICE_COUNT_CHANGED");
-    assert.ok(gameMessage._choices.every(v=>typeof v==="string"&&v.trim()),
-        "IA_NATIVE_CHOICES_EMPTY");
+    assert.ok(gameMessage._choices.every(v=>typeof v==="string"&&v.trim()),"IA_NATIVE_CHOICES_EMPTY");
+    if(isMZ){
+        const name=new Window_NameBox(new Rectangle(0,0,250,52));
+        gameMessage.setSpeakerName("Haruka");name.setName("Haruka");
+        assert.equal(gameMessage._speakerName,"Haruka");
+        assert.equal(name.drawn[0],"Haruka");
+        const formatted="\\FS[24]\\PX[12]\\PY[8]Please open the wooden gate.";
+        await until(()=>{
+            gameMessage._texts=[formatted];new Window_Message().startMessage();
+            return gameMessage.allText()!==formatted;
+        },120000,"IA_MZ_FORMATTED_DIALOG_TIMEOUT");
+        assert.ok(/^\\FS\[24\]\\PX\[12\]\\PY\[8\]/.test(gameMessage.allText()),"IA_MZ_CONTROL_CODES_CHANGED");
+        assert.ok(/abr/i.test(gameMessage.allText())&&/madera/i.test(gameMessage.allText()),"IA_MZ_FORMATTED_DIALOG_FAIL");
+        assert.equal(scene.windows.length,2,"IA_MZ_EXTRA_WINDOW");
+        console.log("SERVIDOR_V2_REAL_OPUS_MZ_RECTANGLE_NAME_CHOICES_CONTROLS_PASS");
+        return;
+    }
     const captionText="Please wait here.",list=[captionText],meta=["",0,0,2],target={id:1};
     scene.createCaptionWindow(target,360,list,meta,0,"Window",-40);
     const caption=scene._captionWindows[0];
