@@ -2944,7 +2944,7 @@ function detectTsv(){
 function tsvCandidate(source,text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
        tsvRef(text)||csvExecutableSyntax(text)||/[\u0000\uFFFD]/.test(text)||
-       /^\s*(?:\/\/|[#=$@+]|(?:eval|function|return|var|let|const)\s)/i.test(text)||
+       /^\s*(?:\/\/|[#=$@+])/i.test(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return false;
     var prose=visibleProse(text).trim();
     if(!prose||/^[A-Za-z0-9_]+\.(?:png|ogg|js|json|csv|tsv)$/i.test(prose)||
@@ -3675,12 +3675,12 @@ function csvForms(value){
 function csvExecutableSyntax(value){
     // Do not misclassify visible English such as "Let me out" as a JS
     // declaration. Require a declaration operator/terminator after the name.
-    return typeof value==="string"&&(/\b(?:if|en)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|\\(?:eval|script)\b/i.test(value)||
+    return typeof value==="string"&&(/\b(?:if|en|eval|set_mlog|setTimeout)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|\\(?:eval|script)\b/i.test(value)||
         /(?:^|\n)\s*(?:[\w.]+\s*=\s*[^=]|function\s+[A-Za-z_$][\w$]*\s*\(|(?:var|let|const)\s+[A-Za-z_$][\w$]*\s*(?:=|;|,))/i.test(value));
 }
 function csvCandidate(value,declared,allowNote){
     if(typeof value!=="string"||!value.trim()||value.length>1800||actorNames[value]||csvExecutableSyntax(value))return null;
-    if((!allowNote&&/^\s*※/.test(value))||/^\s*(?:\/\/|[#=$@+]|(?:if|en|eval|function|return|var|let|const)\s*[\s(])/i.test(value)||
+    if((!allowNote&&/^\s*※/.test(value))||/^\s*(?:\/\/|[#=$@+])/i.test(value)||
        /\b(?:if|en)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|(?:^|\n)\s*[\w.]+\s*=\s*[^=]/i.test(value)||
        /\b(?:eval|set_mlog|setTimeout)\s*\(/i.test(value))return null;
     var prose=visibleProse(value).trim();
