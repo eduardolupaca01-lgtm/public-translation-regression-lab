@@ -131,6 +131,7 @@ function fixture(translationDelay=0,options={}){
     };
     Window_Message.prototype.startMessage=function(){this.originalStarts++};
     Window_Message.prototype.update=function(){this.updates++};
+    Window_Message.prototype.terminateMessage=function(){this.terminated=(this.terminated||0)+1;};
     if(options.nativeWait){
         Window_Message.prototype.startWait=function(n){this._waitCount=n;};
         Window_Message.prototype.updateWait=function(){
@@ -145,6 +146,7 @@ function fixture(translationDelay=0,options={}){
     function Game_Message(){this._texts=[];this._choices=[];}
     Game_Message.prototype.hasText=function(){return this._texts.length>0;};
     Game_Message.prototype.allText=function(){return this._texts.join("\n");};
+    Game_Message.prototype.add=function(text){this._texts.push(text);};
     Game_Message.prototype.setChoices=function(choices){
         this._choices=choices.slice();
     };
@@ -186,7 +188,7 @@ function fixture(translationDelay=0,options={}){
         Graphics:{boxWidth:1280},
         Input:{keyMapper:{},isTriggered(){return false}},
         SceneManager:{_scene:null},
-        $gameMessage
+        $gameMessage,$plugins:options.plugins||[]
     };
     vm.runInNewContext(source,context,{filename:"IATraductora.js"});
     return {context,posts,batches,$gameMessage,spawnCount:()=>spawnCount};
@@ -660,13 +662,20 @@ async function testR4EnglishFormatContextAndStaleCache(){
     responses.gate="puerta";responses.hall="salón";
     const f=fixture(1,{fsState:shared,responses,nativeWait:true});await wait(30);
     const m=new f.context.Window_Message();
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
     f.$gameMessage._texts=[raw];m.startMessage();
-    assert.equal(m.originalStarts,0,"new English message yields before its native start");
-    assert.equal(m.updateWait(),true,"native loop has a one-frame wait");
-    await wait(35);m.startMessage();
-    assert.equal(m.originalStarts,1);
-    assert.equal(f.$gameMessage.allText(),
-        "<WordWrap>Un visitante abre la \\m[things]puerta\\c[0] y entra en el \\c[6]salón\\c[0].");
+    assert.equal(m.originalStarts,1,"untranslated text cannot pause native message start");
+    assert.equal(m.updateWait(),false,"no artificial message wait");
+    m.pause=true;await wait(60);m.update();
+    assert.equal(m.originalStarts,1,"late answer does not restart native message");
+    assert.equal(f.$gameMessage.allText(),raw,"late result cannot mutate active source");
+    assert.ok(m._iaLateOverlay&&m._iaLateOverlay.visible,"same scene receives validated late Spanish");
+    assert.ok(m._iaLateOverlay.drawn.some(x=>x.text==="Un visitante abre la puerta y entra en el salón."));
+    m.terminateMessage();assert.equal(m.terminated,1);assert.equal(m._iaLateOverlay.visible,false);
+    f.$gameMessage._texts=[raw];m.startMessage();
+    const expected="<WordWrap>Un visitante abre la \\m[things]puerta\\c[0] y entra en el \\c[6]salón\\c[0].";
+    assert.equal(m.originalStarts,2);
+    assert.equal(f.$gameMessage.allText(),expected);
     assert.ok(f.posts.some(x=>x.text===plain),"model sees complete natural context");
     assert.ok(f.posts.some(x=>x.text==="gate")&&f.posts.some(x=>x.text==="hall"),
         "short colored words are no longer skipped");
@@ -715,6 +724,76 @@ async function testR4InkAndCsvReadOnlyPreload(){
     assert.ok(f.posts.some(x=>x.text===smart&&x.source==="en"),"typographic quotes detected");
 }
 
+
+async function testR4P2NoStaleLateOverlayAndNoArtificialWait(){
+    const sentence="We are ready to open the gate.";
+    const response={};response[sentence]="Estamos listos para abrir la puerta.";
+    const f=fixture(90,{responses:response,nativeWait:true});await wait(30);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    const m=new f.context.Window_Message();f.$gameMessage._texts=[sentence];m.startMessage();
+    assert.equal(m.originalStarts,1);assert.equal(m.updateWait(),false);
+    m.pause=true;f.context.SceneManager._scene=new f.context.Scene_Map();
+    await wait(120);m.update();
+    assert.ok(!m._iaLateOverlay,"no old dialogue may appear in another scene");
+    assert.equal(m.originalStarts,1);assert.equal(m.updates,1);
+}
+async function testR4P2QuestMetadataAndVisibleRefresh(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const state={files:{},dirs:{[root]:true}};
+    state.files[path.join(root,"System.json")]=JSON.stringify({startMapId:1});
+    const title="Find the missing key",desc="You must find the key before dawn.",obj="Search the garden.";
+    const quest=JSON.stringify({Title:title,Description:JSON.stringify([JSON.stringify(desc)]),
+        "Objectives List":JSON.stringify([obj]),"Rewards List":JSON.stringify(["20 gold"]),
+        From:"Aldren",Location:"Westbridge", "Visible Objectives":"[1]",Script:"this is never a display field"});
+    const plugins=[{name:"YEP_QuestJournal",status:true,parameters:{"Quest 1":quest}},
+        {name:"YEP_X_MoreQuests1",status:false,parameters:{"Quest 101":JSON.stringify({Title:"This is disabled content."})}},
+        {name:"Unrelated",status:true,parameters:{"Quest 1":JSON.stringify({Title:"This is unrelated content."})}}];
+    const untouched=JSON.stringify(plugins);
+    const responses={[title]:"Encuentra la llave perdida",[desc]:"Debes encontrar la llave antes del amanecer.",
+        [obj]:"Registra el jardín.","20 gold":"20 monedas","This is a live objective.":"Este es un objetivo activo."};
+    const f=fixture(5,{fsState:state,plugins,batch:true,responses});
+    new f.context.Scene_Title().start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&![title,desc,obj].every(x=>f.posts.some(p=>p.text===x)))await wait(25);
+    await wait(70);
+    assert.ok([title,desc,obj].every(x=>f.posts.some(p=>p.text===x)),"nested mission fields inventoried before opening quest journal");
+    assert.ok(!f.posts.some(p=>/disabled content|unrelated content|never a display field|Aldren|Westbridge/.test(p.text)));
+    assert.equal(JSON.stringify(plugins),untouched,"quest parameters are not modified");
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    function Window_QuestData(){this.initialize(0,0,400,200);this.parent=scene;this.visible=true;this.selection=3;this.refreshes=0;}
+    Window_QuestData.prototype=Object.create(f.context.Window_Base.prototype);
+    Window_QuestData.prototype.constructor=Window_QuestData;
+    Window_QuestData.prototype.index=function(){return this.selection;};
+    Window_QuestData.prototype.refresh=function(){this.refreshes++;this.drawTextEx("This is a live objective.",0,0);};
+    const win=new Window_QuestData();
+    win.drawText(title,0,0,400);assert.equal(win.lastText,"Encuentra la llave perdida");
+    win.drawTextEx(desc,0,0);assert.equal(win.lastTextEx,"Debes encontrar la llave antes del amanecer.");
+    win.refresh();assert.equal(win.lastTextEx,"This is a live objective.");
+    await wait(160);assert.equal(win.lastTextEx,"Este es un objetivo activo.");
+    assert.equal(win.selection,3);assert.equal(win.refreshes,2);
+}
+async function testR4P2PriorityCommonAndInkChoice(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data"),ink=path.join(data,"ink");
+    const state={files:{},dirs:{[data]:true,[ink]:true}};
+    const initial="We have arrived at the city.",background="The far village is quiet.",choice="Open the gate.";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[{code:117,parameters:[2]}]}]}]});
+    state.files[path.join(data,"CommonEvents.json")]=JSON.stringify([null,
+        {list:[{code:401,parameters:[background]}]},
+        {list:[{code:117,parameters:[3]}]},
+        {list:[{code:401,parameters:[initial]},{code:117,parameters:[2]}]}]);
+    state.files[path.join(ink,"main.json")]=JSON.stringify({inkVersion:21,root:[[
+        "ev","str","^"+choice,"/str","/ev",{"*":"dest","flg":4},
+        "ev","str","^This is an internal string.","/str","/ev","pop",null],null]});
+    const f=fixture(1,{fsState:state,batch:true});
+    new f.context.Scene_Title().start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&![initial,background,choice].every(v=>f.posts.some(x=>x.text===v)))await wait(25);
+    assert.ok([initial,background,choice].every(v=>f.posts.some(x=>x.text===v)),"transitive event chain and literal choice are prepared");
+    assert.ok(f.posts.findIndex(x=>x.text===initial)<f.posts.findIndex(x=>x.text===background),"starting common event ahead of distant event");
+    assert.ok(!f.posts.some(x=>/internal string/.test(x.text)));
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -761,6 +840,9 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR3P2NoticeVariantsOnFirstNativeDraw();
     await testR4EnglishFormatContextAndStaleCache();
     await testR4InkAndCsvReadOnlyPreload();
+    await testR4P2NoStaleLateOverlayAndNoArtificialWait();
+    await testR4P2QuestMetadataAndVisibleRefresh();
+    await testR4P2PriorityCommonAndInkChoice();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();

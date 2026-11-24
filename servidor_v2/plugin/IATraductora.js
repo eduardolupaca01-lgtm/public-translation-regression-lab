@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P1-20261123"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P2-20261123"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -251,11 +251,11 @@ function containsNames(output,expected){
 }
 // One HTTP batch at a time. Older verified workers still support /translate.
 var wireQueue=[],wireBusy=false,wireScheduled=false,foregroundDepth=0;
-function wireTranslate(source,text){
+function wireTranslate(source,text,priority){
     if(!state.batch)return request("/translate",{source:source,target:"es",text:text},30000);
     return new Promise(function(resolve,reject){
-        var job={source:source,text:text,resolve:resolve,reject:reject};
-        if(foregroundDepth)wireQueue.unshift(job);else wireQueue.push(job);
+        var job={source:source,text:text,resolve:resolve,reject:reject,priority:!!(priority||foregroundDepth)};
+        if(job.priority)wireQueue.unshift(job);else wireQueue.push(job);
         if(!wireScheduled&&!wireBusy){
             wireScheduled=true;setTimeout(flushWire,3);
         }
@@ -266,8 +266,10 @@ function flushWire(){
     if(wireBusy||!wireQueue.length)return;
     wireBusy=true;
     var first=wireQueue.shift(),jobs=[first];
-    for(var i=0;i<wireQueue.length&&jobs.length<6;){
-        if(wireQueue[i].source===first.source)jobs.push(wireQueue.splice(i,1)[0]);
+    // Bound background batches and never mix them with visible requests.
+    var cap=first.priority?6:4;
+    for(var i=0;i<wireQueue.length&&jobs.length<cap;){
+        if(wireQueue[i].source===first.source&&wireQueue[i].priority===first.priority)jobs.push(wireQueue.splice(i,1)[0]);
         else i++;
     }
     var route=jobs.length===1?"/translate":"/translate_batch";
@@ -294,7 +296,8 @@ function flushWire(){
         finish();
     },function(error){jobs.forEach(function(job){job.reject(error);});finish();});
 }
-function translate(source,text){
+function translate(source,text,priority){
+    priority=!!(priority||foregroundDepth);
     var key=source+"\u0000"+text;
     var fixed=stableDisplay(text,false);
     if(fixed!==null)return Promise.resolve(fixed);
@@ -303,13 +306,13 @@ function translate(source,text){
         return Promise.resolve(existing);
     if(existing!==undefined)cache.delete(key);
     if(pending.has(key)){
-        if(foregroundDepth){for(var i=0;i<wireQueue.length;i++){
-            if(wireQueue[i].source===source&&wireQueue[i].text===text){wireQueue.unshift(wireQueue.splice(i,1)[0]);break;}
+        if(priority){for(var i=0;i<wireQueue.length;i++){
+            if(wireQueue[i].source===source&&wireQueue[i].text===prepareNamedDialogue(text,source).text){var job=wireQueue.splice(i,1)[0];job.priority=true;wireQueue.unshift(job);break;}
         }}
         return pending.get(key);
     }
     if(rejectedKeys.has(key)&&rejectedKeys.get(key)>Date.now())return Promise.resolve(null);
-    if(pending.size>=96){rejectedKeys.set(key,Date.now()+1500);return Promise.resolve(null);}
+    if(pending.size>=(priority?96:72)){rejectedKeys.set(key,Date.now()+500);return Promise.resolve(null);}
     state.requested++;
     var prepared=prepareNamedDialogue(text,source);
     var raw=new Promise(function(resolve){
@@ -321,7 +324,7 @@ function translate(source,text){
         function attempt(){
             if(Date.now()-beginning>maxWait||!state.connected){stop(false);return;}
             attempts++;
-            wireTranslate(source,prepared.text).then(function(r){
+            wireTranslate(source,prepared.text,priority).then(function(r){
                 if(r&&containsNames(r.translated,prepared.needed)&&
                    acceptCache(source,text,r.translated,false,true)){
                     state.received++;resolve(cache.get(key));
@@ -670,9 +673,9 @@ function englishPlanReady(text,plan){
     var out=renderEnglishPlan(plan,whole,values);
     return out&&acceptCache("en",text,out,true,true)?cache.get("en\u0000"+text):null;
 }
-function englishPlanTranslate(text,plan){
-    var tasks=[translate("en",plan.plain)];
-    plan.spans.forEach(function(span){var k=span.text.trim();tasks.push(actorNames[k]?Promise.resolve(k):translate("en",k));});
+function englishPlanTranslate(text,plan,priority){
+    var tasks=[translate("en",plan.plain,priority)];
+    plan.spans.forEach(function(span){var k=span.text.trim();tasks.push(actorNames[k]?Promise.resolve(k):translate("en",k,priority));});
     return Promise.all(tasks).then(function(values){
         if(values.some(function(v){return v===null;}))return null;
         var out=renderEnglishPlan(plan,values[0],values.slice(1));
@@ -681,19 +684,20 @@ function englishPlanTranslate(text,plan){
 }
 function hasProse(source,text){return source==="ja"?hasJapaneseProse(text):/[A-Za-z]{2}/.test(visibleProse(text))&&!actorNames[text];}
 
-function translatePreservingControls(source,text,skipPlan){
+function translatePreservingControls(source,text,skipPlan,priority){
+    priority=!!(priority||foregroundDepth);
     var key=source+"\u0000"+text;
     var ready=readyText(source,text);
     if(ready!==null)return Promise.resolve(ready);
     var plan=source==="en"&&!skipPlan?englishFormatPlan(text):null;
-    if(plan)return englishPlanTranslate(text,plan).then(function(out){
-        return out!==null?out:translatePreservingControls(source,text,true);
+    if(plan)return englishPlanTranslate(text,plan,priority).then(function(out){
+        return out!==null?out:translatePreservingControls(source,text,true,priority);
     });
     // Separate a native speaker header before OPUS sees any dialogue body.
     // No variable codes, name-entry values or event state are rewritten.
     var speaker=source==="ja"?speakerHeader(text):null;
     if(speaker){
-        return translatePreservingControls(source,speaker.body).then(function(out){
+        return translatePreservingControls(source,speaker.body,false,priority).then(function(out){
             if(!out)return null;
             var name=nameInSpanish(speaker.name)||speaker.name;
             var joint=name+speaker.separator+out;
@@ -706,7 +710,7 @@ function translatePreservingControls(source,text,skipPlan){
         // remain available even when another line needs neural inference.
         return Promise.all(lines.map(function(line,index){
             return index%2||!hasProse(source,line)?Promise.resolve(line):
-                translatePreservingControls(source,line);
+                translatePreservingControls(source,line,false,priority);
         })).then(function(parts){
             if(parts.some(function(part){return part===null;})){
                 var retryAt=0;
@@ -728,7 +732,7 @@ function translatePreservingControls(source,text,skipPlan){
     // Reject malformed/unrecognized escapes instead of letting the model change them.
     var rest=chunks.filter(function(c){return !c.locked;}).map(function(c){return c.value;}).join("");
     if(/\\[A-Za-z]/.test(rest))return Promise.resolve(null);
-    if(chunks.length===1 && !chunks[0].locked)return translate(source,text);
+    if(chunks.length===1 && !chunks[0].locked)return translate(source,text,priority);
     return Promise.all(chunks.map(function(chunk){
         if(chunk.locked)return Promise.resolve(chunk.value);
         var before=(chunk.value.match(/^\s*/)||[""])[0];
@@ -737,7 +741,7 @@ function translatePreservingControls(source,text,skipPlan){
         var eligible=source==="ja"?isJapanese(body):
             /[A-Za-z]{2}/.test(body)&&!actorNames[body];
         if(!eligible)return Promise.resolve(chunk.value);
-        return translate(source,body).then(function(out){
+        return translate(source,body,priority).then(function(out){
             return out?before+out+after:null;
         });
     })).then(function(parts){
@@ -1014,6 +1018,40 @@ function translatedNativeLabel(text,identity){
     }
     return text;
 }
+function isQuestWindow(win){
+    return !!(win&&win.constructor&&/^Window_Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)/.test(win.constructor.name||""));
+}
+function questDraw(win,text){
+    if(Object.prototype.hasOwnProperty.call(questLabels,text))return questLabels[text];
+    var source=questSource(text);
+    if(!source)return text;
+    var found=readyText(source,text);
+    if(found!==null)return found;
+    if(!state.connected){addPrefetch(text,true,source);return text;}
+    // Repaint only a live quest window whose no-argument refresh contract
+    // is available. Don't touch the quest object or selection identifiers.
+    var requests=win._iaQuestRequests||(win._iaQuestRequests=new Map());
+    if(requests.has(text)||requests.size>=24)return text;
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    requests.set(text,true);
+    requestVisible(source,text).then(function(result){
+        requests.delete(text);
+        if(typeof result!=="string"||!scene||win._iaQuestRefreshTimer)return;
+        win._iaQuestRefreshTimer=setTimeout(function(){
+            win._iaQuestRefreshTimer=null;
+            if(SceneManager._scene!==scene||!win.parent||win.visible===false||win.openness===0||
+               typeof win.refresh!=="function"||win.refresh.length!==0)return;
+            try{
+                var index=typeof win.index==="function"?win.index():null;
+                var row=typeof win.topRow==="function"?win.topRow():null;
+                win.refresh();
+                if(index!==null&&win.index()!==index&&typeof win.select==="function")win.select(index);
+                if(row!==null&&win.topRow()!==row&&typeof win.setTopRow==="function")win.setTopRow(row);
+            }catch(_){state.errors++;}
+        },100);
+    },function(){requests.delete(text);});
+    return text;
+}
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
         ["drawText","drawTextEx"].forEach(function(method){
@@ -1022,9 +1060,10 @@ function hookNativeSurface(){
             Window_Base.prototype[method]=function(){
                 var args=Array.prototype.slice.call(arguments),identity=!!this._iaNameSurface;
                 try{
-                    if(typeof args[0]==="string"&&!identityDrawDepth){
-                        args[0]=translatedNativeLabel(args[0],identity);
-                        if(!identity&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
+                    if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
+                        if(!identity&&isQuestWindow(this))args[0]=questDraw(this,args[0]);
+                        else args[0]=translatedNativeLabel(args[0],identity);
+                        if(!identity&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
                            languageFor(args[0])==="en"){
                             var cachedEnglish=readyText("en",args[0]);
@@ -1094,49 +1133,119 @@ function readyIndependentLines(source,text){
     return changed&&missing?lines.join(""):null;
 }
 function requestVisible(source,text){
-    foregroundDepth++;try{return translatePreservingControls(source,text);}finally{foregroundDepth--;}
+    foregroundDepth++;try{return translatePreservingControls(source,text,false,true);}finally{foregroundDepth--;}
+}
+// A late answer is presentation only. Never repeat native message start,
+// mutate an active text state, consume input or restart story execution.
+var lateStats={shown:0,requested:0};
+function hideLate(win){
+    if(win._iaLateOverlay&&typeof win._iaLateOverlay.hide==="function")win._iaLateOverlay.hide();
+    win._iaLateTicket=null;
+}
+function lateSafe(text){
+    return text.length<=1000&&text.split("\n").length<=4&&
+        protectedParts(text).every(function(c){
+            return !c.locked||c.literal||/^(?:\r?\n|<\/?wordwrap>|(?:\\|\x1b)c\[\d+\]|\\m\[[A-Za-z][A-Za-z0-9 _\-]{0,60}\])$/i.test(c.value);
+        });
+}
+function displayLate(win){
+    var ticket=win._iaLateTicket;
+    if(!ticket)return;
+    if(typeof SceneManager==="undefined"||!ticket.scene||SceneManager._scene!==ticket.scene||
+       typeof $gameMessage==="undefined"||$gameMessage!==ticket.message||
+       !$gameMessage.hasText()||$gameMessage.allText()!==ticket.displayed){
+        hideLate(win);return;
+    }
+    // Only final pause, never an intermediate page or active choice.
+    if(!ticket.result||ticket.drawn||!win.pause||win._textState||
+       (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return;
+    if(typeof Window_Base==="undefined"||typeof ticket.scene.addWindow!=="function")return;
+    var plain=protectedParts(ticket.result).filter(function(c){return !c.locked||c.literal||/^\r?\n$/.test(c.value);})
+        .map(function(c){return c.value;}).join("");
+    if(!plain.trim())return;
+    var width=Math.min(1000,Math.max(280,(Graphics.boxWidth||816)-24)),rows=[];
+    var overlay=win._iaLateOverlay;
+    if(!overlay){
+        overlay=new Window_Base(12,8,width,192);overlay._iaOwnSurface=true;
+        if(!overlay.contents)overlay.initialize(12,8,width,192);
+        overlay.opacity=240;
+        ticket.scene.addWindow(overlay);win._iaLateOverlay=overlay;
+    }
+    overlay.contents.fontSize=20;
+    var measure=function(t){return typeof overlay.textWidth==="function"?overlay.textWidth(t):t.length*12;};
+    plain.split(/\r?\n/).forEach(function(line){
+        var current="";
+        line.split(/\s+/).forEach(function(word){
+            if(current&&measure(current+" "+word)>overlay.contentsWidth()){
+                rows.push(current);current=word;
+            }else current+=(current?" ":"")+word;
+        });
+        if(current)rows.push(current);
+    });
+    if(!rows.length||rows.length>4){overlay.hide();ticket.drawn=true;return;}
+    overlay.y=Math.max(4,Math.min((Graphics.boxHeight||624)-192,(typeof win.y==="number"&&win.y>=200)?win.y-196:8));
+    overlay.contents.clear();overlay.contents.fontSize=16;
+    overlay.drawText("IA Traductora · Español",0,0,overlay.contentsWidth(),"left");
+    overlay.contents.fontSize=20;
+    rows.forEach(function(row,i){overlay.drawText(row,0,28+i*30,overlay.contentsWidth(),"left");});
+    overlay.show();ticket.drawn=true;state.shown++;lateStats.shown++;
 }
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
-    var original=Window_Message.prototype.startMessage;
+    var proto=Window_Message.prototype,original=proto.startMessage;
     if(typeof original!=="function")return;
-    Window_Message.prototype.startMessage=function(){
+    proto.startMessage=function(){
+        hideLate(this);
         try{
-            if(typeof $gameMessage!=="undefined"&&$gameMessage&&
-               $gameMessage.hasText&&$gameMessage.hasText()){
+            if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
                 var text=$gameMessage.allText(),source=languageFor(text);
                 if(source){
                     var old=readyText(source,text);
                     if(typeof old==="string"&&old!==text){
-                        this._iaEnGate=null;
-                        $gameMessage._texts=old.split("\n");
-                        state.shown++;
+                        $gameMessage._texts=old.split("\n");state.shown++;
                     }else{
-                        // Submit the original Japanese, never the partially
-                        // localized presentation. Do not restart this event.
-                        // One request per pending native message. startWait(1)
-                        // yields to MV's normal updateWait; no active repaint.
-                        var canWait=source==="en"&&state.connected&&(inkStats.detected||englishFormatPlan(text))&&
-                            typeof this.startWait==="function"&&typeof this.updateWait==="function"&&!this._textState;
-                        var gate=this._iaEnGate;
-                        if(!gate||gate.message!==$gameMessage||gate.text!==text){
-                            gate={message:$gameMessage,text:text,until:Date.now()+3000};
-                            this._iaEnGate=gate;
-                            if(state.connected)requestVisible(source,text).catch(function(){state.errors++;});
-                            else addPrefetch(text,true);
-                        }
-                        if(canWait&&Date.now()<gate.until&&rejectedKeys.get(source+"\u0000"+text)!==Infinity){
-                            this.startWait(1);return;
-                        }
-                        this._iaEnGate=null;
                         var partial=readyIndependentLines(source,text);
                         if(partial!==null)$gameMessage._texts=partial.split("\n");
+                        if(state.connected){
+                            var win=this,ticket=null;
+                            if(source==="en"&&lateSafe(text)){
+                                ticket={message:$gameMessage,displayed:$gameMessage.allText(),
+                                    scene:typeof SceneManager!=="undefined"?SceneManager._scene:null,
+                                    result:null,drawn:false};
+                                win._iaLateTicket=ticket;lateStats.requested++;
+                            }
+                            requestVisible(source,text).then(function(result){
+                                if(ticket&&win._iaLateTicket===ticket&&typeof result==="string"&&result!==text&&
+                                   validTranslation(source,text,result,true))ticket.result=result;
+                            },function(){state.errors++;});
+                        }else addPrefetch(text,true);
                     }
                 }
             }
         }catch(_){state.errors++;}
         return original.apply(this,arguments);
     };
+    var update=proto.update;
+    if(typeof update==="function")proto.update=function(){
+        var out=update.apply(this,arguments);
+        try{displayLate(this);}catch(_){hideLate(this);state.errors++;}
+        return out;
+    };
+    var terminate=proto.terminateMessage;
+    if(typeof terminate==="function")proto.terminateMessage=function(){
+        hideLate(this);return terminate.apply(this,arguments);
+    };
+    if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.add==="function"){
+        var add=Game_Message.prototype.add;
+        Game_Message.prototype.add=function(text){
+            var out=add.apply(this,arguments);
+            try{
+                if(typeof text==="string"&&languageFor(text))addPrefetch(text,true);
+                nextPrefetch();
+            }catch(_){state.errors++;}
+            return out;
+        };
+    }
 }
 function hookChoices(){
     if(typeof Game_Message==="undefined"||!Game_Message.prototype||
@@ -1155,7 +1264,7 @@ function hookChoices(){
                     translated[i]=cached;changed=true;
                 }else if(state.connected){
                     // A live choice belongs to the author's native UI.
-                    translatePreservingControls(source,choices[i]).catch(function(){
+                    requestVisible(source,choices[i]).catch(function(){
                         state.errors++;
                     });
                 }
@@ -1174,7 +1283,80 @@ var scanStats={files:0,totalFiles:0,ready:0,rejected:0,skipped:0,done:false,limi
 var scanStarted=false,prefetchBusy=false,MAX_DISCOVERED=40000;
 var inkStats={detected:false,files:0,candidates:0,excluded:0};
 var tableStats={files:0,candidates:0};
-function inkDisplayText(value){
+var questTexts=new Map(),questStats={records:0,fields:0,ready:0};
+var commonEventLists=null,commonPrioritySeen=new Map(),commonInitialSeen=new Map(),commonDeferred=new Map();
+var questLabels={"Quest":"Misión","Quests":"Misiones","Objectives":"Objetivos","Rewards":"Recompensas",
+    "Description":"Descripción","Completed":"Completadas","Failed":"Fallidas","Active":"Activas","All":"Todas"};
+function questSource(text){
+    if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text])return null;
+    return questTexts.get(text)||languageFor(text)||null;
+}
+function registerQuestText(text){
+    if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
+       /^\s*(?:[=+@]|\d+\s*$|[\[{])/.test(text)||/\\(?:eval|script)\b/i.test(text))return;
+    var source=languageFor(text);
+    if(!source&&/^[A-Za-z][A-Za-z0-9 .,'!?\-]{0,79}$/.test(text))source="en";
+    if(!source||questTexts.has(text)||questTexts.size>=6000)return;
+    questTexts.set(text,source);questStats.fields++;
+    addPrefetch(text,false,source);
+}
+function questValues(value,depth){
+    if(depth>5||value===null||value===undefined)return;
+    if(Array.isArray(value)){value.slice(0,250).forEach(function(v){questValues(v,depth+1);});return;}
+    if(typeof value!=="string"||value.length>32768||!value.trim())return;
+    if(/^\s*["[]/.test(value)){
+        try{var parsed=JSON.parse(value);
+            if(Array.isArray(parsed)||typeof parsed==="string"&&parsed!==value){
+                questValues(parsed,depth+1);return;
+            }
+        }catch(_){}
+    }
+    // Explicit display fields only; no executable plugin code or object traversal.
+    registerQuestText(value);
+}
+function scanQuestParameters(done){
+    if(typeof $plugins==="undefined"||!Array.isArray($plugins)){done();return;}
+    var tasks=[];
+    $plugins.forEach(function(plugin){
+        if(!plugin||!plugin.status||!/^YEP_(?:QuestJournal|X_MoreQuests\d+)$/.test(plugin.name)||!plugin.parameters)return;
+        Object.keys(plugin.parameters).forEach(function(k){
+            if(/^Quest \d{1,5}$/.test(k)&&tasks.length<1000)tasks.push(plugin.parameters[k]);
+        });
+    });
+    function slice(){
+        var cap=12;
+        while(tasks.length&&cap--){
+            var value=tasks.shift();
+            try{
+                var entry=typeof value==="string"&&value.length<=65536?JSON.parse(value):value;
+                if(!entry||typeof entry!=="object"||Array.isArray(entry))continue;
+                questStats.records++;
+                ["Title","Type","Difficulty","Description","Objectives List","Rewards List","Subtext"].forEach(function(k){
+                    if(Object.prototype.hasOwnProperty.call(entry,k))questValues(entry[k],0);
+                });
+            }catch(_){}
+        }
+        nextPrefetch();
+        if(tasks.length)setTimeout(slice,0);else done();
+    }
+    slice();
+}
+function priorityCommon(id,initial){
+    if(!integer(id)||id<=0||id>10000)return;
+    if(!commonEventLists){
+        if(commonDeferred.size<256)commonDeferred.set(id,!!initial||commonDeferred.get(id));
+        return;
+    }
+    var seen=initial?commonInitialSeen:commonPrioritySeen;
+    if(seen.has(id)||seen.size>=256)return;
+    seen.set(id,true);
+    var row=commonEventLists[id];
+    if(!row||!Array.isArray(row.list))return;
+    var saved=collectInitial;collectInitial=!!initial;
+    try{scanCommands(row.list,true);}finally{collectInitial=saved;}
+}
+
+function inkDisplayText(value,choice){
     if(typeof value!=="string"||value.charAt(0)!=="^")return null;
     var raw=value.slice(1);
     // Known shaped display macros: keep the payload as a candidate word.
@@ -1184,7 +1366,8 @@ function inkDisplayText(value){
         spans.push(label);return label;
     });
     if(/\([A-Za-z]{1,12}:|\{[^}]*\}|^\s*[A-Za-z_][\w.]*:/.test(plain))return null;
-    if(languageFor(plain)!=="en"&&languageFor(plain)!=="ja")return null;
+    if(languageFor(plain)!=="en"&&languageFor(plain)!=="ja"&&
+       !(choice&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(plain)))return null;
     return {text:plain,spans:spans};
 }
 function walkInkStory(data,done){
@@ -1201,6 +1384,26 @@ function walkInkStory(data,done){
             var f=stack[stack.length-1];
             if(f.index>=f.values.length){stack.pop();continue;}
             var v=f.values[f.index++];visited++;
+            if(v==="str"&&f.evalMode&&!f.tag){
+                // Only a simple literal string directly consumed by a visible
+                // choice point (flags 2/4). Never translate arbitrary eval values.
+                var j=f.index,parts=[],size=0;
+                while(j<f.values.length&&parts.length<20&&typeof f.values[j]==="string"&&
+                      (f.values[j].charAt(0)==="^"||f.values[j]==="\n")){
+                    var bit=f.values[j++];parts.push(bit==="\n"?bit:bit.slice(1));size+=bit.length;
+                    if(size>1800)break;
+                }
+                if(parts.length&&size<=1800&&f.values[j]==="/str"){
+                    var next=f.values[j+1]==="/ev"?f.values[j+2]:f.values[j+1];
+                    if(next&&typeof next==="object"&&!Array.isArray(next)&&
+                       typeof next["*"]==="string"&&integer(next.flg)&&(next.flg&6)&&!(next.flg&8)){
+                        var label=inkDisplayText("^"+parts.join(""),true);
+                        if(label){addPrefetch(label.text,false,"en");inkStats.candidates++;
+                            label.spans.forEach(function(x){addPrefetch(x,false,"en");});}
+                    }
+                }
+                continue;
+            }
             if(v==="ev"){f.evalMode=true;continue;}
             if(v==="/ev"){f.evalMode=false;continue;}
             if(v==="#"){f.tag=true;continue;}
@@ -1327,7 +1530,7 @@ function scanExtraSources(dataDir,done){
 function addPrefetch(text,priority,trustedLang){
     if(typeof text!=="string"||!text)return;
     learnReadings(text);
-    var source=languageFor(text)||(trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 \'\-]{0,55}$/.test(text)&&!actorNames[text]?"en":null);
+    var source=languageFor(text)||(trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
     if(!source)return;
     var key=source+"\u0000"+text,item=discovered.get(key);
     if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
@@ -1361,6 +1564,8 @@ function scanCommands(list,priority){
             for(var j=0;j<parts.length;j++)addPrefetch(parts[j],priority);
         }else if(cmd.code===102&&Array.isArray(cmd.parameters[0])){
             cmd.parameters[0].forEach(function(t){addPrefetch(t,priority);});
+        }else if(cmd.code===117&&priority){
+            priorityCommon(cmd.parameters[0],collectInitial);
         }else if(cmd.code===320||cmd.code===324){
             // A name or nickname assignment is identity, not prose.
             var value=cmd.parameters[1];
@@ -1398,6 +1603,10 @@ function scanDatabase(name,data){
         return;
     }
     if(!Array.isArray(data))return;
+    if(name==="CommonEvents.json"){
+        commonEventLists=data;
+        commonDeferred.forEach(function(initial,id){priorityCommon(id,initial);});commonDeferred.clear();
+    }
     data.forEach(function(row){
         if(!row||typeof row!=="object")return;
         if(name==="CommonEvents.json"){scanCommands(row.list,false);return;}
@@ -1441,7 +1650,7 @@ function startFullScan(){
         if(files.length>5000){files=files.slice(0,5000);scanStats.limited=true;}
         function step(){
             if(!files.length||discovered.size>=MAX_DISCOVERED){
-                scanExtraSources(dataDir,function(){scanStats.done=true;nextPrefetch();});return;
+                scanExtraSources(dataDir,function(){scanQuestParameters(function(){scanStats.done=true;nextPrefetch();});});return;
             }
             var name=files.shift(),file=path.join(dataDir,name);
             try{
@@ -1485,7 +1694,7 @@ function nextPrefetch(){
         }
         if(!jobs.length){prefetchBusy=false;return;}
         Promise.all(jobs.map(function(item){
-            return translatePreservingControls(item.source,item.text).then(function(out){
+            return translatePreservingControls(item.source,item.text,false,item.priority).then(function(out){
                 if(out!==null){if(item.status!=="ready"){item.status="ready";scanStats.ready++;}}
                 else if(item.status!=="ready"){
                     // A transport failure is not a permanent linguistic rejection.
@@ -1516,7 +1725,7 @@ function firstMapProgress(){
         else if(item&&item.status==="rejected")finished++;
     });
     return {ready:ready,finished:finished,total:initialKeys.size,
-        complete:initialMapScanned&&finished===initialKeys.size};
+        complete:initialMapScanned&&finished===initialKeys.size&&(!commonDeferred.size||scanStats.done)&&(!inkStats.detected||scanStats.done)};
 }
 function hookTitleStart(){
     if(typeof Scene_Title==="undefined"||!Scene_Title.prototype||
@@ -1540,23 +1749,27 @@ function hookTitleStart(){
         // invoke the original title handler exactly once, with its own arguments
         return launch.apply(scene,gate.args);
     }
+    function showPreparation(scene){
+        var width=Math.min(720,Graphics.boxWidth||816),x=Math.max(0,Math.floor(((Graphics.boxWidth||816)-width)/2));
+        var win=scene._iaTitleProgress;
+        if(!win){
+            win=new Window_Base(x,8,width,124);win._iaOwnSurface=true;
+            if(!win.contents)win.initialize(x,8,width,124);
+            scene.addWindow(win);scene._iaTitleProgress=win;
+        }
+        win.show();win.contents.fontSize=18;return win;
+    }
     proto.commandNewGame=function(){
+        this._iaTitleMonitor=false;
         if(this._iaStartGate)return finish(this); // explicit second selection skips
+        if(this._iaTitleProgress)this._iaTitleProgress.hide();
         var info=firstMapProgress();
         if((scanStats.done&&!initialMapFile)||info.complete||!content||
            !this._commandWindow||typeof this._commandWindow.activate!=="function"||
            typeof this.addWindow!=="function"||typeof Window_Base==="undefined")
             return launch.apply(this,arguments);
         try{
-            var width=Math.min(560,Graphics.boxWidth||816);
-            var win=this._iaTitleProgress;
-            if(!win){
-                win=new Window_Base();win.initialize(
-                    Math.max(0,Math.floor(((Graphics.boxWidth||816)-width)/2)),8,width,124);
-                this.addWindow(win);this._iaTitleProgress=win;
-            }
-            if(typeof win.show==="function")win.show();
-            win.visible=true;win.contents.fontSize=18;
+            var win=showPreparation(this);
             this._iaStartGate={deadline:Date.now()+25000,args:Array.prototype.slice.call(arguments),last:""};
             this._commandWindow.activate(); // allow pressing New Game again to skip
             win.contents.clear();
@@ -1570,7 +1783,7 @@ function hookTitleStart(){
     ["commandContinue","commandOptions"].forEach(function(method){
         var base=proto[method];if(typeof base!=="function")return;
         proto[method]=function(){
-            this._iaStartGate=null;
+            this._iaStartGate=null;this._iaTitleMonitor=false;
             if(this._iaTitleProgress&&typeof this._iaTitleProgress.hide==="function")this._iaTitleProgress.hide();
             return base.apply(this,arguments);
         };
@@ -1578,7 +1791,25 @@ function hookTitleStart(){
     proto.update=function(){
         var out=update.apply(this,arguments);
         var gate=this._iaStartGate;
-        if(!gate)return out;
+        if(!gate){
+            try{
+                if(typeof Input!=="undefined"&&Input.isTriggered("ia-traductora")){
+                    this._iaTitleMonitor=!this._iaTitleMonitor;
+                    if(this._iaTitleMonitor)showPreparation(this);
+                    else if(this._iaTitleProgress)this._iaTitleProgress.hide();
+                }
+                if(this._iaTitleMonitor&&this._iaTitleProgress){
+                    var label=(scanStats.done?"Inventario completo":"Inventariando")+" · "+scanStats.ready+"/"+discovered.size+" textos listos";
+                    var extra="Fallos: "+scanStats.rejected+" · F10: cerrar · Puedes jugar cuando quieras";
+                    if(this._iaTitleLabel!==label+extra){
+                        this._iaTitleLabel=label+extra;var win=this._iaTitleProgress;win.contents.clear();
+                        win.drawText(label,0,0,win.contentsWidth(),"center");
+                        win.contents.fontSize=16;win.drawText(extra,0,36,win.contentsWidth(),"center");win.contents.fontSize=18;
+                    }
+                }
+            }catch(_){state.errors++;this._iaTitleMonitor=false;}
+            return out;
+        }
         try{
             var info=firstMapProgress(),remaining=Math.max(0,Math.ceil((gate.deadline-Date.now())/1000));
             // Never launch a deferred command in a different scene.
@@ -1587,8 +1818,8 @@ function hookTitleStart(){
             }
             if(info.complete||(scanStats.done&&!initialMapFile)||remaining===0||
                (typeof Input!=="undefined"&&Input.isTriggered("cancel"))){finish(this);return out;}
-            var label="Textos iniciales: "+info.ready+"/"+info.total+
-                " · "+remaining+" s máx.";
+            var label="Inicio: "+info.ready+"/"+info.total+" · Total: "+scanStats.ready+"/"+discovered.size+
+                " · "+remaining+" s";
             var win=this._iaTitleProgress;
             if(win&&gate.last!==label){
                 gate.last=label;win.contents.clear();
@@ -1607,7 +1838,7 @@ function setupHud(){
     IAMini.prototype.standardPadding=function(){return 6;};
     IAMini.prototype.lineHeight=function(){return 26;};
     IAMini.prototype.initialize=function(){
-        Window_Base.prototype.initialize.call(this,Graphics.boxWidth-218,7,208,44);
+        this._iaOwnSurface=true;Window_Base.prototype.initialize.call(this,Graphics.boxWidth-218,7,208,44);
         this.opacity=190;
         this.contents.fontSize=14;this.contents.outlineWidth=3;
         this.drawText("◆ IA Traductora · F10",0,0,this.contentsWidth(),"center");
@@ -1620,7 +1851,7 @@ function setupHud(){
     IAPanel.prototype.initialize=function(){
         var w=Math.min(540,Math.max(310,Graphics.boxWidth-22));
         var h=Math.min(535,Math.max(340,(Graphics.boxHeight||720)-20));
-        Window_Base.prototype.initialize.call(this,
+        this._iaOwnSurface=true;Window_Base.prototype.initialize.call(this,
             Math.max(5,Graphics.boxWidth-w-10),8,w,h);
         this.opacity=228;this.visible=false;this._tick=0;
         this.contents.fontSize=18;this.contents.outlineWidth=2;
@@ -1642,7 +1873,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
-            "Cerrar panel: F10"
+            "Misiones: "+questStats.records+" · Tardías: "+lateStats.shown+" · F10"
         ];
         for(var i=0;i<lines.length;i++){
             if(i===4&&lines[i].length>32)this.contents.fontSize=16;
