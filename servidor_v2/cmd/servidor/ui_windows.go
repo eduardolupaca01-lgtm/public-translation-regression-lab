@@ -2,7 +2,7 @@
 
 package main
 
-// Ventana Win32 única de Servidor: un motor por hoja, por ahora sólo MV.
+// Ventana Win32 única de Servidor: un motor por hoja, con detección MV/MZ.
 // No ejecuta instaladores secundarios y mantiene la interfaz respondiendo.
 import(
     "fmt"
@@ -269,7 +269,7 @@ func iaStartRecover(){
     iaEnableWindow.Call(ui.browse,0)
     iaEnableWindow.Call(ui.recoverBtn,0)
     iaSet(ui.status,"Comprobando respaldo original...")
-    iaLog("[IA_RECUPERACION_INICIADA] Solo el registro original de esta copia MV.")
+    iaLog("[IA_RECUPERACION_INICIADA] Solo el registro original de esta copia RPG.")
     game:=ui.gameFile
     go func(){
         info:="IA_RECUPERACION_ERROR_NO_CLASIFICADO"
@@ -316,13 +316,13 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 iaLog("[IA_SELECTOR_ERROR] "+err.Error())
                 iaSet(ui.status,"No se pudo abrir el selector. Servidor sigue abierto.")
             }else if file!=""{
-                if _,_,e:=detectGame(file);e!=nil{
+                if _,content,e:=detectGame(file);e!=nil{
                     iaLog("[IA_EXE_NO_COMPATIBLE] "+e.Error())
-                    iaSet(ui.status,"Selecciona un EXE de una copia de RPG Maker MV.")
+                    iaSet(ui.status,"Selecciona un EXE de una copia de RPG Maker MV o MZ.")
                 }else{
                     ui.gameFile=file;iaSet(ui.input,file)
-                    iaSet(ui.status,"Juego MV seleccionado. Listo para instalar.")
-                    iaLog("[IA_EXE_SELECCIONADO] Se verificó el ejecutable de una copia MV.")
+                    iaSet(ui.status,"Juego "+engineAt(content)+" seleccionado. Listo para instalar.")
+                    iaLog("[IA_EXE_SELECCIONADO] Motor "+engineAt(content)+" verificado.")
                 }
             }else{
                 iaLog("[IA_SELECTOR_CANCELADO] Puedes volver a pulsar EXE.")
@@ -352,7 +352,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         code:=iaSafeInstallCode(result)
         if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
             iaLog("[IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA] Registro original restaurado. Los archivos del traductor se conservaron.")
-            iaSet(ui.status,"Registro MV original recuperado. Abre la copia del juego.")
+            iaSet(ui.status,"Registro RPG original recuperado. Abre la copia del juego.")
             iaEnableWindow.Call(ui.install,0)
         }else if code=="IA_INSTALACION_COMPLETADA_VERIFICADA"{
             iaLog("[IA_INSTALACION_COMPLETADA_VERIFICADA] Listo para iniciar la copia del juego.")
@@ -402,12 +402,12 @@ func runUI(){
     ui.statusLabel=iaControl(hwnd,"STATIC","Listo para instalar el traductor.",0,230,664,773,39,0)
     ui.status=ui.statusLabel
     ui.copyBtn=iaControl(hwnd,"BUTTON","Copiar diagnóstico",0,230,710,264,36,iaCmdCopy)
-    ui.recoverBtn=iaControl(hwnd,"BUTTON","Recuperar inicio MV",0,501,710,274,36,iaCmdRecover)
+    ui.recoverBtn=iaControl(hwnd,"BUTTON","Recuperar inicio RPG",0,501,710,274,36,iaCmdRecover)
     ui.closeBtn=iaControl(hwnd,"BUTTON","Cerrar",0,792,710,218,36,iaCmdClose)
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
-    iaLog("[IA_TRADUCTORA_LISTA] MV-R4P9-20261124. Selecciona una copia MV. El motor es local.")
+    iaLog("[IA_TRADUCTORA_LISTA] RPG-MVMZ-R1-20261124. Selecciona una copia MV o MZ. El motor es local.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

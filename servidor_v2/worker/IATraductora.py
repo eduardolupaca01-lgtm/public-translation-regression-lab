@@ -294,12 +294,25 @@ class NeuralOPUS:
         return result
 
 def game_root(exe_root:Path)->tuple[Path,Path]:
+    if exe_root.is_symlink():raise ValueError("IA_JUEGO_NO_VALIDO")
     root=exe_root.resolve(strict=True)
-    if root.is_symlink() or not root.is_dir():raise ValueError("IA_JUEGO_NO_VALIDO")
-    layouts=[p for p in (root/"www",root) if
-             (p/"js"/"rpg_core.js").is_file() and (p/"js"/"plugins.js").is_file()
-             and (p/"data"/"System.json").is_file()]
-    if len(layouts)!=1:raise ValueError("IA_SOLAMENTE_RPG_MV")
+    if not root.is_dir():raise ValueError("IA_JUEGO_NO_VALIDO")
+    def ordinary(f):
+        return f.is_file() and not f.is_symlink()
+    layouts=[]
+    for folder in (root/"www",root):
+        js=folder/"js"
+        mv=ordinary(js/"rpg_core.js")
+        mz=ordinary(js/"rmmz_core.js")
+        if mv and mz:raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
+        if not (ordinary(js/"plugins.js") and ordinary(folder/"data"/"System.json")):continue
+        if mz:
+            if any(not ordinary(js/n) for n in ("rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js")):
+                raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
+            if any(d.is_symlink() for d in (folder,js,folder/"data")):
+                raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
+        if mv or mz:layouts.append(folder)
+    if len(layouts)!=1:raise ValueError("IA_SOLAMENTE_RPG_MV_MZ")
     return root,layouts[0]
 
 class Service:

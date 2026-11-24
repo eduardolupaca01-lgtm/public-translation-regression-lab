@@ -1,6 +1,6 @@
 package main
 
-// Servidor v2: instalador propio para RPG Maker MV. Sin llamadas al
+// Servidor v2: instalador propio para RPG Maker MV/MZ. Sin llamadas al
 // instalador/ejecutable, registro o rutas de otra aplicación.
 import(
  "archive/zip"
@@ -105,6 +105,25 @@ func readZip(item *zip.File,limit int64)([]byte,error){
  }
  return b,nil
 }
+// Detect deployed engines by original file markers, without running game code.
+func engineAt(content string) string {
+ js:=filepath.Join(content,"js")
+ mv:=ordinary(filepath.Join(js,"rpg_core.js"))
+ mz:=ordinary(filepath.Join(js,"rmmz_core.js"))
+ if mv&&mz{return "AMBIGUOUS"}
+ if !ordinary(filepath.Join(js,"plugins.js"))||!ordinary(filepath.Join(content,"data","System.json")){return ""}
+ if mz {
+  for _,n:=range []string{"rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"}{
+   if !ordinary(filepath.Join(js,n)){return "AMBIGUOUS"}
+  }
+  for _,dir:=range []string{content,js,filepath.Join(content,"data")}{
+   st,err:=os.Lstat(dir);if err!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{return "AMBIGUOUS"}
+  }
+  return "MZ"
+ }
+ if mv{return "MV"}
+ return ""
+}
 func detectGame(gameEXE string)(string,string,error){
  absolute,err:=filepath.Abs(gameEXE);if err!=nil||!strings.EqualFold(filepath.Ext(absolute),".exe")||
  !ordinary(absolute){return "","",errors.New("IA_SELECCIONA_GAME_EXE")}
@@ -114,14 +133,14 @@ func detectGame(gameEXE string)(string,string,error){
  }
  var chosen string
  for _,dir:=range []string{filepath.Join(root,"www"),root}{
-  if ordinary(filepath.Join(dir,"js","rpg_core.js"))&&
-     ordinary(filepath.Join(dir,"js","plugins.js"))&&
-     ordinary(filepath.Join(dir,"data","System.json")){
-   if chosen!=""{return "","",errors.New("IA_MV_RUTAS_AMBIGUAS")}
+  kind:=engineAt(dir)
+  if kind=="AMBIGUOUS"{return "","",errors.New("IA_RPG_RUTAS_AMBIGUAS")}
+  if kind!=""{
+   if chosen!=""{return "","",errors.New("IA_RPG_RUTAS_AMBIGUAS")}
    chosen=dir
   }
  }
- if chosen==""{return "","",errors.New("IA_SOLO_RPG_MAKER_MV")}
+ if chosen==""{return "","",errors.New("IA_SOLO_RPG_MAKER_MV_MZ")}
  if info,err:=os.Lstat(filepath.Join(chosen,"js","plugins"));err!=nil||!info.IsDir()||
  info.Mode()&os.ModeSymlink!=0{return "","",errors.New("IA_CARPETA_PLUGINS_INVALIDA")}
  return root,chosen,nil
@@ -220,6 +239,7 @@ func Install(gameEXE string,pkg *packageReader)error{
   case "IA_PLUGIN_YA_REGISTRADO":
    return iaUpgradeOwnPlugin(root,content,old,pkg)
   case "IA_MIGRACION_PREVIA_REQUERIDA":
+   if engineAt(content)=="MZ"{return errors.New("IA_MZ_MIGRACION_MANUAL_REQUERIDA")}
    previous,err=verifiedOldMigration(root,content,old)
    if err!=nil{return err}
    updated,err=appendRegistry(previous.OriginalRegistry)
@@ -297,9 +317,9 @@ func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
  return build+" SHA256="+hash(source),nil
 }
 func main(){
- exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV")
+ exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV o MZ")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
- recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV (no necesita modelos)")
+ recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV/MZ (no necesita modelos)")
  flag.Parse()
  if *recoverGame{
   if *exe==""{fmt.Fprintln(os.Stderr,"IA_RECUPERACION_GAME_EXE_REQUERIDO");os.Exit(1)}
@@ -316,5 +336,5 @@ func main(){
  identity,err:=installedPackageIdentity(*exe,p)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  fmt.Println("[IA_VERSION_INSTALADA] "+identity)
- fmt.Println("IA Traductora: instalación MV verificada. Reinicia el juego.")
+ fmt.Println("IA Traductora: instalación RPG verificada. Reinicia el juego.")
 }

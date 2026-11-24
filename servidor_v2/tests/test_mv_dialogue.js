@@ -14,10 +14,14 @@ function fixture(translationDelay=0,options={}){
     const source=fs.readFileSync(
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
     const root=path.join("/tmp","servidor-qa-juego-日本語");
-    const descriptor=path.join(root,"www","data","IATraductora","bridge.json");
-    const core=path.join(root,"www","js","rpg_core.js");
-    read[core]="// mock rpg core";
-    read[path.join(root,"www","js","plugins.js")]="var $plugins = [];";
+    const content=options.mz?root:path.join(root,"www");
+    const descriptor=path.join(content,"data","IATraductora","bridge.json");
+    if(options.mz){
+        for(const n of ["rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows"])read[path.join(content,"js",n+".js")]="// MZ synthetic fixture";
+        read[path.join(content,"data","System.json")]=read[path.join(content,"data","System.json")]||"{}";
+        dirs[path.join(content,"data")]=true;
+    }else read[path.join(content,"js","rpg_core.js")]="// mock rpg core";
+    read[path.join(content,"js","plugins.js")]="var $plugins = [];";
     read[descriptor]=JSON.stringify({schema:"ia-traductora-bridge-v1",
         port:24123,pid:123,token:"a".repeat(64)});
     const mockFS={
@@ -98,8 +102,10 @@ function fixture(translationDelay=0,options={}){
             return {translated:"Natsumi vive al lado."};
         return {translated:body.source==="ja"?"Buenos días.":"Hello"===body.text?"Hola.":"Buenos días."};
     }
-    function Window_Base(){}
+    function Rectangle(x,y,width,height){Object.assign(this,{x,y,width,height});}
+    function Window_Base(rect){if(options.mz&&rect)this.initialize(rect);}
     Window_Base.prototype.initialize=function(x,y,w,h){
+        if(options.mz){assert.ok(x instanceof Rectangle,"MZ requires Rectangle");[x,y,w,h]=[x.x,x.y,x.width,x.height];}
         this.x=x;this.y=y;this.width=w;this.height=h;
         this.contents={fontSize:12,outlineWidth:1,clear(){}};
     };
@@ -210,9 +216,9 @@ function fixture(translationDelay=0,options={}){
     iconAtlas.isReady=()=>true;
     const context={
         ImageManager:{loadSystem(name){assert.equal(name,"IconSet");return iconAtlas;}},
-        window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
+        window:{location:{pathname:options.pathname||path.join(content,"index.html")}},
         document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
-        Utils:{isNwjs:()=>true},
+        Utils:{isNwjs:()=>true,RPGMAKER_NAME:options.mz?"MZ":"MV"},Rectangle,ColorManager:{textColor:i=>"color-"+i},
         require(name){
             switch(name){
                 case "fs":return mockFS;
@@ -1487,7 +1493,68 @@ async function testBoundedMapPrefetchAndPressure(){
     for(let i=0;i<300;i++)msg.startMessage();
     assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
 }
+
+async function testMZNativeContractsAndControls(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),data=path.join(root,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const en="Open the wooden gate.",ja="橋を渡ってください。",choice="Take the letter";
+    const body="\\FS[24]\\PX[12]\\PY[8]"+en+"\\I[17]";
+    const map={events:[null,{pages:[{list:[
+        {code:101,parameters:["",0,0,2,"Haruka"]},{code:401,parameters:[body]},
+        {code:102,parameters:[[choice],0,0,2,0]},
+        {code:357,parameters:["Custom","command","label",{text:"This script must never be translated."}]},
+        {code:355,parameters:["This script must never be translated."]},
+        {code:105,parameters:[2,false]},{code:405,parameters:[ja]}
+    ]}]}]};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"en_US"});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify(map);
+    const f=fixture(3,{mz:true,fsState:state,batch:true,responses:{[en]:"Abre la puerta de madera.",[ja]:"Cruza el puente.",[choice]:"Toma la carta"},configure(c){
+        c.Game_Message.prototype.setSpeakerName=function(v){this._speakerName=v;};
+        function Window_NameBox(rect){this.initialize(rect);}
+        Window_NameBox.prototype=Object.create(c.Window_Base.prototype);
+        Window_NameBox.prototype.constructor=Window_NameBox;
+        Window_NameBox.prototype.setName=function(v){this._name=v;this.refresh();};
+        Window_NameBox.prototype.refresh=function(){this.drawText(this._name,0,0,200);};
+        c.Window_NameBox=Window_NameBox;
+        function Window_ChoiceList(){
+            this._list=[{name:choice,symbol:"choice",enabled:true,ext:0}];this.active=true;this.openness=255;this.painted=[];
+        }
+        Window_ChoiceList.prototype=Object.create(c.Window_Base.prototype);
+        Window_ChoiceList.prototype.constructor=Window_ChoiceList;
+        Window_ChoiceList.prototype.drawItem=function(i){this.painted[i]=this._list[i].name;};
+        Window_ChoiceList.prototype.textSizeEx=function(v){return {width:v.length*8,height:32};};
+        Window_ChoiceList.prototype.itemLineRect=function(){return {width:600};};
+        Window_ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
+        Window_ChoiceList.prototype.update=function(){};
+        c.Window_ChoiceList=Window_ChoiceList;
+    }});
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;scene.createAllWindows();scene.update();
+    assert.equal(scene.windows.length,2,"MZ HUD uses Rectangle");
+    scene._iaPanel.refresh();
+    assert.ok(scene._iaPanel.drawn.some(v=>v.text==="IA Traductora · RPG Maker MZ"));
+    const until=Date.now()+5000;
+    while(Date.now()<until&&(!f.posts.some(v=>v.text===en)||!f.posts.some(v=>v.text===ja)||!f.posts.some(v=>v.text===choice)))await wait(35);
+    await wait(160);
+    f.$gameMessage.setSpeakerName("Haruka");
+    const name=new f.context.Window_NameBox(new f.context.Rectangle(0,0,250,52));name.setName("Haruka");
+    assert.equal(name.lastText,"Haruka");
+    assert.equal(f.$gameMessage._speakerName,"Haruka");
+    f.$gameMessage._texts=[body];new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"\\FS[24]\\PX[12]\\PY[8]Abre la puerta de madera.\\I[17]");
+    f.$gameMessage._texts=[ja];new f.context.Window_Message().startMessage();assert.equal(f.$gameMessage.allText(),"Cruza el puente.");
+    f.$gameMessage.setChoices([choice],0,1);
+    assert.equal(f.$gameMessage._choices[0],choice,"MZ choice data unchanged");
+    const win=new f.context.Window_ChoiceList(),before=JSON.stringify(win._list);
+    win.drawItem(0);assert.equal(win.painted[0],"Toma la carta");
+    assert.equal(win.textSizeEx(choice).width,"Toma la carta".length*8);
+    assert.equal(JSON.stringify(win._list),before);
+    assert.ok(!f.posts.some(v=>/script|Haruka|\\(?:FS|PX|PY|I)\[/i.test(v.text)));
+    assert.equal(state.files[path.join(data,"Map001.json")],JSON.stringify(map));
+    console.log("SERVIDOR_V2_MZ_NATIVE_RECTANGLE_NAME_CHOICES_CONTROLS_PASS");
+}
+
 (async()=>{
+    await testMZNativeContractsAndControls();
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testR3PatchRepairsStandardNoticeAndKeepsColor();
