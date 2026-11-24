@@ -1901,7 +1901,8 @@ async function testR6FirstViewNativeGate(mz){
         assert.equal(w.originalStarts,1,"cold MV neural text must never block native message start");
         assert.equal(w._textState.text,text,"MV first paint keeps source text while translation runs asynchronously");
     }
-    assert.equal(w.updates,1,"native update loop keeps running");
+    if(mz)assert.ok(w.updates>1,"MZ update loop continues while its bounded first-view request is pending");
+    else assert.equal(w.updates,1,"MV update loop never waits for neural inference");
     assert.equal(m.allText(),text,"translation cannot mutate native message data");
 
     const actual=new f.context.Window_ChoiceList(m._choices);
