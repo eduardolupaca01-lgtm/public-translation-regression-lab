@@ -1839,6 +1839,32 @@ async function testR5DynamicNamesAndAuthoredRepetition(mz,firstView=false){
 }
 
 
+async function testLargeGamePausesBackgroundPrefetch(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const state={files:{},dirs:{[data]:true}};
+    const events=[null];
+    for(let i=0;i<1300;i++){
+        events.push({id:i+1,name:"Large event "+i,pages:[{trigger:0,list:[
+            {code:101,parameters:["",0,0,2]},
+            {code:401,parameters:["Please open the main gate now. This is sample message number "+i+"."]}
+        ]}]});
+    }
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events});
+    const f=fixture(1,{fsState:state,batch:true});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();
+    // The scanner and cache reader run asynchronously. Put the game in its
+    // active map before the large inventory reaches the prefetch scheduler.
+    f.context.SceneManager._scene=new f.context.Scene_Map();
+    await wait(450);
+    assert.equal(f.posts.length,0,
+        "bulk inventory must pause instead of competing with a large active game");
+    f.$gameMessage.add("Please translate this visible sentence.");
+    await wait(80);
+    assert.ok(f.posts.some(p=>p.text==="Please translate this visible sentence."),
+        "foreground visible text still reaches the worker while bulk prefetch is paused");
+}
+
 async function testR6FirstViewNativeGate(mz){
     const text="Where are you going?",choice="Please open the door.",cold="Please close the window.";
     const f=fixture(110,{mz,nativePaint:true,responses:{[text]:"¿Adónde vas?",[choice]:"Abre la puerta, por favor.",[cold]:"Cierra la ventana, por favor."},configure(c){
@@ -1864,23 +1890,28 @@ async function testR6FirstViewNativeGate(mz){
     await wait(25);
     const m=f.$gameMessage,w=new f.context.Window_Message();
     m._texts=[text];m.setChoices([choice]);
-    w.update();assert.equal(w.originalStarts,0,"cold text must not paint in original language");
+    w.update();
+    assert.equal(w.originalStarts,1,"cold neural text must never block native message start");
     assert.equal(w.updates,1,"native update loop keeps running");
-    assert.equal(m.allText(),text,"waiting cannot mutate native message");
-    const limit=Date.now()+4000;
-    while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
-    assert.equal(w.originalStarts,1,"native start occurs exactly once");
-    assert.equal(w._textState.text,"¿Adónde vas?");
+    assert.equal(w._textState.text,text,"first paint keeps source text while translation runs asynchronously");
+    assert.equal(m.allText(),text,"translation cannot mutate native message data");
+
     const actual=new f.context.Window_ChoiceList(m._choices);
-    assert.equal(actual.painted[0],"Abre la puerta, por favor.");
-    assert.equal(actual._list[0].ext,0);
-    // Choices without a preceding dialogue must also wait.
+    await wait(180);
+    actual.drawItem(0);
+    assert.equal(actual.painted[actual.painted.length-1],"Abre la puerta, por favor.",
+        "choice label is translated when the asynchronous result is ready");
+    assert.equal(actual._list[0].name,choice,"choice source label remains unchanged");
+    assert.equal(actual._list[0].ext,0,"choice branch index remains unchanged");
+
+    // A standalone choice must open immediately, even while its first
+    // translation is still in flight.
     m.clear();m.setChoices([cold]);
     const only=new f.context.Window_Message();only.update();
-    assert.equal(only._choice,undefined,"cold standalone choice must not become selectable");
-    const choiceLimit=Date.now()+4000;
-    while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
-    assert.ok(only._choice);assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
+    assert.ok(only._choice,"cold standalone choice must remain immediately selectable");
+    await wait(180);
+    only._choice.drawItem(0);
+    assert.equal(only._choice.painted[only._choice.painted.length-1],"Cierra la ventana, por favor.");
 }
 async function testR6OfflineDeadlineAndForm(){
     const f=fixture(0,{mz:true,disconnected:true,configure(c){
@@ -1907,8 +1938,8 @@ async function testR6OfflineDeadlineAndForm(){
     }});
     await wait(25);const c=f.context,m=f.$gameMessage,w=new c.Window_Message();
     m._texts=["Where are you going?"];
-    assert.equal(w.updateWait(),true);
-    w._iaFirstGate.started-=9000;assert.equal(w.updateWait(),false,"offline timeout must release native UI");
+    assert.equal(w.updateWait(),false,"offline neural inference must never block native UI");
+    assert.equal(w.updateWait(),false,"repeated frames remain non-blocking while the worker is offline");
     new c.Game_Interpreter()._inputForm();
     const input=c.__form.nodes._111_input,submit=c.__form.nodes._111_submit;
     input.fire("keydown","c");input.fire("keyup","c");input.fire("keypress","c");
@@ -2201,6 +2232,7 @@ async function testR8GeneralDisplaySurfaces(){
     await testMZNativeContractsAndControls();
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
+    await testLargeGamePausesBackgroundPrefetch();
     await testR3PatchRepairsStandardNoticeAndKeepsColor();
     await testR3P2NoticeVariantsOnFirstNativeDraw();
     await testR4EnglishFormatContextAndStaleCache();
