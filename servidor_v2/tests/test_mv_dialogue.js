@@ -1286,7 +1286,7 @@ async function testR4P7JapanesePrimaryAndLiveChoice(){
         Window_ChoiceList.prototype.update=function(){};
         Window_ChoiceList.prototype.itemRectForText=function(){return {width:400};};
         Window_ChoiceList.prototype.textWidthEx=function(v){return v.length*8;};
-        Window_ChoiceList.prototype.redrawItem=function(){this.draws++;};
+        Window_ChoiceList.prototype.redrawItem=function(i){this.draws++;this.painted=this._list[i].name;};
         c.Window_ChoiceList=Window_ChoiceList;
     }});
     const deadline=Date.now()+2500;
@@ -1294,11 +1294,76 @@ async function testR4P7JapanesePrimaryAndLiveChoice(){
     await wait(100);
     const win=new f.context.Window_ChoiceList();
     for(let i=0;i<12;i++)win.update();
-    assert.equal(win._list[0].name,"Entregar la carta");
+    assert.equal(win.painted,"Entregar la carta");assert.equal(win._list[0].name,"Deliver letter");
     assert.equal(win._list[0].ext,7);assert.equal(win._list[0].symbol,"choice");
     assert.equal(win._list[0].enabled,true);assert.equal(win._index,0);assert.equal(win.draws,1);
     assert.ok(f.posts.some(p=>p.text==="手紙を届ける"&&p.source==="ja"));
     assert.ok(!f.posts.some(p=>p.text==="Deliver letter"));
+}
+
+
+async function testR4P8CsvVariablesAndPresentation(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:2,locale:"en_US"});
+    const first="Deliver the parcel",second="Wait by the bridge",hint="※Use the lantern.",note="※Developer annotation";
+    const profile="An unknown traveler.\nHe meets \\n[2].",log="“I am feeling tired.”",world="Northern forest";
+    state.files[path.join(csv,"sheet.csv")]=csvFixtureRows([["","Script","日本語","英語","スペイン語","",""],["$map2","","","","","",""],["$event1","","","","","",""],["$page2","","","","","",""],
+        ["$text1","","荷物を届ける",first,"","",""],["$text2","","橋で待つ",second,"","",""],
+        ["$text3","","※ランタンを使う。",hint,"","",""],["","","",note,"","",""],
+        ["$text4","$v[8] = 9","","Choose the road if(s[10])","","",""],
+        ["$text5","","明日。/\n橋を渡る。","We leave tomorrow.","","",""]]);
+    state.files[path.join(csv,"EroWindowText.csv")]=csvFixtureRows([["key","jp","en"],["profile_actor_1","旅人。","An unknown traveler.\nHe meets \\n[2]."],["Information","情報","Information"]]);
+    state.files[path.join(csv,"logsheet.csv")]=csvFixtureRows([["","日本語","英語","Spanish","","",""],["npc_tired","疲れた。",log,"","","",""],["world_map/2/name","北の森",world,"","","",""]]);
+    const head=["共通部","","","","","","日本語","","","","","","","English","","","","","","","Espanol","","","","","",""];
+    const labels=Array(27).fill("");labels[0]="$quest_id=0";
+    const quest=Array(27).fill("");quest[0]="$quest_id=9";quest[6]="手紙";quest[13]="The letter";quest[8]="商人";quest[15]="Merchant";quest[10]="$progress1= 橋へ行く。\n$progress2= 帰る。";quest[17]="$progress1= Go to the bridge.\n$progress2= Return home.";
+    state.files[path.join(csv,"QuestList.csv")]=csvFixtureRows([head,labels,quest]);
+    const originalFiles=Object.assign({},state.files);
+    const responses={[first]:"Entrega el paquete",[second]:"Espera junto al puente","Use the lantern.":"Usa la linterna.","Choose the road":"Elige el camino","We leave tomorrow.":"Salimos mañana.","明日。":"Mañana.","橋を渡る。":"Cruza el puente.","An unknown traveler.":"Un viajero desconocido.","He meets":"Conoce a",[log]:"«Me siento cansado.»",[world]:"Bosque del norte","The letter":"La carta","Merchant":"Comerciante","Go to the bridge.":"Ve al puente.","Return home.":"Regresa a casa."};
+    const values={61:first,62:second};
+    const f=fixture(2,{fsState:state,batch:true,responses,plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}],configure(c){
+        c.$gameVariables={value(id){return values[id];},setValue(){throw Error("no game writes");}};
+        c.$gameActors={actor(id){assert.equal(id,2);return {name(){return "Alice";}};}};
+        c.Window_Base.prototype.convertEscapeCharacters=function(text){return text.replace(/\\v\[(\d+)\]/gi,(_,id)=>values[id]);};
+        function Window_ChoiceList(){this.active=true;this.openness=255;this._index=1;this._list=[{name:"\\v[61]",symbol:"choice",enabled:true,ext:61},{name:"\\v[62]",symbol:"choice",enabled:false,ext:62}];this.painted=[];}
+        Window_ChoiceList.prototype=Object.create(c.Window_Base.prototype);
+        Window_ChoiceList.prototype.constructor=Window_ChoiceList;
+        // Custom renderer performs its own final conversion.
+        Window_ChoiceList.prototype.convertEscapeCharacters=function(text){return text.replace(/\\v\[(\d+)\]/gi,(_,id)=>values[id]);};
+        Window_ChoiceList.prototype.textWidthEx=function(v){return this.convertEscapeCharacters(v).length*8;};
+        Window_ChoiceList.prototype.drawItem=function(i){this.painted[i]=this.convertEscapeCharacters(this._list[i].name);};
+        Window_ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
+        Window_ChoiceList.prototype.itemRectForText=function(){return {width:500};};
+        Window_ChoiceList.prototype.update=function(){};
+        c.Window_ChoiceList=Window_ChoiceList;
+    }});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();title.commandNewGame();
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline&&!title.launches){await wait(25);title.update();}
+    assert.equal(title.launches,1,"external profile, quest and choices prepare before play");
+    const w=new f.context.Window_ChoiceList(),before=JSON.stringify(w._list);
+    w.drawItem(0);w.drawItem(1);
+    assert.deepEqual(w.painted,["Entrega el paquete","Espera junto al puente"]);
+    assert.equal(w.textWidthEx("\\v[61]"),"Entrega el paquete".length*8);
+    for(let i=0;i<24;i++)w.update();
+    assert.equal(JSON.stringify(w._list),before);assert.equal(w._index,1);
+    assert.equal(values[61],first);assert.equal(values[62],second);
+    f.$gameMessage.setChoices(["\\v[61]","\\v[62]"],1,0);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),["\\v[61]","\\v[62]"]);
+    const b=new f.context.Window_Base();b.initialize(0,0,600,300);
+    assert.equal(b.convertEscapeCharacters("An unknown traveler."),"Un viajero desconocido.");
+    const bitmap=new f.context.Bitmap(640,200);bitmap.drawText("Information",0,0,640,30);
+    assert.equal(bitmap.lastText,"Información");
+    bitmap.drawText("NAME : Alice",0,0,640,30);assert.equal(bitmap.lastText,"NOMBRE : Alice");
+    assert.equal(b.convertEscapeCharacters("Northern forest"),"Bosque del norte");
+    assert.equal(b.convertEscapeCharacters("Merchant"),"Comerciante");
+    assert.equal(b.convertEscapeCharacters("Go to the bridge."),"Ve al puente.");
+    assert.ok(f.posts.some(p=>p.text==="Use the lantern."),"explicit display note prepared");
+    assert.ok(f.posts.some(p=>p.text==="橋を渡る。"),"unequal bilingual block counts retain alternate");
+    assert.ok(f.posts.some(p=>p.text==="Choose the road"),"conditional display label extracted");
+    assert.ok(!f.posts.some(p=>/Developer annotation|if\(s\[|\$progress|\$v\[|\\v\[/.test(p.text)),"no executable field inferred");
+    for(const k of Object.keys(originalFiles))assert.equal(state.files[k],originalFiles[k]);
 }
 
 async function testTitlePreparationCanBeSkipped(){
@@ -1362,6 +1427,7 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P6GalvRealFactoryContract();
     await testR4P7ExternalSheetPreparesBeforeFirstGame();
     await testR4P7JapanesePrimaryAndLiveChoice();
+    await testR4P8CsvVariablesAndPresentation();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();

@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P7B-20261124"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P8-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -633,6 +633,12 @@ function edgeChunks(value){
     return result;
 }
 function protectedParts(text){
+    // In external sheets the leading ※ in an explicitly selected display
+    // cell is a visual note marker, not an executable annotation.
+    if(typeof tableStats!=="undefined"&&tableStats.root&&/^[ \t]*※[ \t]*/.test(text)){
+        var mark=/^[ \t]*※[ \t]*/.exec(text)[0];
+        return [{value:mark,locked:true}].concat(protectedParts(text.slice(mark.length)));
+    }
     var chunks=[],position=0,match;
     function addProse(value){
         // Keep whitespace exactly; brackets just inside indentation still
@@ -1407,12 +1413,26 @@ function hookSurfaceConversion(proto,ownOnly){
        (ownOnly&&!Object.prototype.hasOwnProperty.call(proto,"convertEscapeCharacters")))return;
     var original=proto.convertEscapeCharacters;
     proto.convertEscapeCharacters=function(){
-        if(surfaceDepth||identityDrawDepth||this._iaNameSurface||this._iaOwnSurface||typeof arguments[0]!=="string")
+        if(identityDrawDepth||this._iaNameSurface||this._iaOwnSurface||typeof arguments[0]!=="string")
             return original.apply(this,arguments);
-        var args=Array.prototype.slice.call(arguments);
-        try{args[0]=projectSurface(this,args[0]);}catch(_){state.errors++;}
+        var args=Array.prototype.slice.call(arguments),csv=csvWindowEligible(this),choice=csv&&csvWindowChoice(this),out;
+        // Other RPG dialects keep their previous native conversion behavior.
+        if(!csv&&surfaceDepth)return original.apply(this,arguments);
+        try{
+            if(!surfaceDepth)args[0]=projectSurface(this,args[0]);
+            if(csv&&(!surfaceDepth||choice)){
+                var before=csvProjectDisplay(args[0],choice,true);
+                if(before!==null)args[0]=before;
+            }
+        }catch(_){state.errors++;}
         surfaceDepth++;
-        try{return original.apply(this,args);}finally{surfaceDepth--;}
+        try{out=original.apply(this,args);}finally{surfaceDepth--;}
+        // The game may turn a lookup key into text or expand \V here.
+        // Match only known CSV display strings (or a real choice window).
+        if(csv&&typeof out==="string"&&out!==args[0]){
+            try{var after=csvProjectDisplay(out,choice,true);if(after!==null)return after;}catch(_){state.errors++;}
+        }
+        return out;
     };
 }
 function hookSpecificSurfaces(){
@@ -1686,15 +1706,130 @@ function withQuestGlyphs(bitmap,text,draw){
 }
 // Exact display-only CSV labels can also be painted directly on a bitmap
 // by a custom UI without passing through the native Window_Base methods.
+// The CSV loader resolves variable-backed labels after the interpreter
+// builds its choices. Project only display values; never write to variables,
+// choice indices, event branches, database records, or original CSV files.
+var csvUiLabels={"Information":"Información","NAME":"NOMBRE","Name":"Nombre","JOB":"CLASE","Job":"Clase",
+    "Level":"Nivel","MAX HP":"PV MÁX.","MAX MP":"PM MÁX.","Strength":"Fuerza","Endurance":"Resistencia",
+    "Intelligence":"Inteligencia","Charisma":"Carisma","Dexterity":"Destreza","Faith":"Fe",
+    "Rank":"Rango","Fame":"Fama","Alignment":"Alineamiento","Neutral":"Neutral","Talk":"Hablar",
+    "Go solo":"Ir solo","Cancel":"Cancelar","Quest":"Misión","Quests":"Misiones","Title:":"Título:",
+    "Place:":"Lugar:","Client:":"Cliente:","Reward:":"Recompensa:","Progress:":"Progreso:",
+    "Description:":"Descripción:","Detail:":"Detalles:","Previous Page":"Página anterior",
+    "Next Page":"Página siguiente","Scroll Up":"Subir","Scroll Down":"Bajar","Exit":"Salir"};
+function csvFixedLabel(text){
+    if(Object.prototype.hasOwnProperty.call(csvUiLabels,text))return csvUiLabels[text];
+    // Composite property labels keep the value exactly as supplied by the
+    // game. Do not replace names, class IDs, stats or user input.
+    var m=/^([A-Za-z ]{2,24}?)([ \t]*:[ \t]*)([^\r\n]+)$/.exec(text);
+    if(m&&Object.prototype.hasOwnProperty.call(csvUiLabels,m[1]))return csvUiLabels[m[1]]+m[2]+m[3];
+    return null;
+}
+function csvWindowChoice(win){
+    return !!win&&((typeof Window_ChoiceList!=="undefined"&&win instanceof Window_ChoiceList)||
+        hasNativeClass(win,/^Window_(?:ChoiceList|Choice|SelectChoice)/));
+}
+function csvWindowEligible(win){
+    return tableStats.root&&!identityDrawDepth&&(!win||!win._iaOwnSurface&&!win._iaNameSurface)&&
+        !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name);
+}
+function csvActorExpansion(text){
+    if(typeof $gameActors==="undefined"||!$gameActors||typeof $gameActors.actor!=="function")return null;
+    var good=true,out=text.replace(/\\n\[(\d{1,5})\]/gi,function(all,n){
+        var a=$gameActors.actor(Number(n)),name=a&&typeof a.name==="function"?a.name():null;
+        if(typeof name!=="string"||!name||name.length>100||/[\r\n\\\x1b]/.test(name)){good=false;return all;}
+        return name;
+    });
+    return good?out:null;
+}
+function csvNameReady(text){
+    var list=csvNameTemplates.get(text.slice(0,8)),answer=null;
+    if(!list)return null;
+    for(var i=0;i<list.length;i++){
+        var t=list[i];
+        if(csvActorExpansion(t.text)!==text)continue;
+        var result=readyText(t.source,t.text),expanded=result!==null?csvActorExpansion(result):null;
+        if(typeof expanded!=="string"||expanded===text)continue;
+        if(answer!==null&&answer!==expanded)return null;
+        answer=expanded;
+    }
+    return answer;
+}
+function csvKnownReady(text){
+    var source=csvKnown.get(text);
+    if(source){
+        var exact=readyText(source,text);
+        if(typeof exact==="string"&&validTranslation(source,text,exact,true))return exact;
+    }
+    // Equivalent presentation forms only: trim outside whitespace, native
+    // ESC representation, and the sheet's escaped comma. Revalidate the
+    // caller's original control and numeric sequence before returning.
+    var key=csvRenderKey(text),entry=key&&(csvKnown.has(key)?{source:csvKnown.get(key),text:key}:csvRenderAliases.get(key));
+    if(entry&&entry.text!==text){
+        var value=readyText(entry.source,entry.text);
+        if(typeof value==="string"){
+            var out=csvRenderKey(value);
+            if(out!==null){
+                if(text.indexOf("\x1b")>=0&&text.indexOf("\\")<0)out=out.replace(/\\(?=[A-Za-z])/g,"\x1b");
+                var lead=(text.match(/^[ \t]*/)||[""])[0],tail=(text.match(/[ \t]*$/)||[""])[0];
+                out=lead+out+tail;
+                if(validTranslation(entry.source,text,out,true))return out;
+            }
+        }
+    }
+    return null;
+}
+function csvRequestLive(source,text){
+    if(!source||!state.connected||pending.size>=90||csvLiveRequests.size>=32)return;
+    var key=source+"\u0000"+text;
+    if(csvLiveRequests.has(key)||rejectedKeys.get(key)>Date.now())return;
+    csvLiveRequests.set(key,true);addPrefetch(text,true,source);
+    requestVisible(source,text).then(function(){csvLiveRequests.delete(key);},function(){csvLiveRequests.delete(key);state.errors++;});
+}
+function csvProjectDisplay(text,choice,requestMissing){
+    if(!tableStats.root||typeof text!=="string"||!text.trim()||text.length>1800||csvExecutableSyntax(text)||actorNames[text])return null;
+    var raw=text;
+    if(choice){
+        var v=/^(?:\\|\x1b)v\[(\d{1,6})\]$/i.exec(text);
+        if(v&&typeof $gameVariables!=="undefined"&&$gameVariables&&typeof $gameVariables.value==="function"){
+            var value=$gameVariables.value(Number(v[1]));
+            if(typeof value!=="string"||!value.trim()||value.length>1800||csvExecutableSyntax(value)||actorNames[value])return null;
+            text=value;
+        }
+    }
+    var found=csvKnownReady(text);
+    if(found!==null)return found;
+    var fixed=csvFixedLabel(text);
+    if(typeof fixed==="string"&&fixed!==text)return fixed;
+    if(!/[\r\n\\\x1b<>]/.test(text)){
+        var named=csvNameReady(text);if(named!==null)return named;
+    }
+    var source=csvKnown.get(text);
+    // A verified choice surface may also carry a newly generated string.
+    // Never use this fallback for arbitrary text in other windows.
+    if(!source&&choice)source=languageFor(text);
+    if(source&&csvCandidate(text,source,true)){
+        var ready=readyText(source,text);
+        if(typeof ready==="string"&&validTranslation(source,text,ready,true))return ready;
+        if(requestMissing)csvRequestLive(source,text);
+    }
+    // Profile/menu labels frequently arrive as separate native lines.
+    if(text.indexOf("\n")>=0){
+        var lines=text.split(/(\r?\n)/),changed=false;
+        for(var i=0;i<lines.length;i+=2){
+            var translated=csvProjectDisplay(lines[i],false,requestMissing);
+            if(translated!==null){lines[i]=translated;changed=true;}
+        }
+        if(changed)return lines.join("");
+    }
+    return null;
+}
 function csvPlainLabel(text){
     if(!tableStats.root||surfaceDepth||identityDrawDepth||typeof text!=="string"||
        /[\r\n\\\x1b<>]/.test(text)||actorNames[text]||csvExecutableSyntax(text)||
        (typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name))
         return null;
-    var source=csvKnown.get(text);
-    if(!source)return null;
-    var value=readyText(source,text);
-    return typeof value==="string"&&validTranslation(source,text,value,true)?value:null;
+    return csvProjectDisplay(text,false,true);
 }
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
@@ -1714,6 +1849,7 @@ function hookNativeSurface(){
                         if(!identity&&questSurface(this,args[0]))args[0]=questDraw(this,args[0]);
                         else if(!identity&&isAmbientSurface(this,args[0]))args[0]=projectCaption(args[0]);
                         else {var bookLabel=!identity?questCachedLabel(args[0]):null;
+                            if(bookLabel===null&&csvWindowEligible(this))bookLabel=csvProjectDisplay(args[0],csvWindowChoice(this),true);
                             args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
                         if(!identity&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
@@ -2063,6 +2199,8 @@ var scanStarted=false,prefetchBusy=false,MAX_DISCOVERED=40000;
 var inkStats={detected:false,files:0,candidates:0,excluded:0};
 var tableStats={files:0,candidates:0,root:false,rootDone:false,rootFiles:0,rootTotal:0,rootSkipped:0,authored:0};
 var csvKnown=new Map(),csvAuthored=new Map(),csvAlternate=new Map(),csvResolving=false,csvPreferred="en";
+var csvRenderAliases=new Map(),csvNameTemplates=new Map(),csvNameCount=0,csvLiveRequests=new Map();
+var csvUiStats={choices:0,drawn:0,overflow:0,rows:0};
 var questTexts=new Map(),questStats={records:0,fields:0,ready:0};
 var questFontFaces=Object.create(null),ambientStats={requested:0,shown:0};
 var commonEventLists=null,commonPrioritySeen=new Map(),commonInitialSeen=new Map(),commonDeferred=new Map();
@@ -2316,9 +2454,9 @@ function csvExecutableSyntax(value){
     return typeof value==="string"&&(/\b(?:if|en)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|\\(?:eval|script)\b/i.test(value)||
         /(?:^|\n)\s*(?:[\w.]+\s*=\s*[^=]|(?:function|var|let|const)\s+[A-Za-z_$])/i.test(value));
 }
-function csvCandidate(value,declared){
+function csvCandidate(value,declared,allowNote){
     if(typeof value!=="string"||!value.trim()||value.length>1800||actorNames[value]||csvExecutableSyntax(value))return null;
-    if(/^\s*(?:※|\/\/|[#=$@+]|(?:if|en|eval|function|return|var|let|const)\s*[\s(])/i.test(value)||
+    if((!allowNote&&/^\s*※/.test(value))||/^\s*(?:\/\/|[#=$@+]|(?:if|en|eval|function|return|var|let|const)\s*[\s(])/i.test(value)||
        /\b(?:if|en)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|(?:^|\n)\s*[\w.]+\s*=\s*[^=]/i.test(value)||
        /\b(?:eval|set_mlog|setTimeout)\s*\(/i.test(value))return null;
     var prose=visibleProse(value).trim();
@@ -2331,6 +2469,22 @@ function csvControlSignature(text){
 function csvMark(source,text){
     if(csvKnown.size>=250000&&!csvKnown.has(text)){scanStats.limited=true;return;}
     csvKnown.set(text,source);
+    var key=csvRenderKey(text);
+    if(key&&key!==text){
+        csvSetUnique(csvRenderAliases,key,{source:source,text:text},function(a,b){
+            return a.source===b.source&&csvRenderKey(a.text)===csvRenderKey(b.text);
+        });
+    }
+    // Profile renderers sometimes resolve one actor-name token before
+    // handing a line to Bitmap. Index by a literal prefix, not by name.
+    var m=/^([^\\\x1b\r\n]{8,})\\n\[(\d{1,5})\]([^\\\x1b\r\n]*)$/i.exec(text);
+    if(m&&csvNameCount<12000){
+        var k=m[1].slice(0,8),list=csvNameTemplates.get(k)||[];
+        if(list.length<24&&!list.some(function(v){return v.text===text;})){
+            list.push({source:source,text:text,id:Number(m[2]),prefix:m[1],suffix:m[3]});
+            csvNameTemplates.set(k,list);csvNameCount++;
+        }
+    }
 }
 function csvSetUnique(map,key,value,equals){
     if(map.has(key)){
@@ -2343,45 +2497,71 @@ function csvSpanish(value){
     return typeof value==="string"&&!isJapanese(visibleProse(value))&&
         /[áéíóúüñ¿¡]|\b(?:el|la|los|las|de|del|que|para|con|una?|por|este|esta|soy|eres|está|estamos|hola|sí|gracias|puede|puedes|tienes)\b/i.test(visibleProse(value));
 }
-function csvRegisterKnown(source,text,es){
+// Explicit Spanish column is stronger evidence than a stopword test for
+// short labels. Reject identical values, code, and obvious English prose.
+function csvExplicitSpanish(value,original){
+    if(typeof value!=="string"||!value.trim()||value===original||csvExecutableSyntax(value)||isJapanese(visibleProse(value)))return false;
+    if(csvSpanish(value))return true;
+    var plain=visibleProse(value).trim();
+    return /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ -]{1,39}[.!:]?$/.test(plain)&&
+        !/\b(?:the|you|your|with|this|that|and|from|please|would|should|what|when|here|there)\b/i.test(plain);
+}
+function csvRenderKey(text){
+    if(typeof text!=="string"||!text.trim()||text.length>1800)return null;
+    return csvNormalize(text).replace(/\\,/g,",").replace(/\x1b(?=[A-Za-z])/g,"\\").trim();
+}
+function csvRegisterKnown(source,text,es,allowNote){
     csvMark(source,text);
-    if(csvSpanish(es)&&validTranslation(source,text,es,true)){
+    if(csvExplicitSpanish(es,text)&&validTranslation(source,text,es,true)){
         var key=source+"\u0000"+text;
         if(!csvAuthored.has(key))tableStats.authored++;
         csvSetUnique(csvAuthored,key,es,function(a,b){return a===b;});
     }
     var lines=text.split("\n"),translated=typeof es==="string"?es.split("\n"):[];
     if(lines.length>1)lines.forEach(function(line,i){
-        var lang=csvCandidate(line,source);
+        var lang=csvCandidate(line,source,allowNote);
         if(!lang)return;
         csvMark(lang,line);
-        if(lines.length===translated.length&&csvSpanish(translated[i])&&validTranslation(lang,line,translated[i],true))
+        if(lines.length===translated.length&&csvExplicitSpanish(translated[i],line)&&validTranslation(lang,line,translated[i],true))
             csvSetUnique(csvAuthored,lang+"\u0000"+line,translated[i],function(a,b){return a===b;});
     });
 }
-function csvRegisterPair(japanese,english,spanish,priority){
+function csvRegisterPair(japanese,english,spanish,priority,allowNote){
     var jp=csvForms(japanese),en=csvForms(english),es=csvForms(spanish);
     var primary=csvPreferred==="ja"?jp:en,alt=csvPreferred==="ja"?en:jp,
         primaryLang=csvPreferred,altLang=csvPreferred==="ja"?"en":"ja";
     if(!primary.length){primary=alt;primaryLang=altLang;alt=[];}
-    // The language column is evidence, including short choices with no
-    // English stopword. Do not trust unlabelled script or annotation cells.
+    // Register the bare label of a verified choice with a narrow trailing
+    // condition. Do not evaluate, translate or reconstruct the expression.
+    function bare(value){
+        var m=/^(.+?)\s+(?:(?:if|en)\s*\([A-Za-z0-9_\s\[\]!<>=&|+\-*/%.]+\)\s*)+$/i.exec(value);
+        return m?m[1]:value;
+    }
+    primary=primary.map(bare);alt=alt.map(bare);
+    var records=[];
     primary.forEach(function(value,i){
-        var source=csvCandidate(value,primaryLang);
+        var source=csvCandidate(value,primaryLang,allowNote);
+        records[i]=source?{source:source,text:value}:null;
         if(!source)return;
         var official=es.length===primary.length?es[i]:null;
-        csvRegisterKnown(source,value,official);
+        csvRegisterKnown(source,value,official,allowNote);
         tableStats.candidates++;
         addPrefetch(value,priority,source);
-        if(alt.length!==primary.length)return;
-        var other=alt[i],otherSource=csvCandidate(other,altLang);
-        if(!otherSource||other===value)return;
-        csvRegisterKnown(otherSource,other,official);
-        // One inference per bilingual row when both variants carry the
-        // same controls and numeric contract. Conflicts are never guessed.
-        if(otherSource!==source&&csvControlSignature(other)===csvControlSignature(value)&&numbersIn(other)===numbersIn(value))
-            csvSetUnique(csvAlternate,otherSource+"\u0000"+other,{source:source,text:value},function(a,b){return a.source===b.source&&a.text===b.text;});
-        else addPrefetch(other,priority,otherSource);
+    });
+    alt.forEach(function(other,i){
+        var source=csvCandidate(other,altLang,allowNote);
+        if(!source)return;
+        var value=primary.length===alt.length?records[i]:null;
+        if(value&&other===value.text)return;
+        csvRegisterKnown(source,other,es.length===alt.length?es[i]:null,allowNote);
+        if(value&&source!==value.source&&csvControlSignature(other)===csvControlSignature(value.text)&&numbersIn(other)===numbersIn(value.text)){
+            var key=source+"\u0000"+other;
+            csvSetUnique(csvAlternate,key,value,function(a,b){return a.source===b.source&&a.text===b.text;});
+            if(csvAlternate.get(key)!==null)return;
+        }
+        // Unequal block counts, a rejected primary cell, or ambiguous
+        // bilingual mapping must not silently discard the other language.
+        tableStats.candidates++;addPrefetch(other,priority,source);
     });
 }
 function csvAlternateReady(source,text){
@@ -2402,7 +2582,7 @@ function rootCsvSchema(relative,rows){
     if(name==="logsheet.csv"&&exact(1,/^日本語$/)&&exact(2,/^(?:英語|English)$/i)&&exact(3,/^(?:Spanish|スペイン語)$/i))
         return {type:"log",start:1,width:h.length,groups:[[1,2,3]]};
     if(name==="questlist.csv"&&h.length===27&&exact(6,/^日本語$/)&&exact(13,/^English$/i)&&exact(20,/^Espanol$/i))
-        return {type:"quest",start:2,width:27,groups:[[6,13,20],[7,14,21],[9,16,23],[10,17,24],[11,18,25],[12,19,26]]};
+        return {type:"quest",start:2,width:27,groups:[[6,13,20],[7,14,21],[8,15,22],[9,16,23],[10,17,24],[11,18,25],[12,19,26]]};
     if(name==="db_npc.csv"&&exact(9,/^プロフィール\/JP$/)&&exact(10,/^プロフィール\/EN$/)&&exact(12,/^プロフィール\/SP$/))
         return {type:"npc",start:1,width:h.length,groups:[[9,10,12]]};
     if(/^db_(?:item|skill|armor|weapon|class|state)\.csv$/.test(name)&&exact(0,/^\$id=0$/)){
@@ -2415,6 +2595,13 @@ function rootCsvSchema(relative,rows){
     }
     if(/^common\/event_\d+\.csv$/.test(name)&&exact(0,/^0$/)&&exact(1,/^日本語$/)&&exact(2,/^English$/i))
         return {type:"numeric",start:1,width:h.length,groups:[[1,2,-1]]};
+    // The legacy page tables have a Japanese section header followed by
+    // integer line IDs and one or two language columns. Non-numeric rows
+    // remain author annotations; ambiguous headerless pages stay excluded.
+    if(/^maps\/map_\d+\/event_\d+\/page_\d+\.csv$/.test(name)&&
+       (h.length===2||h.length===3)&&isJapanese(h[0])&&h.slice(1).every(function(v){return !v.trim();})&&
+       rows.slice(1).some(function(r){return /^\d+$/.test(r[0]||"")&&isJapanese(r[1]||"");}))
+        return {type:"numeric",start:1,width:h.length,groups:[[1,h.length===3?2:-1,-1]]};
     // Explicit legacy display layouts, only if filename and field
     // signatures agree. Numeric IDs, switches and asset names stay intact.
     if(name==="db_npcjob.csv"&&h.length===3&&h.every(function(v){return !v.trim();})&&
@@ -2452,9 +2639,9 @@ function scanRootCsvFile(relative,raw,done){
     function slice(){
         var end=Math.min(at+150,rows.length);
         for(;at<end&&discovered.size<MAX_DISCOVERED;at++){
-            var r=rows[at];
+            var r=rows[at];csvUiStats.rows++;
             if(r.length!==schema.width)continue;
-            var key=(r[0]||"").trim(),priority=false;
+            var key=(r[0]||"").trim(),priority=schema.type!=="sheet"&&schema.type!=="numeric";
             if(schema.type==="sheet"){
                 var m=/^\$map(\d+)$/.exec(key);
                 if(m)mapId=Number(m[1]);
@@ -2465,7 +2652,7 @@ function scanRootCsvFile(relative,raw,done){
             else if(schema.type==="quest"&&!/^\$quest_id=[1-9]\d*$/.test(key))continue;
             else if(schema.type==="numeric"&&!/^\d+$/.test(key))continue;
             else if(schema.type==="npc"&&(!/^\d+$/.test(r[1])||!/^\d+$/.test(r[2])))continue;
-            else if(schema.type==="log"&&(!key||!/^[A-Za-z0-9_.\-]+$/.test(key)))continue;
+            else if(schema.type==="log"&&(!key||!/^[A-Za-z0-9_.\/ ?\-]{1,120}$/.test(key)||/(?:^|\/)\.\.(?:\/|$)/.test(key)))continue;
             else if(schema.type==="profile"&&(!/^[A-Za-z0-9_.-]+$/.test(key)||!/^\d+$/.test(r[1])))continue;
             else if(schema.type==="generic"&&!r[schema.id])continue;
             schema.groups.forEach(function(g){
@@ -2473,13 +2660,19 @@ function scanRootCsvFile(relative,raw,done){
                 // Quest progress contains assignment keys. Inventory only
                 // matching display values, never the assignment itself.
                 if(schema.type==="quest"&&g[0]===10){
-                    var a=String(jp||"").split("\n"),b=String(en||"").split("\n"),c=String(es||"").split("\n");
-                    if(a.length===b.length)a.forEach(function(v,i){
-                        var j=/^(\$progress\d+=)\s*(.*)$/.exec(v),e=/^(\$progress\d+=)\s*(.*)$/.exec(b[i]||"");
-                        var z=/^(\$progress\d+=)\s*(.*)$/.exec(c[i]||"");
-                        if(j&&e&&j[1]===e[1])csvRegisterPair(j[2],e[2],z&&z[1]===j[1]?z[2]:null,priority);
-                    });
-                }else csvRegisterPair(jp,en,es,priority);
+                    function progress(v){
+                        var out=Object.create(null),id=null;
+                        String(v||"").replace(/\r\n/g,"\n").split("\n").forEach(function(line){
+                            var m=/^\s*\$progress(\d+)\s*=\s*(.*)$/.exec(line);
+                            if(m){id=m[1];out[id]=m[2];}
+                            else if(id!==null&&line.trim()&&!csvExecutableSyntax(line)&&!/^\s*\$/.test(line))out[id]+="\n"+line;
+                            else if(line.trim())id=null;
+                        });return out;
+                    }
+                    var a=progress(jp),b=progress(en),c=progress(es);
+                    var ids=Object.keys(a).concat(Object.keys(b).filter(function(k){return !Object.prototype.hasOwnProperty.call(a,k);}));
+                    ids.forEach(function(k){csvRegisterPair(a[k],b[k],c[k],priority,true);});
+                }else csvRegisterPair(jp,en,es,priority,schema.type==="sheet"&&/^\$text\d+$/.test(key)||schema.type!=="sheet");
             });
         }
         nextPrefetch();
@@ -2497,7 +2690,14 @@ function scanRootCsv(done){
             if(dirs.length||tasks.length>=256)scanStats.limited=true;
             tableStats.rootTotal=tasks.length;scanStats.totalFiles+=tasks.length;
             // Main narrative and common events before generic databases.
-            function order(v){return v.relative.toLowerCase()==="sheet.csv"?0:v.relative.toLowerCase()==="commonsheet.csv"?1:2;}
+            function order(v){
+                var n=v.relative.toLowerCase();
+                if(/^(?:erowindowtext|questlist|profile|status|db_class|db_actor|db_skill|db_npcjob)\.csv$/.test(n))return 0;
+                if(n==="logsheet.csv")return 1;
+                if(n==="commonsheet.csv")return 2;
+                if(n==="sheet.csv")return 3;
+                return 4;
+            }
             tasks.sort(function(a,b){return order(a)-order(b)||a.relative.localeCompare(b.relative);});
             next();return;
         }
@@ -2534,30 +2734,73 @@ function scanRootCsv(done){
 function hookCsvChoiceLabels(){
     if(typeof Window_ChoiceList==="undefined"||!Window_ChoiceList.prototype)return;
     var p=Window_ChoiceList.prototype,update=p.update;
+    function display(win,index,fn,args){
+        var item=win._list&&win._list[index],raw=item&&item.name,translated=null;
+        if(csvWindowEligible(win)&&typeof raw==="string"){
+            try{translated=csvProjectDisplay(raw,true,true);}catch(_){state.errors++;}
+        }
+        if(translated===null||translated===raw)return fn.apply(win,args);
+        // Only the duration of the original paint/measure call. A script
+        // reading the choice later sees its original name and ext.
+        var out;
+        item.name=translated;
+        try{out=fn.apply(win,args);}
+        finally{if(item.name===translated)item.name=raw;}
+        (win._iaCsvPaint||(win._iaCsvPaint=[]))[index]={item:item,raw:raw,shown:translated};
+        csvUiStats.choices++;return out;
+    }
+    if(typeof p.drawItem==="function"){
+        var draw=p.drawItem;
+        p.drawItem=function(index){return display(this,index,draw,arguments);};
+    }
+    if(typeof p.textWidthEx==="function"){
+        var measure=p.textWidthEx;
+        p.textWidthEx=function(text){
+            var args=Array.prototype.slice.call(arguments);
+            if(csvWindowEligible(this))try{
+                var out=csvProjectDisplay(text,true,true);if(out!==null)args[0]=out;
+            }catch(_){state.errors++;}
+            return measure.apply(this,args);
+        };
+    }
+    // A subclass may override the conversion itself.
+    hookSurfaceConversion(p,true);
     if(typeof update!=="function")return;
     p.update=function(){
         var out=update.apply(this,arguments);
-        if(!tableStats.root||!this.active||this.openness===0||this._closing||
-           !Array.isArray(this._list)||this._list.length>24||typeof this.redrawItem!=="function"||
-           typeof this.itemRectForText!=="function"||typeof this.textWidthEx!=="function")return out;
+        if(!csvWindowEligible(this)||!this.active||this.openness===0||this._closing||
+           !Array.isArray(this._list)||this._list.length>24||typeof this.redrawItem!=="function")return out;
         if((this._iaCsvChoiceTick=(this._iaCsvChoiceTick||0)+1)%12!==0)return out;
-        var win=this;
+        var win=this,needsLayout=false,changes=[];
         try{
             this._list.forEach(function(item,i){
-                var original=item&&item.name,source=typeof original==="string"&&csvKnown.get(original);
-                if(!source||!csvCandidate(original,source)||/[\r\n\\<>]/.test(original))return;
-                var translated=readyText(source,original);
-                if(typeof translated!=="string"||translated===original||!validTranslation(source,original,translated,true))return;
-                var rect=win.itemRectForText(i);
-                if(!rect||win.textWidthEx(translated)>rect.width)return;
-                item.name=translated;
-                try{win.redrawItem(i);state.shown++;}catch(_){item.name=original;try{win.redrawItem(i);}catch(__){}}
+                var original=item&&item.name;
+                if(typeof original!=="string")return;
+                var translated=csvProjectDisplay(original,true,true);
+                if(translated===null||translated===original)return;
+                var last=win._iaCsvPaint&&win._iaCsvPaint[i];
+                if(last&&last.item===item&&last.raw===original&&last.shown===translated)return;
+                var rect=typeof win.itemRectForText==="function"?win.itemRectForText(i):null;
+                if(rect&&typeof win.textWidthEx==="function"&&win.textWidthEx(translated)>rect.width)needsLayout=true;
+                changes.push(i);
+            });
+            if(needsLayout){
+                // Native placement uses translated width, and native paint
+                // uses the same original list. Do not refresh the command
+                // list, alter the selection, or add another window.
+                if(typeof win.updatePlacement==="function"&&typeof win.createContents==="function"&&typeof win.drawAllItems==="function"){
+                    win.updatePlacement();win.createContents();win.drawAllItems();
+                    csvUiStats.drawn+=changes.length;
+                }else csvUiStats.overflow++;
+                return out;
+            }
+            changes.forEach(function(i){
+                display(win,i,win.redrawItem,[i]);state.shown++;csvUiStats.drawn++;
             });
         }catch(_){state.errors++;}
         return out;
     };
 }
-
 function scanLocaleCsv(raw,done){
     var rows=csvRows(raw.replace(/^\uFEFF/,""));
     if(!rows||rows.length<2){scanStats.skipped++;done();return;}
@@ -2985,7 +3228,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
-            tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Omitidos: "+tableStats.rootSkipped+" · Textos: "+tableStats.candidates:
+            tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
             "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · C:"+String(ambientStats.factory||0)
         ];
         for(var i=0;i<lines.length;i++){
