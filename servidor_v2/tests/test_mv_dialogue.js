@@ -1938,23 +1938,48 @@ async function testR6FirstViewNativeGate(mz){
     await wait(25);
     const m=f.$gameMessage,w=new f.context.Window_Message();
     m._texts=[text];m.setChoices([choice]);
-    w.update();assert.equal(w.originalStarts,0,"cold text must not paint in original language");
-    assert.equal(w.updates,1,"native update loop keeps running");
-    assert.equal(m.allText(),text,"waiting cannot mutate native message");
-    const limit=Date.now()+4000;
-    while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
-    assert.equal(w.originalStarts,1,"native start occurs exactly once");
-    assert.equal(w._textState.text,"¿Adónde vas?");
+    w.update();
+    if(mz){
+        assert.equal(w.originalStarts,0,"MZ keeps its bounded first-view translation gate");
+        assert.equal(w.updates,1,"MZ update loop keeps running while translation is pending");
+        assert.equal(m.allText(),text,"waiting cannot mutate native message");
+        const limit=Date.now()+4000;
+        while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
+        assert.equal(w.originalStarts,1,"MZ native start occurs exactly once");
+        assert.equal(w._textState.text,"¿Adónde vas?");
+    }else{
+        assert.equal(w.originalStarts,1,"English MV dialogue must paint immediately");
+        assert.equal(w.updates,1,"MV update loop never waits for neural inference");
+        assert.equal(w._textState.text,text,"MV first paint keeps the original source text");
+        assert.equal(m.allText(),text,"late translation never mutates native message data");
+        const lateLimit=Date.now()+4000;
+        while(w._textState.text===text&&Date.now()<lateLimit){await wait(25);w.update();}
+        assert.equal(w._textState.text,"¿Adónde vas?","late result redraws the native message");
+    }
     const actual=new f.context.Window_ChoiceList(m._choices);
-    assert.equal(actual.painted[0],"Abre la puerta, por favor.");
-    assert.equal(actual._list[0].ext,0);
-    // Choices without a preceding dialogue must also wait.
+    await wait(180);
+    actual.drawItem(0);
+    assert.equal(actual.painted[actual.painted.length-1],"Abre la puerta, por favor.");
+    assert.equal(actual._list[0].name,choice,"choice source label remains unchanged");
+    assert.equal(actual._list[0].ext,0,"choice branch index remains unchanged");
+
     m.clear();m.setChoices([cold]);
     const only=new f.context.Window_Message();only.update();
-    assert.equal(only._choice,undefined,"cold standalone choice must not become selectable");
-    const choiceLimit=Date.now()+4000;
-    while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
-    assert.ok(only._choice);assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
+    if(mz){
+        assert.equal(only._choice,undefined,"MZ waits for its bounded standalone-choice translation");
+        const choiceLimit=Date.now()+4000;
+        while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
+        assert.ok(only._choice);
+        assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
+    }else{
+        assert.ok(only._choice,"English MV standalone choices must remain immediately selectable");
+        const choiceLimit=Date.now()+4000;
+        while(Date.now()<choiceLimit){
+            await wait(25);only._choice.drawItem(0);
+            if(only._choice.painted[only._choice.painted.length-1]==="Cierra la ventana, por favor.")break;
+        }
+        assert.equal(only._choice.painted[only._choice.painted.length-1],"Cierra la ventana, por favor.");
+    }
 }
 async function testR6OfflineDeadlineAndForm(){
     const f=fixture(0,{mz:true,disconnected:true,configure(c){
