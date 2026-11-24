@@ -1682,7 +1682,79 @@ async function testR3TsvStartWithoutWaitingAndWrappedComposite(mz){
     assert.ok(!f.posts.some(x=>/\\tl\{|T100[1-4]|malformed/.test(x.text)));
 }
 
+
+async function testR4NativeTsvMixedControlsAndCoverage(mz){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const key="\\tl{R4002}\n\\tl{R4003}",one="The door is locked. You need the key.",two="\\. Please take the lantern.";
+    const rows=[["Key","English","Chinese(Simplified)","Chinese(Traditional)","Japanese"],
+        ["R4001","Guide","指南","導覽","ガイド"],
+        ["R4002",one,"门锁了。\\. 需要钥匙。","門鎖了。\\. 需要鑰匙。","扉は閉まっている。\\. 鍵が必要だ。"],
+        ["R4003",two,"\\. 拿灯。","\\. 拿燈。","ランタンを取ってください。"],
+        ["R4004","Please check the window.","查窗","查看窗戶","窓を調べてください。"]];
+    const raw=rows.map(r=>r.join("\t")).join("\n")+"\n";
+    state.files[path.join(data,"Languages.tsv")]=raw;
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"zh_CN",startMapId:1});
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    state.dirs[folder]=true;
+    // Older neural output dropped a complete sentence; it must not win.
+    state.files[journal]=JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:one,translated:"La puerta está cerrada.",composed:false})+"\n";
+    const mapData={events:[null,{pages:[{list:[{code:401,parameters:["\\tl{R4002}"]},{code:401,parameters:["\\tl{R4003}"]}]}]}]};
+    const mapJson=JSON.stringify(mapData);state.files[path.join(data,"Map001.json")]=mapJson;
+    let locale=1;
+    const f=fixture(80,{mz,fsState:state,cacheReadDelay:100,batch:true,nativePaint:true,
+        plugins:[{name:"VisuMZ_1_MessageCore",status:true,parameters:{"Localization:struct":JSON.stringify({"Enable:eval":"true","LangFiletype:str":"tsv","TsvFilename:str":"Languages.tsv"})}}],
+        responses:{"The door is locked.":"La puerta está cerrada.","You need the key.":"Necesitas la llave.","Please take the lantern.":"Toma la linterna.","Please check the window.":"Revisa la ventana.","扉は閉まっている。":"La puerta está cerrada.","鍵が必要だ。":"Necesitas la llave.","ランタンを取ってください。":"Toma la linterna."},
+        configure(c){
+            c.$dataMap=mapData;
+            function resolve(text){return text.replace(/(?:\\|\x1b)tl\{([^}]+)\}/gi,(token,k)=>{const row=rows.find(r=>r[0]===k);return row?row[locale]:token;});}
+            c.Window_Base.prototype.convertEscapeCharacters=resolve;
+            c.Window_Message.prototype.convertEscapeCharacters=resolve;
+            const base=c.Window_Message.prototype.startMessage;
+            c.Window_Message.prototype.startMessage=function(){
+                // A custom loader obtains the message directly, *before*
+                // it creates or measures the native text state. Its own
+                // wrapping path bypasses Window_Base.drawTextEx entirely.
+                this.nativeInput=c.$gameMessage.allText();base.apply(this,arguments);
+                this._textState.text=resolve(this.nativeInput).replace(/\\/g,"\x1b");
+            };
+        }});
+    const c=f.context,title=new c.Scene_Title();c.SceneManager._scene=title;title.start();title.commandNewGame();
+    assert.equal(title.launches,1,"TSV game enters before full translation");
+    const map=new c.Scene_Map();c.SceneManager._scene=map;map.createAllWindows();map.update();
+    f.$gameMessage._texts=key.split("\n");const first=new c.Window_Message();first.startMessage();first.finishPage();
+    const deadline=Date.now()+6500;
+    while(Date.now()<deadline&&!first.contents.ops.some(x=>x.text==="Necesitas")){await wait(35);first.update();}
+    assert.ok(first.contents.ops.some(x=>x.text==="Necesitas"),"late result restores omitted sentence in original window");
+    assert.equal(first.originalStarts,1);assert.equal(first.pages,1);
+    assert.equal(f.$gameMessage.allText(),key);
+    assert.ok(first.contents.ops.some(x=>x.text==="FACE"));
+    const replay=new c.Window_Message();replay.startMessage();
+    assert.equal(replay.nativeInput,"La puerta está cerrada. Necesitas la llave.\n\\. Toma la linterna.","native layout receives complete Spanish before drawing, using actual English controls");
+    assert.equal(f.$gameMessage.allText(),key);
+    while(Date.now()<deadline&&!f.posts.some(v=>v.text==="Please check the window."))await wait(30);
+    assert.ok(f.posts.some(v=>v.text==="Please check the window."),"unvisited content still processed in game");
+    assert.ok(f.posts.some(v=>v.text==="You need the key."));assert.ok(!f.posts.some(v=>v.text===one),"do not fetch the known incomplete whole sentence again");
+    // Switch to Japanese. Do not carry English's extra pause into the
+    // Japanese lantern message merely because it is in the same key.
+    locale=4;f.$gameMessage._texts=["\\tl{R4003}"];
+    let other=null;
+    while(Date.now()<deadline){
+        other=new c.Window_Message();other.startMessage();
+        if(other.nativeInput==="Toma la linterna.")break;
+        await wait(40);
+    }
+    assert.equal(other.nativeInput,"Toma la linterna.","native selected language is revalidated");
+    assert.equal(f.$gameMessage.allText(),"\\tl{R4003}");
+    const title2=new c.Scene_Title();c.SceneManager._scene=title2;title2.start();title2.commandNewGame();assert.equal(title2.launches,1);
+    assert.equal(state.files[path.join(data,"Languages.tsv")],raw);assert.equal(state.files[path.join(data,"Map001.json")],mapJson);
+    assert.ok(!f.posts.some(v=>/\\tl\{|R400[1-4]/.test(v.text)));
+}
+
 (async()=>{
+    await testR4NativeTsvMixedControlsAndCoverage(false);
+    await testR4NativeTsvMixedControlsAndCoverage(true);
     await testR3TsvStartWithoutWaitingAndWrappedComposite(false);
     await testR3TsvStartWithoutWaitingAndWrappedComposite(true);
     await testExternalTsvLookupAndLatePresentation(false);

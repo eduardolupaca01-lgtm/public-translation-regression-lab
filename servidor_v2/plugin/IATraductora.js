@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R3-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R4-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -802,6 +802,8 @@ function translatePreservingControls(source,text,skipPlan,priority){
     var key=source+"\u0000"+text;
     var ready=readyText(source,text);
     if(ready!==null)return Promise.resolve(ready);
+    var completePlan=tsvEnglishPlan(source,text);
+    if(completePlan)return tsvPlanTranslate(source,text,completePlan,priority);
     var plan=source==="en"&&!skipPlan?englishFormatPlan(text):null;
     if(plan)return englishPlanTranslate(text,plan,priority).then(function(out){
         return out!==null?out:translatePreservingControls(source,text,true,priority);
@@ -1096,7 +1098,12 @@ function hasJapaneseProse(text){
     });
 }
 function readyText(source,text){
-    var exact=cachedPart(source,text);
+    var exact=cachedPart(source,text),tsvPlan=tsvEnglishPlan(source,text);
+    if(tsvPlan&&(!exact||tsvCoverageSuspect(text,exact,tsvPlan))){
+        // Keep the original journal; only replace the in-memory result
+        // after every sentence has a usable translation.
+        return tsvPlanReady(source,text,tsvPlan);
+    }
     if(exact!==null)return exact;
     var csvEquivalent=csvAlternateReady(source,text);
     if(csvEquivalent!==null)return csvEquivalent;
@@ -1449,13 +1456,13 @@ function hookSurfaceConversion(proto,ownOnly){
     proto.convertEscapeCharacters=function(){
         if(identityDrawDepth||this._iaNameSurface||this._iaOwnSurface||typeof arguments[0]!=="string")
             return original.apply(this,arguments);
-        var args=Array.prototype.slice.call(arguments),csv=csvWindowEligible(this),choice=csv&&csvWindowChoice(this),out;
+        var args=Array.prototype.slice.call(arguments),raw=args[0],csv=csvWindowEligible(this),choice=csv&&csvWindowChoice(this),out;
         // Other RPG dialects keep their previous native conversion behavior.
         if(!csv&&surfaceDepth)return original.apply(this,arguments);
         try{
             if(!surfaceDepth)args[0]=projectSurface(this,args[0]);
             if(csv&&(!surfaceDepth||choice)){
-                var before=csvProjectDisplay(args[0],choice,true);
+                var before=tsv.visu&&tsvRef(args[0])?null:csvProjectDisplay(args[0],choice,true);
                 if(before!==null){args[0]=before;if(tsv.detected&&typeof Window_Message!=="undefined"&&this instanceof Window_Message){state.shown++;tsv.shown++;}}
             }
         }catch(_){state.errors++;}
@@ -1463,8 +1470,9 @@ function hookSurfaceConversion(proto,ownOnly){
         try{out=original.apply(this,args);}finally{surfaceDepth--;}
         // The game may turn a lookup key into text or expand \V here.
         // Match only known CSV display strings (or a real choice window).
-        if(csv&&typeof out==="string"&&out!==args[0]){
-            try{var after=csvProjectDisplay(out,choice,true);if(after!==null){if(tsv.detected&&typeof Window_Message!=="undefined"&&this instanceof Window_Message){state.shown++;tsv.shown++;}return after;}}catch(_){state.errors++;}
+        if(csv&&typeof out==="string"){
+            try{var after=tsvResolvedProjection(raw,out,true);
+                if(after===null&&out!==args[0])after=csvProjectDisplay(out,choice,true);if(after!==null){if(tsv.detected&&typeof Window_Message!=="undefined"&&this instanceof Window_Message){state.shown++;tsv.shown++;}return after;}}catch(_){state.errors++;}
         }
         return out;
     };
@@ -1815,7 +1823,8 @@ function csvKnownReady(text){
 }
 function csvRequestLive(source,text){
     if(!source)return;
-    if(!cacheReadDone||!state.connected){addPrefetch(text,true,source);return;}
+    addPrefetch(text,true,source);
+    if(!cacheReadDone||!state.connected)return;
     if(pending.size>=90||csvLiveRequests.size>=32)return;
     var key=source+"\u0000"+text;
     if(csvLiveRequests.has(key)||rejectedKeys.get(key)>Date.now())return;
@@ -2210,13 +2219,33 @@ function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var proto=Window_Message.prototype,original=proto.startMessage;
     if(typeof original!=="function")return;
+    // Scope the projection to the one native startMessage invocation.
+    // A game may bypass our draw/convert hooks and call allText directly.
+    if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.allText==="function"){
+        var nativeAllText=Game_Message.prototype.allText;
+        Game_Message.prototype.allText=function(){
+            var raw=nativeAllText.apply(this,arguments),scope=tsvProjection;
+            if(scope&&scope.message===this&&raw===scope.raw){scope.used=true;return scope.text;}
+            return raw;
+        };
+    }
     proto.startMessage=function(){
         hideLate(this);this._iaSourceMessage=null;
+        var projection=null;
         try{
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
-                var text=$gameMessage.allText(),source=languageFor(text);
+                var text=$gameMessage.allText(),source=languageFor(text),keys=tsvRawMessage();
                 this._iaSourceMessage=text;
-                if(tsvRef(text))tsvPrioritize(text,true);
+                if(tsv.detected&&tsvRef(keys)){
+                    var resolved=tsvMessageEntry(keys,text);
+                    var locale=resolved?resolved.source:tsvProbeLocale(this);
+                    if(locale)tsv.language=locale;
+                    tsvPrioritize(keys,true);
+                    var localized=locale?tsvTranslatedKeys(keys,locale,true):null;
+                    if(localized!==null)projection={message:$gameMessage,raw:text,text:localized,used:false};
+                    // Never replace the game's reference array.
+                    source=null;
+                }
                 if(source){
                     var old=readyText(source,text);
                     if(old===null&&tableStats.root)old=csvKnownReady(text);
@@ -2242,7 +2271,11 @@ function hookMessages(){
                 }
             }
         }catch(_){state.errors++;}
-        var out=original.apply(this,arguments);
+        var out,previousProjection=tsvProjection;
+        tsvProjection=projection;
+        try{out=original.apply(this,arguments);}
+        finally{tsvProjection=previousProjection;}
+        if(projection&&projection.used){state.shown++;tsv.shown++;}
         if(tsv.detected)try{tsvLateTicket(this);}catch(_){state.errors++;}
         if(this._iaLateTicket)try{snapshotMessage(this,this._iaLateTicket);}catch(_){hideLate(this);}
         return out;
@@ -2304,8 +2337,10 @@ function hookChoices(){
         var translated=choices.slice(),changed=false;
         try{
             for(var i=0;i<choices.length;i++){
+                if(tsvRef(choices[i])){tsvPrioritize(choices[i],true);continue;}
                 var source=languageFor(choices[i]);
                 if(!source)continue;
+                addPrefetch(choices[i],true,source);
                 var cached=readyText(source,choices[i]);
                 if(typeof cached==="string"&&cached!==choices[i]){
                     translated[i]=cached;changed=true;
@@ -2334,7 +2369,7 @@ var tableStats={files:0,candidates:0,root:false,rootDone:false,rootFiles:0,rootT
 // Explicit localization dialect: data/Languages.tsv with a Key and four
 // named language columns. The game's identifiers are never neural input.
 var tsv={detected:false,valid:false,done:false,loading:false,rows:0,conflicts:0,shown:0,
-    keys:new Map(),display:new Map(),chinese:new Map(),visual:new Map(),priority:new Map(),language:"en",skippedRows:0,late:0};
+    keys:new Map(),display:new Map(),chinese:new Map(),visual:new Map(),priority:new Map(),language:"en",skippedRows:0,late:0,visu:false,probe:null,loose:new Map(),repairs:0};
 function externalTables(){return tableStats.root||tsv.detected;}
 function tsvRef(text){return typeof text==="string"&&/(?:\\|\x1b)tl\{[^{}\r\n]{1,300}\}/i.test(text);}
 function tsvNormal(text){
@@ -2357,7 +2392,7 @@ function detectTsv(){
     if(!content)return;
     var dir=path.join(content,"data"),file=path.join(dir,"Languages.tsv");
     if(!directoryUnder(content,dir)||!regularUnder(dir,file,4*1024*1024))return;
-    tsv.detected=true;
+    tsv.detected=true;tsv.visu=tsvVisuEnabled();
     MAX_DISCOVERED=Math.max(MAX_DISCOVERED,90000);
     MAX_CACHE_ENTRIES=Math.max(MAX_CACHE_ENTRIES,150000);
     CACHE_LIMIT=Math.max(CACHE_LIMIT,128*1024*1024);
@@ -2380,11 +2415,158 @@ function tsvVisualKey(text){
         return p.locked&&!/^\r?\n$/.test(p.value)?p.value:p.value.replace(/\s+/g," ");
     }).join("").replace(/ +/g," ").trim();
 }
+// Select the actual language of the native localization system. Do not
+// compare unrelated language columns' pause counts. Only probe a plain,
+// unique, side-effect-free cell in the confirmed Message Core dialect.
+var tsvProjection=null;
+function tsvVisuEnabled(){
+    if(typeof $plugins==="undefined"||!Array.isArray($plugins))return false;
+    return $plugins.some(function(p){
+        if(!p||!p.status||p.name!=="VisuMZ_1_MessageCore")return false;
+        try{
+            var o=JSON.parse((p.parameters||{})["Localization:struct"]||"{}");
+            return o["Enable:eval"]==="true"&&o["LangFiletype:str"]==="tsv"&&o["TsvFilename:str"]==="Languages.tsv";
+        }catch(_){return false;}
+    });
+}
+function tsvSurfaceKey(text){
+    return tsvVisualKey(tsvNormal(text).replace(/\\[.|]/g,"").replace(/<\/?wordwrap>/gi,"").replace(/<br>/gi,"\n"));
+}
+function tsvProbeLocale(win){
+    if(!tsv.valid||!tsv.probe||!tsv.visu||!win||typeof win.convertEscapeCharacters!=="function")return null;
+    var value;
+    identityDrawDepth++;
+    try{value=win.convertEscapeCharacters("\\tl{"+tsv.probe[0]+"}");}
+    catch(_){return null;}
+    finally{identityDrawDepth--;}
+    if(typeof value!=="string")return null;
+    var key=tsvSurfaceKey(value),matches=[];
+    for(var i=1;i<5;i++)if(tsvSurfaceKey(tsv.probe[i])===key)matches.push(i);
+    if(matches.length!==1)return null;
+    return matches[0]===1?"en":matches[0]===4?"ja":null;
+}
+function tsvRawMessage(){
+    if(typeof $gameMessage==="undefined"||!$gameMessage)return "";
+    var raw=$gameMessage._texts;
+    return Array.isArray(raw)&&raw.every(function(x){return typeof x==="string";})?raw.join("\n"):$gameMessage.allText();
+}
+function tsvResolveKeys(raw,source){
+    var complete=true,found=false;
+    var value=tsvNormal(raw).replace(/\\tl\{([^{}\r\n]{1,300})\}/gi,function(token,key){
+        var row=tsv.keys.get(key),cell=row&&row[source==="en"?1:4];
+        if(!cell||!tsvCandidate(source,cell)){complete=false;return token;}
+        found=true;return cell;
+    });
+    return complete&&found?value:null;
+}
+function tsvTranslatedKeys(raw,source,request){
+    var complete=true,changed=false;
+    var value=tsvNormal(raw).replace(/\\tl\{([^{}\r\n]{1,300})\}/gi,function(token,key){
+        var row=tsv.keys.get(key),cell=row&&row[source==="en"?1:4],entry=cell&&tsvEntry(cell);
+        if(!entry||entry.source!==source){complete=false;return token;}
+        var out=tsvReady(entry,request);
+        if(out===null){complete=false;return token;}
+        changed=true;return out;
+    });
+    return changed&&complete?value:null;
+}
+function tsvAdaptNative(visual,result){
+    var raw=tsvNormal(visual),out=tsvNormal(result);
+    // The author's layout may have consumed or removed timing markers.
+    // Do not add a missing pause back after native conversion. Preserve
+    // every actual non-layout control and every numeric argument.
+    function signature(v){
+        return protectedParts(v).filter(function(p){
+            return p.locked&&!/^(?:\r?\n|<\/?wordwrap>|<br>)$/i.test(p.value);
+        }).map(function(p){return p.value;}).join("\u0002");
+    }
+    if(!/\\[.|]/.test(raw))out=out.replace(/\\[.|]/g,"");
+    if(signature(raw)!==signature(out)||numbersIn(raw)!==numbersIn(out))return null;
+    var front=/^<wordwrap>/i.exec(raw),back=/<\/wordwrap>$/i.exec(raw);
+    if(front&&!/^<wordwrap>/i.test(out))out=front[0]+out;
+    if(back&&!/<\/wordwrap>$/i.test(out))out+=back[0];
+    if(visual.indexOf("\x1b")>=0&&visual.indexOf("\\")<0)out=out.replace(/\\(?=[A-Za-z{}!.,|^<>$])/g,"\x1b");
+    return out;
+}
+function tsvResolvedProjection(raw,visual,request){
+    if(!tsv.valid||typeof raw!=="string"||typeof visual!=="string"||
+       raw.length>1800||visual.length>1800||identityDrawDepth||actorNames[visual])return null;
+    var entry=tsvMessageEntry(raw,visual);
+    if(!entry)return null;
+    var result=tsvRef(raw)?tsvTranslatedKeys(raw,entry.source,request):null;
+    if(result===null)result=tsvReady(entry,request);
+    return result===null?null:tsvAdaptNative(visual,result);
+}
+
+// Repair incomplete translations only for proven English table cells.
+// Keep punctuation/control bytes and all intervening whitespace. A full
+// cached translation with reasonable coverage still wins.
+function tsvEnglishPlan(source,text){
+    if(source!=="en"||!tsv.valid||!tsvEntry(text)||actorNames[text]||
+       approvedKeys.has(source+"\u0000"+text))return null;
+    var pieces=[],count=0;
+    protectedParts(text).forEach(function(chunk){
+        if(chunk.locked){pieces.push({value:chunk.value,locked:true});return;}
+        var value=chunk.value,at=0,m,re=/[.!?]+[ \t]+(?=[A-Z])/g;
+        function push(segment){
+            var ws=/^([ \t]*)([\s\S]*?)([ \t]*)$/.exec(segment);
+            if(ws&&/[A-Za-z]{2}/.test(ws[2])&&!actorNames[ws[2]]){
+                if(ws[1])pieces.push({value:ws[1],locked:true});
+                pieces.push({value:ws[2],locked:false});count++;
+                if(ws[3])pieces.push({value:ws[3],locked:true});
+            }else if(segment)pieces.push({value:segment,locked:true});
+        }
+        while((m=re.exec(value))!==null){
+            var end=m.index+m[0].replace(/[ \t]+$/,"").length;
+            if(/\b(?:Mr|Mrs|Ms|Dr|St|Prof|vs|etc)\.$/i.test(value.slice(at,end)))continue;
+            push(value.slice(at,end));pieces.push({value:value.slice(end,re.lastIndex),locked:true});at=re.lastIndex;
+        }
+        push(value.slice(at));
+    });
+    return count>=2&&count<=16?pieces:null;
+}
+function tsvCoverageSuspect(text,result,plan){
+    if(!plan||typeof result!=="string")return false;
+    var sw=(visibleProse(text).match(/[A-Za-z]+(?:'[A-Za-z]+)?/g)||[]).length;
+    var visible=visibleProse(result),tw=(visible.match(/[A-Za-zÀ-ÖØ-öø-ÿ]+/g)||[]).length;
+    // A markedly shortened result with fewer sentence/utterance endings
+    // than the source is not evidence of a complete translation.
+    var endings=function(v){return (v.match(/[.!?]+(?=\s|$)/g)||[]).length;};
+    return sw>=4&&tw<sw*0.82&&endings(visible)<plan.filter(function(p){return !p.locked&&/[.!?]+$/.test(p.value);}).length;
+}
+function tsvPlanReady(source,text,plan){
+    var pieces=[];
+    for(var i=0;i<plan.length;i++){
+        var p=plan[i],v=p.locked?p.value:readyText(source,p.value);
+        if(v===null)return null;pieces.push(v);
+    }
+    var joined=pieces.join("");
+    return acceptCache(source,text,joined,true,true)?cache.get(source+"\u0000"+text):null;
+}
+function tsvPlanTranslate(source,text,plan,priority){
+    return Promise.all(plan.map(function(p){
+        return p.locked?Promise.resolve(p.value):translatePreservingControls(source,p.value,true,priority);
+    })).then(function(parts){
+        if(parts.some(function(p){return p===null;})){
+            var retry=0;
+            parts.forEach(function(p,i){if(p===null){
+                var at=rejectedKeys.get(source+"\u0000"+plan[i].value);
+                if(at&&at!==Infinity&&at>Date.now())retry=Math.max(retry,at);
+            }});
+            if(retry)rejectedKeys.set(source+"\u0000"+text,retry);
+            return null;
+        }
+        var joined=parts.join("");
+        return acceptCache(source,text,joined,true,true)?cache.get(source+"\u0000"+text):null;
+    });
+}
+
 function tsvRegister(source,text){
     if(!tsvCandidate(source,text))return null;
     var entry={source:source,text:text},key=tsvNormal(text);
     csvSetUnique(tsv.display,key,entry,function(a,b){return a.source===b.source&&a.text===b.text;});
     csvSetUnique(tsv.visual,tsvVisualKey(text),entry,function(a,b){return a.source===b.source&&a.text===b.text;});
+    csvSetUnique(tsv.loose,tsvSurfaceKey(text),entry,function(a,b){return a.source===b.source&&a.text===b.text;});
     return entry;
 }
 function tsvRead(done){
@@ -2434,6 +2616,15 @@ function tsvRead(done){
                 }
             });
             if(!records.length){finish(false);return;}
+            if(tsv.visu){
+                records.some(function(c){
+                    if(tsv.keys.get(c[0])!==c||!/^[A-Za-z][0-9]+$/.test(c[0]))return false;
+                    var vals=c.slice(1);
+                    if(vals.some(function(v){return v.length<2||v.length>100||/[\\<>\[\]{}$%\u0000-\u001f]/.test(v);})||
+                       vals.some(function(v,i){return vals.indexOf(v)!==i;}))return false;
+                    tsv.probe=c;return true;
+                });
+            }
             tsv.rows=records.length;tsv.valid=true;
             // Map/title can have become active before the asynchronous
             // table read completed. Replay its keys before bulk inference.
@@ -2533,31 +2724,22 @@ function tsvProject(text,request){
 // lookup keys in a message and visual line breaks introduced by wrapping.
 // Only a positively matched native message is eligible for this adapter.
 function tsvMessageEntry(raw,visual){
-    if(!tsv.valid||typeof visual!=="string"||visual.length>1800||tsvRef(visual)||
-       !nativeRenderParts(visual))return null;
-    var exact=tsvEntry(visual),key=tsvVisualKey(visual);
-    if(exact){tsv.language=exact.source;return exact;}
+    if(!tsv.valid||typeof visual!=="string"||visual.length>1800||tsvRef(visual))return null;
+    var exact=tsvEntry(visual),key=tsvSurfaceKey(visual);
+    // With explicit raw references, require the actual loader output to
+    // match that key's selected column, not an unrelated global alias.
     if(tsvRef(raw)){
-        var found=null;
+        var matches=[];
         ["en","ja"].forEach(function(source){
-            var complete=true;
-            var candidate=tsvNormal(raw).replace(/\\tl\{([^{}\r\n]{1,300})\}/gi,function(token,k){
-                var row=tsv.keys.get(k),value=row&&row[source==="en"?1:4];
-                if(!value||!tsvCandidate(source,value)){complete=false;return token;}
-                return value;
-            });
-            if(!complete||tsvVisualKey(candidate)!==key||!tsvCandidate(source,candidate))return;
-            if(found&&found.source!==source){found=false;return;}
-            found={source:source,text:candidate};
+            var candidate=tsvResolveKeys(raw,source);
+            if(candidate&&tsvSurfaceKey(candidate)===key&&tsvCandidate(source,candidate))matches.push({source:source,text:candidate});
         });
-        if(found){
-            // The composite is proved by the native output and keys,
-            // not inferred from arbitrary script or variable data.
-            if(!tsvEntry(found.text))tsvRegister(found.source,found.text);
-            tsv.language=found.source;return found;
-        }
+        if(matches.length!==1)return null;
+        var found=matches[0];
+        if(!tsvEntry(found.text))tsvRegister(found.source,found.text);
+        tsv.language=found.source;return found;
     }
-    var alias=tsv.visual.get(key);
+    var alias=exact||tsv.visual.get(tsvVisualKey(visual))||tsv.loose.get(key);
     if(alias){tsv.language=alias.source;return alias;}
     return null;
 }
@@ -2569,25 +2751,21 @@ function tsvTicketCurrent(win,t){
 function tsvEarlyPaint(win,t){
     var ts=win._textState;
     if(!ts||!t.result||ts.index!==0||ts.rtl||ts.buffer||ts.text!==t.visualOriginal||!tsvTicketCurrent(win,t))return false;
-    var original=tsvNormal(ts.text),result=t.result;
-    if(!nativeRenderParts(result))return false;
-    // Early replacement must preserve all actual controls. In particular
-    // never add or replay a pause the game has already consumed.
-    function signature(text){return protectedParts(text).filter(function(p){return p.locked&&!/^\r?\n$/.test(p.value);}).map(function(p){return p.value;}).join("\u0002");}
-    if(signature(original)!==signature(result)||numbersIn(original)!==numbersIn(result))return false;
-    if(ts.text.indexOf("\x1b")>=0&&ts.text.indexOf("\\")<0)result=result.replace(/\\(?=[A-Za-z{}!.,|^<>$])/g,"\x1b");
+    var result=tsvAdaptNative(ts.text,t.result);
+    if(result===null||!nativeRenderParts(result))return false;
     ts.text=result;state.shown++;tsv.shown++;hideLate(win);
     return true;
 }
 function tsvRefreshTicket(win,t){
     if(!tsvTicketCurrent(win,t))return;
-    var entry=t.entry||tsvMessageEntry(t.displayed,t.visualOriginal);
+    var entry=t.entry||tsvMessageEntry(t.rawKeys||t.displayed,t.visualOriginal);
     if(!entry)return;
     t.entry=entry;t.original=entry.text;t.source=entry.source;
-    var result=tsvReady(entry,false);
+    var result=tsvRef(t.rawKeys||t.displayed)?tsvTranslatedKeys(t.rawKeys||t.displayed,entry.source,false):null;
+    if(result===null)result=tsvReady(entry,false);
     if(result!==null&&result!==entry.text){
-        t.result=result;
-        tsvEarlyPaint(win,t);
+        t.result=tsvAdaptNative(t.visualOriginal,result);
+        if(t.result!==null)tsvEarlyPaint(win,t);
     }else if(!t.lastRequest||Date.now()-t.lastRequest>=500){
         t.lastRequest=Date.now();tsvRequest(entry);
     }
@@ -2595,13 +2773,13 @@ function tsvRefreshTicket(win,t){
 function tsvLateTicket(win){
     if(!tsv.detected||win._iaLateTicket||!win._textState||
        typeof $gameMessage==="undefined"||!$gameMessage||!$gameMessage.hasText())return;
-    var text=win._textState.text,raw=$gameMessage.allText();
+    var text=win._textState.text,raw=$gameMessage.allText(),keys=tsvRawMessage();
     if(!nativeRenderParts(text))return;
-    var entry=tsvMessageEntry(raw,text);
-    if(!entry&&!tsvRef(raw))return;
+    var entry=tsvMessageEntry(keys,text);
+    if(!entry&&!tsvRef(keys))return;
     var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
     if(!scene)return;
-    var ticket={message:$gameMessage,displayed:raw,visualOriginal:text,
+    var ticket={message:$gameMessage,displayed:raw,rawKeys:keys,visualOriginal:text,
         original:entry?entry.text:text,source:entry?entry.source:null,entry:entry,
         tsv:true,scene:scene,result:null,drawn:false,pages:1,geometry:null};
     win._iaLateTicket=ticket;lateStats.requested++;
@@ -3281,6 +3459,13 @@ function addPrefetch(text,priority,trustedLang){
     var key=source+"\u0000"+text,item=discovered.get(key);
     if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
     if(item){
+        if(tsv.valid&&item.status==="ready"){
+            var audit=tsvEnglishPlan(source,text),prior=cache.get(key);
+            if(audit&&tsvCoverageSuspect(text,prior,audit)&&readyText(source,text)===null){
+                item.status="queued";scanStats.ready=Math.max(0,scanStats.ready-1);
+                item.priority=!!priority;(priority?priorityQueue:prefetchQueue).push(item);
+            }
+        }
         if(externalTables()&&item.status!=="ready"&&cacheReadDone&&readyText(source,text)!==null){markPrefetchReady(item);return;}
         if(priority&&item.status==="queued"&&!item.priority){
             item.priority=true;priorityQueue.push(item);
@@ -3737,6 +3922,7 @@ try{
     state.phase="CONEXION";startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.
+        if(runtimeActivated)try{startFullScan();collectMapText();}catch(_){state.errors++;}
         queueFlush();nextPrefetch();
     },750);
     state.phase="ACTIVO";
