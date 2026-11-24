@@ -1797,10 +1797,10 @@ function csvProjectDisplay(text,choice,requestMissing){
             text=value;
         }
     }
-    var found=csvKnownReady(text);
-    if(found!==null)return found;
     var fixed=csvFixedLabel(text);
     if(typeof fixed==="string"&&fixed!==text)return fixed;
+    var found=csvKnownReady(text);
+    if(found!==null)return found;
     if(!/[\r\n\\\x1b<>]/.test(text)){
         var named=csvNameReady(text);if(named!==null)return named;
     }

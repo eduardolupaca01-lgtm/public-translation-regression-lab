@@ -57,6 +57,21 @@ Scene_Map.prototype.addWindow=function(window){this.windows.push(window);};
     };
 })();
 const gameMessage=new Game_Message();
+const choiceValues=Object.create(null);
+function Window_ChoiceList(){
+    this.active=true;this.openness=255;this._index=0;
+    this._list=[{name:"\\v[61]",symbol:"choice",enabled:true,ext:61}];this.painted=[];
+}
+Window_ChoiceList.prototype=Object.create(Window_Base.prototype);
+Window_ChoiceList.prototype.constructor=Window_ChoiceList;
+Window_ChoiceList.prototype.convertEscapeCharacters=function(text){
+    return text.replace(/\\v\[(\d+)\]/gi,(_,id)=>choiceValues[id]);
+};
+Window_ChoiceList.prototype.textWidthEx=function(text){return this.convertEscapeCharacters(text).length*10;};
+Window_ChoiceList.prototype.drawItem=function(i){this.painted[i]=this.convertEscapeCharacters(this._list[i].name);};
+Window_ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
+Window_ChoiceList.prototype.itemRectForText=function(){return {width:800};};
+Window_ChoiceList.prototype.update=function(){};
 let keyPressed=false;
 const ctx={
     window:{location:{pathname:"/"+path.join(content,"index.html").replace(/\\/g,"/")}},
@@ -74,7 +89,8 @@ const ctx={
     process,Buffer,Promise,Date,Number,Map,Error,
     setTimeout,clearTimeout,
     setInterval(fn,ms){const id=setInterval(fn,ms);intervals.push(id);return id;},
-    Window_Base,Window_Message,Game_Message,Scene_Map,
+    Window_Base,Window_Message,Game_Message,Scene_Map,Window_ChoiceList,
+    $gameVariables:{value(id){return choiceValues[id];},setValue(){throw Error("IA_UNEXPECTED_GAME_WRITE");}},
     Graphics:{boxWidth:1280},
     Input:{keyMapper:{},isTriggered(){return keyPressed;}},
     SceneManager:{_scene:null},
@@ -136,6 +152,15 @@ async function run(){
     assert.ok(/^\\c\[2\]/.test(gameMessage.allText())&&/\\I\[17\]$/.test(gameMessage.allText())&&/linterna|farol|lámpara/i.test(gameMessage.allText())&&/mesa/i.test(gameMessage.allText()),"IA_EXTERNAL_CSV_EN_DIALOG_FAIL");
     gameMessage.setChoices([csvChoice],0,1);
     assert.ok(/abr/i.test(gameMessage._choices[0])&&/madera/i.test(gameMessage._choices[0]),"IA_EXTERNAL_CSV_EN_CHOICE_FAIL");
+    choiceValues[61]=csvChoice;
+    const choice=new Window_ChoiceList(),originalChoice=JSON.stringify(choice._list);
+    gameMessage.setChoices(["\\v[61]"],0,1);
+    assert.equal(gameMessage._choices[0],"\\v[61]","IA_CSV_VARIABLE_REFERENCE_CHANGED");
+    choice.drawItem(0);
+    assert.ok(/abr/i.test(choice.painted[0])&&/madera/i.test(choice.painted[0]),"IA_CSV_VARIABLE_CHOICE_NOT_TRANSLATED");
+    assert.equal(JSON.stringify(choice._list),originalChoice,"IA_CSV_CHOICE_LOGIC_CHANGED");
+    assert.equal(choiceValues[61],csvChoice,"IA_CSV_GAME_VARIABLE_CHANGED");
+    console.log("SERVIDOR_V2_REAL_OPUS_CSV_VARIABLE_CHOICE_PASS");
     gameMessage._texts=[csvJa];new Window_Message().startMessage();
     assert.ok(!japanese(gameMessage.allText())&&/puente/i.test(gameMessage.allText()),"IA_EXTERNAL_CSV_JA_DIALOG_FAIL");
     assert.equal(fs.readFileSync(sheet,"utf8"),csvRaw,"IA_EXTERNAL_CSV_SOURCE_CHANGED");
