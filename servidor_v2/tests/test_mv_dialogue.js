@@ -2102,7 +2102,7 @@ async function testR8GeneralDisplaySurfaces(){
         "City Courthouse, Courtroom 4.":"Palacio de justicia de la ciudad, sala 4.",
         "Shopia: Okay, okay! Stop before my head gets too big to fit through the door♡":
             "Shopia: Está bien, está bien. No sigas o mi cabeza no pasará por la puerta♡",
-        "Sophia is my ":"Sophia es mi ",
+        "Sophia is my":"Sophia es mi",
         ", a woman of breathtaking beauty and elegance.":", una mujer de belleza y elegancia impresionantes.",
         "She has always been incredibly kind, She holds herself to an impossibly high standard, always perfectly composed.":
             "Siempre ha sido increíblemente amable y mantiene un estándar extraordinariamente alto, siempre perfectamente serena.",
