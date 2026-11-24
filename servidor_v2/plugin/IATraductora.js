@@ -2390,11 +2390,11 @@ function firstViewMissing(win,raw,choice){
     firstViewRequest(source,raw);return true;
 }
 function firstViewWait(win){
-    // Large MV inventories must fail open: foreground messages and choices
-    // still request translation, but a 30-second neural wait can freeze a
-    // project with thousands of authored strings. Smaller MV projects retain
-    // a short first-view gate; MZ contracts and TSV localization keep theirs.
-    if(!isMZ&&!tsv.detected&&discovered.size>=1200)return false;
+    // MV English dialogue has a safe native late-render path. Never hold
+    // the message loop waiting for CPU inference on those visible strings.
+    // Large inventories also fail open regardless of source language.
+    // MZ contracts and explicit TSV localization keep their own first-view
+    // rules because they may need authored-key/variable resolution.
     if(inputFormActive()||win.pause||win._textState||
        (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return false;
     var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
@@ -2403,6 +2403,13 @@ function firstViewWait(win){
     var choices=typeof m.choices==="function"?m.choices():m._choices;
     choices=Array.isArray(choices)&&choices.length<=24?choices.slice():[];
     if(!raw&&!choices.length){win._iaFirstGate=null;return false;}
+    if(!isMZ&&!tsv.detected){
+        if(discovered.size>=1200)return false;
+        if(raw&&displaySource(raw,"message")==="en")return false;
+        for(var i=0;i<choices.length;i++){
+            if(displaySource(choices[i],"choice")==="en")return false;
+        }
+    }
     var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null,
         key=JSON.stringify([raw,choices,m._iaFirstGeneration||0,(scriptMessagePlan(raw)||{}).body||"",scriptVariableKey(raw),choices.map(scriptVariableKey)]),now=Date.now(),g=win._iaFirstGate;
     if(!g||g.message!==m||g.scene!==scene||g.key!==key)
@@ -4223,6 +4230,73 @@ function scanDatabase(name,data){
         });
     });
 }
+// Parse a large top-level JSON array one entry at a time. JSON.parse(raw)
+// would block MV's render/event loop for the full CommonEvents.json file.
+// Each entry is still validated by the native JSON parser; only the array
+// framing is incremental. The 5 ms / 64 KiB budget gives input and rendering
+// a chance to run between slices.
+function parseJsonArrayChunked(raw,done){
+    if(typeof raw!=="string"){done(null);return;}
+    var text=raw.charCodeAt(0)===0xFEFF?raw.slice(1):raw,
+        length=text.length,at=0,depth=0,start=-1,items=[],
+        inString=false,escaped=false,afterComma=false,opened=false,settled=false;
+    function settle(result){if(settled)return;settled=true;done(result);}
+    function whitespace(ch){return ch===" "||ch==="\t"||ch==="\r"||ch==="\n";}
+    function finishItem(end){
+        if(start<0)return false;
+        items.push(JSON.parse(text.slice(start,end)));
+        start=-1;depth=0;inString=false;escaped=false;afterComma=false;
+        return true;
+    }
+    function complete(){
+        while(at<length&&whitespace(text.charAt(at)))at++;
+        settle(at===length?items:null);
+    }
+    function slice(){
+        var began=Date.now(),scanned=0;
+        try{
+            if(!opened){
+                while(at<length&&whitespace(text.charAt(at)))at++;
+                if(text.charAt(at)!=="["){settle(null);return;}
+                opened=true;at++;
+            }
+            while(at<length&&scanned<65536){
+                if((scanned&1023)===0&&Date.now()-began>=5)break;
+                var ch=text.charAt(at);
+                if(start<0){
+                    if(whitespace(ch)){at++;scanned++;continue;}
+                    if(ch==="]"){
+                        if(afterComma){settle(null);return;}
+                        at++;complete();return;
+                    }
+                    if(ch===","){settle(null);return;}
+                    start=at;depth=0;inString=false;escaped=false;afterComma=false;
+                }
+                if(inString){
+                    if(escaped)escaped=false;
+                    else if(ch==="\\")escaped=true;
+                    else if(ch==='"')inString=false;
+                }else if(ch==='"')inString=true;
+                else if(ch==="{"||ch==="[")depth++;
+                else if(ch==="}"||ch==="]"){
+                    if(depth>0)depth--;
+                    else if(ch==="]"){
+                        if(!finishItem(at)){settle(null);return;}
+                        at++;complete();return;
+                    }else{settle(null);return;}
+                }
+                if(ch===","&&!inString&&depth===0){
+                    if(!finishItem(at)){settle(null);return;}
+                    at++;scanned++;afterComma=true;continue;
+                }
+                at++;scanned++;
+            }
+        }catch(_){settle(null);return;}
+        if(at<length){setTimeout(slice,0);return;}
+        settle(null);
+    }
+    slice();
+}
 function scanCommonEventsChunked(data,done){
     if(!Array.isArray(data)){done();return;}
     var deferred=Array.from(commonDeferred.entries()),deferredAt=0,at=0;
@@ -4288,6 +4362,21 @@ function startFullScan(){
             }catch(_){scanStats.skipped++;setTimeout(step,0);return;}
             fs.readFile(file,"utf8",function(err,raw){
                 if(err||typeof raw!=="string"){scanStats.skipped++;setTimeout(step,0);return;}
+                if(name==="CommonEvents.json"&&!isMZ){
+                    scanStats.files++;
+                    parseJsonArrayChunked(raw,function(data){
+                        if(!Array.isArray(data)){scanStats.skipped++;nextPrefetch();setTimeout(step,0);return;}
+                        try{
+                            scanDatabase(name,data);
+                            scanCommonEventsChunked(data,function(){
+                                nextPrefetch();setTimeout(step,0);
+                            });
+                        }catch(_){
+                            scanStats.skipped++;nextPrefetch();setTimeout(step,0);
+                        }
+                    });
+                    return;
+                }
                 try{
                     var data=JSON.parse(raw.replace(/^\uFEFF/,""));
                     if(name==="System.json"&&data&&integer(data.startMapId)&&data.startMapId>0){
