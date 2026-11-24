@@ -2170,7 +2170,7 @@ async function testR8GeneralDisplaySurfaces(){
     const benBitmap=new c.Bitmap(900,400);
     await until(()=>{benBitmap.drawText(ben,0,0,900,400);return benBitmap.lastText.indexOf("Ben es la persona estable")===0;});
 
-    const owner=new c.Window_Base();owner.initialize(0,0,500,100);owner.createContents();
+    const owner=new c.Window_Base();owner.initialize(new c.Rectangle(0,0,500,100));owner.createContents();
     owner._iaRefreshText="Profile";owner.refresh();
     await until(()=>owner.refreshes>=2&&owner.lastText==="Perfil");
 
