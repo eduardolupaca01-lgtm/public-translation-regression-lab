@@ -1937,6 +1937,7 @@ async function testR6FirstViewNativeGate(mz){
     }});
     await wait(25);
     const m=f.$gameMessage,w=new f.context.Window_Message();
+    f.context.SceneManager._scene=new f.context.Scene_Map();
     m._texts=[text];
     if(mz)m.setChoices([choice]);
     w.update();
