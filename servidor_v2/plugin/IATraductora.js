@@ -1691,7 +1691,15 @@ function scanQuestParameters(done){
                 var entry=typeof value==="string"&&value.length<=65536?JSON.parse(value):value;
                 if(!entry||typeof entry!=="object"||Array.isArray(entry))continue;
                 questStats.records++;
-                ["Title","Type","Difficulty","Location","Description","Objectives List","Rewards List","Subtext"].forEach(function(k){
+                // Location is an identity field as well as a caption. Only
+                // generic place labels and recognizable generic phrases are
+                // translation candidates. A lone invented proper name stays.
+                if(typeof entry.Location==="string"){
+                    var loc=entry.Location.trim();
+                    if(/\b(?:castle|forest|village|town|city|courtyard|garden|road|market|river|mountain|cave|hall|library|temple|inn|shop|tower|bridge|dungeon|room|gate|field|farm|harbor|port)\b/i.test(loc)&&
+                       !Object.prototype.hasOwnProperty.call(questLabels,loc))questValues(entry.Location,0);
+                }
+                ["Title","Type","Difficulty","Description","Objectives List","Rewards List","Subtext"].forEach(function(k){
                     if(Object.prototype.hasOwnProperty.call(entry,k))questValues(entry[k],0);
                 });
             }catch(_){}

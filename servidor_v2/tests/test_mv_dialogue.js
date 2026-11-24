@@ -954,6 +954,7 @@ async function testR4P4FullQuestTemplateAndAccents(){
     const template="\\c[15]<WordWrap>\\{"+title+"\\}\n<br>From: Aldren Fox\n<br>Location: Castle\n<br>Description:\n<br>"+desc+"\n<br>Objectives:\n<br>"+objective+"\\c[0]";
     win.drawTextEx(template,0,0);
     assert.equal(win.lastTextEx,"\\c[15]<WordWrap>\\{Encuentra la llave perdida\\}\n<br>De: Aldren Fox\n<br>Ubicación: Castillo\n<br>Descripción:\n<br>La llave está escondida en el jardín.\n<br>Objetivos:\n<br>Busca en el jardín.\\c[0]");
+    win.drawTextEx("Location: Westbridge",0,0);assert.equal(win.lastTextEx,"Ubicación: Westbridge");
     win.drawTextEx("\\c[15]Available (4)",0,0);assert.equal(win.lastTextEx,"\\c[15]Disponibles (4)");
     win.drawTextEx("\\c[15]-Tutorial Quests (1)",0,0);assert.equal(win.lastTextEx,"\\c[15]-Misiones de tutorial (1)");
     const bitmap=new f.context.Bitmap(500,100);bitmap.fontFace="Handwritten";
