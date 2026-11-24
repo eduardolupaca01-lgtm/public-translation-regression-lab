@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R7-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R8-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -641,15 +641,43 @@ function languageFor(s){
     var visible=visibleProse(s);
     if(englishLabel(visible.trim())!==null)return "en";
     var prose=visible.replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
-        .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...").replace(/\u00a0/g," ");
+        .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...").replace(/\u00a0/g," ")
+        // Decorative symbols are not evidence of a non-English source.
+        // Keep the original glyph in the translation payload and on screen.
+        .replace(/[♡♥☆★♪♫♬]/g,"");
     if(/[áéíóúñ¿¡]/i.test(prose)||/[^\x09\x0a\x0d\x20-\x7e]/.test(prose))return null;
     var words=prose.match(/[A-Za-z']+/g)||[];
     if(words.length<2||prose.trim().length<5)return null;
-    if(/\b(?:the|you|your|are|have|this|that|with|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning|and|of|from|into|there|here|was|were|will|must|he|she|they|their|his|her|my|our|is|i|it|him|himself|herself|ourselves|themselves|says|said|keep|moving|writing|looking|always|typical|absurd|enough|stop|listen|leave|wait|come|get|go|back|ready|look|find|help|give|take|bring|open|close|follow)\b/i.test(prose))return "en";
+    if(/\b(?:the|you|your|are|have|this|that|with|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning|and|of|from|into|there|here|was|were|will|must|he|she|they|their|his|her|my|our|is|i|it|him|himself|herself|ourselves|themselves|says|said|keep|moving|writing|looking|always|typical|absurd|enough|stop|listen|leave|wait|come|get|go|back|ready|look|find|help|give|take|bring|open|close|follow|one|year|earlier|city|courthouse|courtroom|change|relationship|text|skip|speed|setting|romantic|idea|naughty|exposing|love|capped|never|mind|me|out|let|read|more|drink|compliment|ask|about|tell|yourself|before|head|door)\b/i.test(prose))return "en";
+    return null;
+}
+// Confirmed rendered surfaces may contain short UI labels that are not
+// sentence-like. Restrict one-word inference to a conservative UI vocabulary;
+// multiword labels use explicit English signals and never inspect script text.
+var displayUiWords=Object.create(null),displaySignalWords=Object.create(null);
+("accept back shop read help options save load continue exit quit cancel confirm yes no start next previous return retry resume pause menu settings close open buy sell talk interact select choose skip inventory equipment status profile journal quests quest map guide information details more less done finish apply reset default enabled disabled agree decline reject gift compliment").split(" ").forEach(function(w){displayUiWords[w]=true;});
+("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door").split(" ").forEach(function(w){displaySignalWords[w]=true;});
+function displaySource(text,context){
+    if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
+       tsvExcluded(text)||csvExecutableSyntax(text)||
+       /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
+    var source=languageFor(text);if(source)return source;
+    var prose=visibleProse(text).replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
+        .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...").replace(/\u00a0/g," ")
+        .replace(/[♡♥☆★♪♫♬]/g,"").trim();
+    if(!prose||/[áéíóúñ¿¡]/i.test(prose)||/[^\x09\x0a\x0d\x20-\x7e]/.test(prose)||
+       /^[A-Za-z0-9_./-]+\.(?:png|jpe?g|webp|gif|ogg|mp3|wav|js|json|csv|tsv|webm|mp4)$/i.test(prose))return null;
+    var words=prose.match(/[A-Za-z']+/g)||[];
+    if(!words.length||words.length>60)return null;
+    var normalized=words.map(function(w){return w.toLowerCase();});
+    if(words.length===1){
+        return context!=="message"&&displayUiWords[normalized[0]]?"en":null;
+    }
+    if(normalized.some(function(w){return !!displaySignalWords[w];}))return "en";
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
-var controlRE=/(?:\\|\x1b)[Tt][Ll]\{[^{}\r\n]{1,300}\}|\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!.,|^<>$])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<\/?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
+var controlRE=/(?:\\|\x1b)[Tt][Ll]\{[^{}\r\n]{1,300}\}|\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!.,|^<>$])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<(?!\/?[Ii][Ff]\s+[^<>]{1,80}\s+[Cc]apped>)[\/]?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|[<>]|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
 // Brackets at a segment's edges are presentation, not instructions for OPUS.
 // Preserve them byte-for-byte, including an opening/closing bracket on separate
 // native lines. Internal punctuation stays in the sentence for grammar.
@@ -1785,16 +1813,39 @@ function csvActorExpansion(text){
     });
     return good?out:null;
 }
+function rememberNameTemplate(source,text){
+    if((source!=="en"&&source!=="ja")||typeof text!=="string"||text.length>1800||actorNames[text])return;
+    var tokens=text.match(/\\n\[\d{1,5}\]/gi)||[];
+    if(tokens.length!==1)return;
+    var token=tokens[0],at=text.indexOf(token),prefix=text.slice(0,at);
+    if(prefix.length<8||/[\u0000\uFFFD]/.test(text))return;
+    var k=prefix.slice(0,8),list=csvNameTemplates.get(k)||[];
+    if(csvNameCount<12000&&list.length<24&&!list.some(function(v){return v.text===text;})){
+        var id=/\[(\d{1,5})\]/.exec(token);
+        list.push({source:source,text:text,id:id?Number(id[1]):0,prefix:prefix,suffix:text.slice(at+token.length)});
+        csvNameTemplates.set(k,list);csvNameCount++;
+    }
+}
 function csvNameReady(text){
     var list=csvNameTemplates.get(text.slice(0,8)),answer=null;
     if(!list)return null;
     for(var i=0;i<list.length;i++){
-        var t=list[i];
-        if(csvActorExpansion(t.text)!==text)continue;
+        var t=list[i],original=csvActorExpansion(t.text);
+        if(typeof original!=="string")continue;
         var result=readyText(t.source,t.text),expanded=result!==null?csvActorExpansion(result):null;
-        if(typeof expanded!=="string"||expanded===text)continue;
-        if(answer!==null&&answer!==expanded)return null;
-        answer=expanded;
+        if(typeof expanded!=="string"||expanded===original)continue;
+        var candidate=null;
+        if(original===text)candidate=expanded;
+        else if(original.indexOf("\n")>=0&&expanded.indexOf("\n")>=0){
+            var sourceLines=original.split(/\r?\n/),targetLines=expanded.split(/\r?\n/);
+            if(sourceLines.length===targetLines.length){
+                for(var j=0;j<sourceLines.length;j++)if(sourceLines[j]===text)candidate=targetLines[j];
+            }
+        }
+        if(candidate!==null){
+            if(answer!==null&&answer!==candidate)return null;
+            answer=candidate;
+        }
     }
     return answer;
 }
@@ -1854,9 +1905,9 @@ function csvProjectDisplay(text,choice,requestMissing){
         var named=csvNameReady(text);if(named!==null)return named;
     }
     var source=csvKnown.get(text);
-    // A verified choice surface may also carry a newly generated string.
-    // Never use this fallback for arbitrary text in other windows.
-    if(!source&&choice)source=languageFor(text);
+    // The same conservative classifier serves native choices and custom
+    // rendered surfaces; single-word labels are accepted only in UI context.
+    if(!source)source=displaySource(text,choice?"choice":"surface");
     if(source&&csvCandidate(text,source,true)){
         var ready=readyText(source,text);
         if(typeof ready==="string"&&validTranslation(source,text,ready,true))return ready;
@@ -1885,6 +1936,41 @@ function csvPlainLabel(text){
        (typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name))
         return null;
     return csvProjectDisplay(text,false,true);
+}
+function scheduleNativeDisplayRefresh(owner,bitmap){
+    if(!owner||owner._iaDisplayRefreshPending||owner._iaOwnSurface||owner._iaNameSurface||
+       typeof owner.refresh!=="function")return;
+    owner._iaDisplayRefreshPending=true;
+    var finish=function(){
+        owner._iaDisplayRefreshPending=false;
+        if(owner.contents!==bitmap||owner.visible===false||owner.openness===0||
+           typeof owner.refresh!=="function")return;
+        try{owner.refresh();}catch(_){state.errors++;}
+    };
+    if(typeof setTimeout==="function")setTimeout(finish,0);else finish();
+}
+function nativeDisplayProjection(text,context,bitmap){
+    if(inputFormActive()||identityDrawDepth||typeof text!=="string"||!text.trim()||
+       text.length>1800||actorNames[text]||csvExecutableSyntax(text)||
+       /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
+    var localized=tsvProject(text,true);if(localized!==null)return localized;
+    if(tsvExcluded(text))return null;
+    var named=csvNameReady(text);if(named!==null)return named;
+    var known=csvKnownReady(text);if(known!==null)return known;
+    var source=displaySource(text,context||"surface");if(!source)return null;
+    var ready=readyText(source,text);
+    if(typeof ready==="string"&&ready!==text&&validTranslation(source,text,ready,true))return ready;
+    var owner=bitmap&&bitmap._iaOwnerWindow,key=source+"\u0000"+text;
+    if(owner&&typeof owner.refresh==="function"){
+        if(bitmap._iaPendingDisplayKey!==key){
+            bitmap._iaPendingDisplayKey=key;
+            Promise.resolve(requestVisible(source,text)).then(function(result){
+                if(bitmap._iaPendingDisplayKey===key)bitmap._iaPendingDisplayKey=null;
+                if(typeof result==="string"&&result!==text)scheduleNativeDisplayRefresh(owner,bitmap);
+            },function(){if(bitmap._iaPendingDisplayKey===key)bitmap._iaPendingDisplayKey=null;state.errors++;});
+        }
+    }else firstViewRequest(source,text);
+    return null;
 }
 // Engine-specific presentation adapter. Keep the neural/cache/scheduler core shared.
 function ownWindowArgs(x,y,w,h){return isMZ?[new Rectangle(x,y,w,h)]:[x,y,w,h];}
@@ -1949,6 +2035,17 @@ function hookMZPresentation(){
 }
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
+        function bindDisplayOwner(win){
+            try{if(win&&win.contents&&typeof win.contents==="object")win.contents._iaOwnerWindow=win;}catch(_){}
+        }
+        var baseInitialize=Window_Base.prototype.initialize;
+        if(typeof baseInitialize==="function")Window_Base.prototype.initialize=function(){
+            var out=baseInitialize.apply(this,arguments);bindDisplayOwner(this);return out;
+        };
+        var baseCreateContents=Window_Base.prototype.createContents;
+        if(typeof baseCreateContents==="function")Window_Base.prototype.createContents=function(){
+            var out=baseCreateContents.apply(this,arguments);bindDisplayOwner(this);return out;
+        };
         hookSurfaceConversion(Window_Base.prototype,false);
         ["drawText","drawTextEx"].forEach(function(method){
             var original=Window_Base.prototype[method];
@@ -1966,6 +2063,7 @@ function hookNativeSurface(){
                         else if(!identity&&isAmbientSurface(this,args[0]))args[0]=projectCaption(args[0]);
                         else {var bookLabel=!identity?questCachedLabel(args[0]):null;
                             if(bookLabel===null&&csvWindowEligible(this))bookLabel=csvProjectDisplay(args[0],csvWindowChoice(this),true);
+                            if(bookLabel===null&&!identity)bookLabel=nativeDisplayProjection(args[0],csvWindowChoice(this)?"choice":"surface",this.contents);
                             args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
                         if(!identity&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
@@ -2015,9 +2113,10 @@ function hookNativeSurface(){
             if(inputFormActive())return bitmapDraw.apply(this,arguments);
             var args=Array.prototype.slice.call(arguments);
             try{
-                if(!identityDrawDepth&&typeof args[0]==="string"&&args[0].length>=2)
+                if(!identityDrawDepth&&typeof args[0]==="string"&&args[0].length>=1)
                     {var label=questCachedLabel(args[0]);
                      if(label===null)label=csvPlainLabel(args[0]);
+                     if(label===null)label=nativeDisplayProjection(args[0],"surface",this);
                      args[0]=label!==null?label:translatedNativeLabel(args[0],false);}
             }catch(_){state.errors++;}
             var bitmap=this;return withQuestGlyphs(bitmap,args[0],function(){return bitmapDraw.apply(bitmap,args);});
@@ -2026,7 +2125,10 @@ function hookNativeSurface(){
         if(typeof measure==="function")Bitmap.prototype.measureTextWidth=function(text){
             if(inputFormActive())return measure.apply(this,arguments);
             var bitmap=this,args=Array.prototype.slice.call(arguments),label=null;
-            try{label=csvPlainLabel(text);}catch(_){}
+            try{
+                label=csvPlainLabel(text);
+                if(label===null)label=nativeDisplayProjection(text,"surface",bitmap);
+            }catch(_){}
             if(label!==null)args[0]=label;
             return withQuestGlyphs(bitmap,args[0],function(){return measure.apply(bitmap,args);});
         };
@@ -2240,7 +2342,7 @@ function choiceDisplay(win,raw,requestMissing){
     var projected=csvProjectDisplay(raw,true,requestMissing);
     if(projected!==null)return projected;
     if(tsvExcluded(raw))return null;
-    var source=languageFor(raw);if(!source)return null;
+    var source=displaySource(raw,"choice");if(!source)return null;
     var value=readyText(source,raw);
     if(value!==null)return value;
     if(requestMissing)firstViewRequest(source,raw);
@@ -2278,7 +2380,7 @@ function firstViewMissing(win,raw,choice){
             raw=value;
         }
     }
-    var source=languageFor(raw);if(!source)return false;
+    var source=displaySource(raw,choice?"choice":"message");if(!source)return false;
     if(readyText(source,raw)!==null||(tableStats.root&&csvKnownReady(raw)!==null))return false;
     if(rejectedKeys.get(source+"\u0000"+raw)===Infinity)return false;
     firstViewRequest(source,raw);return true;
@@ -2780,7 +2882,7 @@ function hookChoices(){
         try{
             for(var i=0;i<choices.length;i++){
                 if(tsvRef(choices[i])){tsvPrioritize(choices[i],true);continue;}
-                var source=languageFor(choices[i]);
+                var source=displaySource(choices[i],"choice");
                 if(!source)continue;
                 addPrefetch(choices[i],true,source);
                 var cached=readyText(source,choices[i]);
@@ -3595,16 +3697,8 @@ function csvMark(source,text){
             return a.source===b.source&&csvRenderKey(a.text)===csvRenderKey(b.text);
         });
     }
-    // Profile renderers sometimes resolve one actor-name token before
-    // handing a line to Bitmap. Index by a literal prefix, not by name.
-    var m=/^([^\\\x1b\r\n]{8,})\\n\[(\d{1,5})\]([^\\\x1b\r\n]*)$/i.exec(text);
-    if(m&&csvNameCount<12000){
-        var k=m[1].slice(0,8),list=csvNameTemplates.get(k)||[];
-        if(list.length<24&&!list.some(function(v){return v.text===text;})){
-            list.push({source:source,text:text,id:Number(m[2]),prefix:m[1],suffix:m[3]});
-            csvNameTemplates.set(k,list);csvNameCount++;
-        }
-    }
+    // Index any authored database/script template, including multiline profiles.
+    rememberNameTemplate(source,text);
 }
 function csvSetUnique(map,key,value,equals){
     if(map.has(key)){
@@ -3986,8 +4080,10 @@ function addPrefetch(text,priority,trustedLang){
     if(tsvRef(text)){if(priority)tsvPrioritize(text);return;}
     if(tsvExcluded(text))return;
     learnReadings(text);
-    var source=authoredDisplay.get(text)||languageFor(text)||(trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
+    var source=authoredDisplay.get(text)||languageFor(text)||displaySource(text,"inventory")||
+        (trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
     if(!source)return;
+    rememberNameTemplate(source,text);
     var key=source+"\u0000"+text,item=discovered.get(key);
     if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
     if(item){

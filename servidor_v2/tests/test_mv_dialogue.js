@@ -2064,7 +2064,101 @@ async function testR7VerifiedVariableSurfaces(){
     assert.ok(!f.posts.some(v=>/Peter|12345|doNotExecute|UnverifiedPlayerLabel|\\v\[/.test(v.text)));
 }
 
+
+async function testR8GeneralDisplaySurfaces(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),dir=path.join(root,"data");
+    const profile="Sophia is my \\N[7], a woman of breathtaking beauty and elegance.\nShe has always been incredibly kind, She holds herself to an impossibly high standard, always perfectly composed.";
+    const ben="Ben is the steady one in Sophia's life. He's caring, playful, and a little too proud of how good his Sophia looks. Sometimes he pushes the fun further than he realizes. He trusts Sophia completely. Whether that trust is a safety net or a blind spot depends on her choices.";
+    const floating="Shopia: Okay, okay! Stop before my head gets too big to fit through the door♡\\pop[-1]";
+    const choices=["Accept \\b[2]","Let me Out!! \\b[4]","Shop","Read Me","Change Relationship",
+        "Text Skip Speed setting","Romantic Idea <If Love Capped> \\b[2]"];
+    const command=(code,...parameters)=>({code,parameters});
+    const system={locale:"en_US",startMapId:1,variables:[]};
+    const actors=[null,{id:1,name:"Sophia",profile:profile},{id:2,name:"Ben",profile:ben}];
+    const list=[command(102,choices),command(401,"One year earlier."),
+        command(401,"City Courthouse, Courtroom 4."),command(401,floating)];
+    const map={events:[null,{id:1,name:"Test",pages:[{list:list}]}]};
+    const common=[null,{id:1,name:"Menu",list:list}];
+    const fsState={files:{
+        [path.join(dir,"System.json")]:JSON.stringify(system),
+        [path.join(dir,"Actors.json")]:JSON.stringify(actors),
+        [path.join(dir,"CommonEvents.json")]:JSON.stringify(common),
+        [path.join(dir,"Map001.json")]:JSON.stringify(map)
+    },dirs:{[dir]:true}};
+    const responses={
+        "Accept ":"Aceptar ","Let me Out!! ":"¡Déjame salir! ","Shop":"Tienda","Read Me":"Leerme",
+        "Change Relationship":"Cambiar relación","Text Skip Speed setting":"Ajuste de velocidad de omisión de texto",
+        "Romantic Idea ":"Idea romántica ","If Love Capped":"Si el amor está al máximo",
+        "One year earlier.":"Un año antes.",
+        "City Courthouse, Courtroom 4.":"Palacio de justicia de la ciudad, sala 4.",
+        "Shopia: Okay, okay! Stop before my head gets too big to fit through the door♡":
+            "Shopia: Está bien, está bien. No sigas o mi cabeza no pasará por la puerta♡",
+        "Sophia is my ":"Sophia es mi ",
+        ", a woman of breathtaking beauty and elegance.":", una mujer de belleza y elegancia impresionantes.",
+        "She has always been incredibly kind, She holds herself to an impossibly high standard, always perfectly composed.":
+            "Siempre ha sido increíblemente amable y mantiene un estándar extraordinariamente alto, siempre perfectamente serena.",
+        [ben]:"Ben es la persona estable en la vida de Sophia. Es cariñoso, juguetón y está un poco demasiado orgulloso de lo bien que se ve Sophia. A veces lleva las bromas más lejos de lo que imagina. Confía completamente en Sophia. Si esa confianza es una red de seguridad o un punto ciego depende de sus decisiones.",
+        "Profile":"Perfil"
+    };
+    const f=fixture(1,{mz:true,fsState,batch:true,responses,configure(c){
+        c.$dataSystem=system;c.$dataActors=actors;c.$dataCommonEvents=common;
+        c.$gameActors={actor:id=>({name:()=>id===7?"Stepmom":(actors[id]&&actors[id].name)||"Actor"})};
+        const base=c.Window_Base.prototype;
+        base.createContents=function(){this.contents=new c.Bitmap(900,400);};
+        base.refresh=function(){this.refreshes=(this.refreshes||0)+1;if(this._iaRefreshText)this.drawText(this._iaRefreshText,0,0,700,"left");};
+        function ChoiceList(items){
+            this._list=items.map(name=>({name:name,ext:0,symbol:"choice",enabled:true}));
+            this.active=true;this.openness=255;this.painted=[];
+        }
+        ChoiceList.prototype.drawItem=function(i){this.painted[i]=this._list[i].name;};
+        ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
+        ChoiceList.prototype.update=function(){};
+        ChoiceList.prototype.itemRectForText=function(){return {width:900};};
+        ChoiceList.prototype.textSizeEx=function(t){return {width:String(t).length*8};};
+        c.Window_ChoiceList=ChoiceList;
+    }});
+    const c=f.context;
+    const until=async pred=>{const end=Date.now()+7000;while(!pred()&&Date.now()<end)await wait(25);assert.ok(pred(),"R8 display translation did not become ready");};
+    await wait(40);
+    await until(()=>["Shop","Read Me","Change Relationship","Text Skip Speed setting",
+        "One year earlier.","City Courthouse, Courtroom 4.","Shopia: Okay, okay! Stop before my head gets too big to fit through the door♡"]
+        .every(s=>f.posts.some(p=>p.text===s)));
+    const messageBody=floating.replace("\\pop[-1]","");
+    assert.ok(f.posts.some(p=>p.text===messageBody),"heart punctuation must not suppress English detection");
+    assert.ok(!f.posts.some(p=>p.text.indexOf("\\pop[-1]")>=0),"popup positioning control must never reach the model");
+
+    f.$gameMessage.setChoices(choices);
+    const choice=new c.Window_ChoiceList(choices);
+    choices.forEach((_,i)=>choice.drawItem(i));
+    assert.equal(choice.painted[0],"Aceptar \\b[2]");
+    assert.equal(choice.painted[1],"¡Déjame salir! \\b[4]");
+    assert.equal(choice.painted[2],"Tienda");
+    assert.equal(choice.painted[3],"Leerme");
+    assert.equal(choice.painted[4],"Cambiar relación");
+    assert.equal(choice.painted[5],"Ajuste de velocidad de omisión de texto");
+    assert.equal(choice.painted[6],"Idea romántica <Si el amor está al máximo> \\b[2]");
+    assert.equal(choice._list[0].name,choices[0],"choice source and branch index must remain untouched");
+    assert.equal(choice._list[6].name,choices[6],"conditional tag source must remain untouched");
+
+    const profileExpanded=profile.replace("\\N[7]","Stepmom");
+    const profileBitmap=new c.Bitmap(900,400);
+    await until(()=>{profileBitmap.drawText(profileExpanded,0,0,900,400);return profileBitmap.lastText.indexOf("Sophia es mi Stepmom")===0;});
+    const benBitmap=new c.Bitmap(900,400);
+    await until(()=>{benBitmap.drawText(ben,0,0,900,400);return benBitmap.lastText.indexOf("Ben es la persona estable")===0;});
+
+    const owner=new c.Window_Base();owner.initialize(0,0,500,100);owner.createContents();
+    owner._iaRefreshText="Profile";owner.refresh();
+    await until(()=>owner.refreshes>=2&&owner.lastText==="Perfil");
+
+    const mv=fixture(1,{responses:{"Shop":"Tienda"}});
+    await wait(30);
+    const mvBitmap=new mv.context.Bitmap(200,40);
+    mvBitmap.drawText("Shop",0,0,200,40);
+    await until(()=>{mvBitmap.drawText("Shop",0,0,200,40);return mvBitmap.lastText==="Tienda";});
+}
+
 (async()=>{
+    await testR8GeneralDisplaySurfaces();
     await testR7AuthoredScriptAndPicture();
     await testR7VerifiedVariableSurfaces();
     await testR6FirstViewNativeGate(false);
