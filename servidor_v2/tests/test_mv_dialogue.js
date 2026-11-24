@@ -1752,7 +1752,76 @@ async function testR4NativeTsvMixedControlsAndCoverage(mz){
     assert.ok(!f.posts.some(v=>/\\tl\{|R400[1-4]/.test(v.text)));
 }
 
+
+async function testR5DynamicNamesAndAuthoredRepetition(mz){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const one="\\c[1](Please wait here. \\v[21], I'm sorry...)";
+    const two="\\c[1](Judging by \\v[23]'s expression, something happened...)";
+    const three="Hahahaha! \\.What a lovely day! \\.What a lovely day!";
+    const rows=[["Key","English","Chinese(Simplified)","Chinese(Traditional)","Japanese"],
+        ["R5001","Guide","指南","導覽","ガイド"],
+        ["R5002",one,"等一下。","等一下。","待ってください。"],
+        ["R5003",two,"看表情。","看表情。","表情を見ると。"],
+        ["R5004",three,"好天气！","好天氣！","いい天気！"],
+        ["R5005","Please check the window.","查窗","查看窗戶","窓を調べてください。"]];
+    const raw=rows.map(r=>r.join("\t")).join("\n")+"\n";
+    state.files[path.join(data,"Languages.tsv")]=raw;
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");state.dirs[folder]=true;
+    const translations={"Please wait here.":"Espera aquí.",", I'm sorry...":"Lo siento...","Judging by":"A juzgar por",
+        "the expression":"La expresión","something happened...":"Algo pasó...",
+        "Hahahaha!":"¡Jajaja!","What a lovely day!":"¡Qué día maravilloso!","Please check the window.":"Revisa la ventana."};
+    state.files[journal]=Object.entries(translations).map(([original,translated])=>JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original,translated,composed:false})).join("\n")+"\n";
+    const values={21:"Alex",23:"小林"};let writes=0;
+    const f=fixture(15,{mz,fsState:state,cacheReadDelay:70,batch:true,nativePaint:true,nativeWidth:1000,
+        plugins:[{name:"VisuMZ_1_MessageCore",status:true,parameters:{"Localization:struct":JSON.stringify({"Enable:eval":"true","LangFiletype:str":"tsv","TsvFilename:str":"Languages.tsv"})}}],
+        responses:translations,configure(c){
+            c.$gameVariables={value(i){return values[i]},setValue(){writes++;throw Error("unexpected write")}};
+            const expand=t=>t.replace(/(?:\\|\x1b)tl\{([^}]+)\}/gi,(token,k)=>{const r=rows.find(r=>r[0]===k);return r?r[1]:token})
+                .replace(/(?:\\|\x1b)v\[(\d+)\]/gi,(_,i)=>values[i]).replace(/\\c\[/gi,"\x1bC[").replace(/\\\./g,"\x1b.");
+            c.Window_Base.prototype.convertEscapeCharacters=expand;c.Window_Message.prototype.convertEscapeCharacters=expand;
+            const base=c.Window_Message.prototype.startMessage;
+            c.Window_Message.prototype.startMessage=function(){
+                this.nativeInput=c.$gameMessage.allText();base.apply(this,arguments);
+                this._textState.text=expand(this.nativeInput);
+            };
+        }});
+    const c=f.context,title=new c.Scene_Title();c.SceneManager._scene=title;title.start();title.commandNewGame();
+    assert.equal(title.launches,1);
+    const map=new c.Scene_Map();c.SceneManager._scene=map;map.createAllWindows();map.update();
+    const key=id=>"\\tl{R500"+id+"}";
+    f.$gameMessage._texts=[key(2)];const first=new c.Window_Message();first.startMessage();first.finishPage();
+    const limit=Date.now()+6000;
+    while(Date.now()<limit&&!first.contents.ops.some(x=>x.text.includes("Espera"))){await wait(35);first.update();}
+    assert.ok(first.contents.ops.some(x=>x.text.includes("Espera")),"late colored template must match expanded variable");
+    assert.ok(first.contents.ops.some(x=>x.text.includes("Alex")),"runtime name stays visible");
+    assert.equal(first.originalStarts,1);assert.equal(f.$gameMessage.allText(),key(2));
+    async function replay(id,expected){
+        f.$gameMessage._texts=[key(id)];
+        let w;
+        while(Date.now()<limit){
+            w=new c.Window_Message();w.startMessage();
+            if(w.nativeInput===expected)return w;
+            await wait(35);
+        }
+        assert.equal(w.nativeInput,expected,"template not reconstructed "+id);
+    }
+    const oneExpected="\\c[1](Espera aquí. \\v[21], Lo siento...)";
+    await replay(2,oneExpected);
+    values[21]="Taylor";const changed=await replay(2,oneExpected);
+    assert.ok(changed._textState.text.includes("Taylor"));assert.ok(!changed._textState.text.includes("Alex"));
+    const p=await replay(3,"\\c[1](A juzgar por la expresión de \\v[23], Algo pasó...)");
+    assert.ok(p._textState.text.includes("小林"));
+    await replay(4,"¡Jajaja! \\.¡Qué día maravilloso! \\.¡Qué día maravilloso!");
+    assert.equal(writes,0);assert.equal(state.files[path.join(data,"Languages.tsv")],raw);
+    assert.ok(!f.posts.some(v=>/\\tl\{|\\v\[|Taylor|小林/.test(v.text)));
+}
+
 (async()=>{
+    await testR5DynamicNamesAndAuthoredRepetition(false);
+    await testR5DynamicNamesAndAuthoredRepetition(true);
     await testR4NativeTsvMixedControlsAndCoverage(false);
     await testR4NativeTsvMixedControlsAndCoverage(true);
     await testR3TsvStartWithoutWaitingAndWrappedComposite(false);
