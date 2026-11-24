@@ -1,0 +1,1752 @@
+"use strict";
+// Real MV plugin loaded as written, against mock NW.js and custom-window APIs.
+// No game saves, neural weight downloads, network access or GUI processes.
+const assert=require("node:assert/strict");
+const fs=require("node:fs");
+const path=require("node:path");
+const vm=require("node:vm");
+const EventEmitter=require("node:events");
+const crypto=require("node:crypto");
+
+function fixture(translationDelay=0,options={}){
+    const posts=[],batches=[],state=options.fsState||{files:{},dirs:{}};
+    const read=state.files,dirs=state.dirs;
+    const source=fs.readFileSync(
+        path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
+    const root=path.join("/tmp","servidor-qa-juego-日本語");
+    const descriptor=path.join(root,"www","data","IATraductora","bridge.json");
+    const core=path.join(root,"www","js","rpg_core.js");
+    read[core]="// mock rpg core";
+    read[path.join(root,"www","js","plugins.js")]="var $plugins = [];";
+    read[descriptor]=JSON.stringify({schema:"ia-traductora-bridge-v1",
+        port:24123,pid:123,token:"a".repeat(64)});
+    const mockFS={
+        realpathSync(p){return path.normalize(p);},
+        lstatSync(p){
+            if(dirs[p])return {isDirectory:()=>true,isFile:()=>false,
+                isSymbolicLink:()=>false,size:0};
+            if(!Object.prototype.hasOwnProperty.call(read,p)){
+                const e=Error("not found");e.code="ENOENT";throw e;
+            }
+            return {isDirectory:()=>false,isFile:()=>true,
+                isSymbolicLink:()=>false,size:Buffer.byteLength(read[p],"utf8")};
+        },
+        readFileSync(p){if(!(p in read))throw Error("missing");return read[p];},
+        readdir(p,callback){
+            setTimeout(()=>callback(null,Array.from(new Set(Object.keys(read).concat(Object.keys(dirs)).filter(k=>path.dirname(k)===p)
+                .map(k=>path.basename(k))))),0);
+        },
+        readFile(p,encoding,callback){
+            setTimeout(()=>{
+                if(!(p in read)){
+                    const e=Error("not found");e.code="ENOENT";
+                    callback(e);return;
+                }
+                callback(null,read[p]);
+            },p.endsWith(".jsonl")?(options.cacheReadDelay||0):0);
+        },
+        appendFile(p,value,opts,callback){
+            setTimeout(()=>{
+                if(options.appendFailures>0){options.appendFailures--;callback(Error("temporary disk error"));return;}
+                read[p]=(read[p]||"")+String(value);callback(null);
+            },1);
+        },
+        mkdir(p,mode,callback){
+            setTimeout(()=>{dirs[p]=true;callback(null);},0);
+        },
+        mkdirSync(){throw Error("a second process should not be needed")},
+        createReadStream(){throw Error("worker must not spawn")},
+    };
+    let spawnCount=0;
+    const fakeHTTP={
+        request(requestOptions,callback){
+            const request=new EventEmitter();
+            request.setTimeout=()=>{};
+            request.destroy=e=>request.emit("error",e);
+            request.end=body=>{
+                if(options.disconnected){
+                    setTimeout(()=>request.emit("error",Error("IA connection unavailable")),0);
+                    return;
+                }
+                let result;
+                if(requestOptions.path==="/status"){
+                    result={schema:"ia-traductora-bridge-v1",active:true,batch:!!options.batch};
+                }else{
+                    const payload=JSON.parse(body.toString());
+                    if(requestOptions.path==="/translate_batch"){
+                        batches.push(payload.texts.length);
+                        result={results:payload.texts.map(text=>responseFor({source:payload.source,text}))};
+                    }else result=responseFor(payload);
+                }
+                const response=new EventEmitter();
+                response.statusCode=options.qualityReject&&requestOptions.path!=="/status"?422:200;
+                response.resume=()=>{};
+                setTimeout(()=>{
+                    callback(response);
+                    response.emit("data",Buffer.from(JSON.stringify(result)));
+                    response.emit("end");
+                },requestOptions.path==="/status"?0:translationDelay);
+            };
+            return request;
+        }
+    };
+    function responseFor(body){
+        posts.push(body);
+        if(options.responses&&Object.prototype.hasOwnProperty.call(options.responses,body.text))
+            return {translated:options.responses[body.text]};
+        if(options.namedResponse&&body.text.indexOf("Natsumi")>=0)
+            return {translated:"Natsumi vive al lado."};
+        return {translated:body.source==="ja"?"Buenos días.":"Hello"===body.text?"Hola.":"Buenos días."};
+    }
+    function Window_Base(){}
+    Window_Base.prototype.initialize=function(x,y,w,h){
+        this.x=x;this.y=y;this.width=w;this.height=h;
+        this.contents={fontSize:12,outlineWidth:1,clear(){}};
+    };
+    Window_Base.prototype.contentsWidth=function(){return this.width-20};
+    Window_Base.prototype.hide=function(){this.visible=false;};
+    Window_Base.prototype.show=function(){this.visible=true;};
+    Window_Base.prototype.drawTextEx=function(t,x,y){
+        this.lastTextEx=t;
+        if(this._testAmbientPaint&&this.contents)this.contents.drawText(t,x,y,this.contents.width-x,32);
+        return String(t).length;
+    };
+    Window_Base.prototype.drawText=function(t,x,y){
+        this.lastText=t;
+        if(!this.drawn)this.drawn=[];
+        this.drawn.push({text:t,y:y});
+    };
+    function Bitmap(w,h){
+        this.width=w||0;this.height=h||0;this.fontFace="GameFont";this.fontSize=24;
+        this.textColor="#ffffff";this.outlineWidth=2;this.paintOpacity=255;this.ops=[];
+    }
+    Bitmap.prototype.measureTextWidth=function(t){this.measuredFont=this.fontFace;return String(t).length*12;};
+    Bitmap.prototype.drawText=function(t,x,y,w,h){
+        this.lastText=String(t);this.ops.push({text:String(t),x:x||0,y:y||0,w:w||0,h:h||0,color:this.textColor,font:this.fontFace});return t;
+    };
+    Bitmap.prototype.clearRect=function(x,y,w,h){
+        this.ops=this.ops.filter(v=>v.x<x||v.y<y||v.x>=x+w||v.y>=y+h);
+        this.clears=(this.clears||0)+1;
+    };
+    Bitmap.prototype.blt=function(src,sx,sy,sw,sh,dx,dy){
+        const copied=src.ops.filter(v=>v.x>=sx&&v.y>=sy&&v.x<sx+sw&&v.y<sy+sh)
+            .map(v=>Object.assign({},v,{x:v.x-sx+dx,y:v.y-sy+dy}));
+        this.ops=this.ops.concat(copied);
+    };
+    function Scene_Name(){}
+    function Scene_Title(){
+        this.starts=0;this.launches=0;this.frames=0;this.windows=[];
+        this._commandWindow={activate:()=>{this.titleActive=true;}};
+    }
+    Scene_Title.prototype.start=function(){this.starts++;};
+    Scene_Title.prototype.commandNewGame=function(){this.launches++;};
+    Scene_Title.prototype.update=function(){this.frames++;};
+    Scene_Title.prototype.addWindow=function(win){this.windows.push(win);};
+    Scene_Title.prototype.commandContinue=function(){this.continued=true;};
+    function Window_Message(){this.originalStarts=0;this.updates=0}
+    Window_Message.prototype.createSubWindows=function(){
+        const name=new Window_Base();name.initialize(0,0,300,90);
+        name.setText=function(t){this.assigned=t;this.drawText(t,0,0,300);};
+        this._nameWindow=name;
+    };
+    Window_Message.prototype.startMessage=function(){
+        this.originalStarts++;
+        if(options.nativePaint){
+            this.pause=false;this._textState={text:$gameMessage.allText()
+                .replace(/<\/?wordwrap>/gi,"").replace(/\\n[cr]?<[^>]+>/gi,"")
+                .replace(/\\m\[things\]/gi,"\x1bC[11]")
+                .replace(/\\m\[quests\]/gi,"\x1bC[23]")
+                .replace(/\\c\[/gi,"\x1bC[").replace(/\\i\[/gi,"\x1bI["),index:0,x:168,left:168,y:0,height:32};
+            this.contents=new Bitmap(options.nativeWidth||900,options.nativeHeight||128);
+            this.contents.drawText("FACE",0,0,144,128);
+            this.newPage(this._textState);
+        }
+    };
+    if(options.nativePaint){
+        Window_Message.prototype.textColor=function(i){return "color-"+i;};
+        Window_Message.prototype.newPage=function(){this.pages=(this.pages||0)+1;};
+        Window_Message.prototype.finishPage=function(){
+            this.contents.drawText(this._textState.text,168,0,720,32);
+            this._textState=null;this.pause=true;
+        };
+        Window_Message.prototype.isAnySubWindowActive=function(){return !!this.choiceActive;};
+    }
+    Window_Message.prototype.update=function(){this.updates++};
+    Window_Message.prototype.terminateMessage=function(){this.terminated=(this.terminated||0)+1;};
+    if(options.nativeWait){
+        Window_Message.prototype.startWait=function(n){this._waitCount=n;};
+        Window_Message.prototype.updateWait=function(){
+            if(this._waitCount>0){this._waitCount--;return true;}
+            return false;
+        };
+    }
+    function Scene_Map(){this.windows=[]}
+    Scene_Map.prototype.createAllWindows=function(){};
+    Scene_Map.prototype.update=function(){};
+    Scene_Map.prototype.addWindow=function(win){this.windows.push(win)};
+    function Game_Message(){this._texts=[];this._choices=[];}
+    Game_Message.prototype.hasText=function(){return this._texts.length>0;};
+    Game_Message.prototype.allText=function(){return this._texts.join("\n");};
+    Game_Message.prototype.add=function(text){this._texts.push(text);};
+    Game_Message.prototype.setChoices=function(choices){
+        this._choices=choices.slice();
+    };
+    const $gameMessage=new Game_Message();
+    function LegacyPromise(executor){
+        const p=new Promise(executor);
+        p.finally=undefined; // simulate NW.js before Promise.finally
+        return p;
+    }
+    LegacyPromise.resolve=Promise.resolve.bind(Promise);
+    LegacyPromise.all=Promise.all.bind(Promise);
+    function LegacyBuffer(value,encoding){return Buffer.from(value,encoding);}
+    LegacyBuffer.prototype=Buffer.prototype;
+    LegacyBuffer.from=undefined;LegacyBuffer.byteLength=Buffer.byteLength;
+    function LegacyNumber(value){return Number(value);}
+    LegacyNumber.prototype=Number.prototype;
+    LegacyNumber.isInteger=undefined;
+    const iconAtlas=new Bitmap(512,512);
+    iconAtlas.ops.push({text:"ICON17",x:32,y:32,w:32,h:32,color:"icon"});
+    iconAtlas.isReady=()=>true;
+    const context={
+        ImageManager:{loadSystem(name){assert.equal(name,"IconSet");return iconAtlas;}},
+        window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
+        document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
+        Utils:{isNwjs:()=>true},
+        require(name){
+            switch(name){
+                case "fs":return mockFS;
+                case "path":return path;
+                case "crypto":return crypto;
+                case "http":return fakeHTTP;
+                case "child_process":
+                    return {spawn(){spawnCount++;throw Error("unexpected worker spawn")}};
+                default:throw Error("unexpected dependency "+name);
+            }
+        },
+        Buffer:options.legacyBuffer?LegacyBuffer:Buffer,
+        Promise:options.legacyPromise?LegacyPromise:Promise,process,Date,Map,
+        Number:options.legacyBuffer?LegacyNumber:Number,Error,
+        setTimeout(fn,delay){const timer=setTimeout(fn,delay);timer.unref();return timer;},
+        clearTimeout,setInterval(){return 1},
+        Window_Base,Window_Message,Scene_Map,Game_Message,Bitmap,Scene_Name,Scene_Title,
+        Graphics:{boxWidth:1280},
+        Input:{keyMapper:{},isTriggered(){return false}},
+        SceneManager:{_scene:null},
+        $gameMessage,$plugins:options.plugins||[]
+    };
+    if(options.configure)options.configure(context);
+    vm.runInNewContext(source,context,{filename:"IATraductora.js"});
+    return {context,posts,batches,$gameMessage,spawnCount:()=>spawnCount};
+}
+const wait=t=>new Promise(resolve=>setTimeout(resolve,t));
+
+async function testPersistentCacheAfterRestartWithoutWorker(){
+    const shared={files:{},dirs:{}};
+    const first=fixture(1,{fsState:shared});
+    await wait(35);
+    first.$gameMessage._texts=["おはようございます。"];
+    new first.context.Window_Message().startMessage();
+    await wait(45);
+    const filename=Object.keys(shared.files).find(v=>v.endsWith("translations-ja-en-es-v2.jsonl"));
+    assert.ok(filename,"asynchronous cache journal must be created");
+    assert.ok(shared.files[filename].includes("Buenos días."),
+        "model result must reach durable cache");
+    const second=fixture(1,{fsState:shared,disconnected:true});
+    await wait(35);
+    second.$gameMessage._texts=["おはようございます。"];
+    const replay=new second.context.Window_Message();replay.startMessage();
+    assert.equal(replay.originalStarts,1);
+    assert.equal(second.$gameMessage.allText(),"Buenos días.",
+        "reopened game must display stored Spanish even while worker offline");
+    assert.equal(second.posts.length,0,
+        "already cached line cannot trigger inference again");
+}
+async function testRejectDamagedOutputBeforeDiskOrRender(){
+    const state={files:{},dirs:{}};
+    const f=fixture(1,{fsState:state});
+    await wait(30);
+    f.$gameMessage._texts=["今日は08月24日です。"];
+    new f.context.Window_Message().startMessage();
+    await wait(30);
+    f.$gameMessage._texts=["今日は08月24日です。"];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"今日は08月24日です。",
+        "missing dates must not be accepted just because response is Spanish");
+}
+async function testFullNativeMenusAndNameOnlyText(){
+    const f=fixture(1);await wait(24);
+    const w=new f.context.Window_Base();
+    w.initialize(0,0,500,100);
+    w.drawText("持ち物",0,0,160,"left");
+    assert.equal(w.lastText,"Objetos");
+    w.drawText("オプション",0,0,160,"left");
+    assert.equal(w.lastText,"Opciones");
+    w.drawTextEx("大事なもの",0,0);
+    assert.equal(w.lastTextEx,"Objetos importantes");
+    const bitmap=new f.context.Bitmap();
+    bitmap.drawText("夏実",0,0,100,30);
+    assert.equal(bitmap.lastText,"Natsumi",
+        "approved exact name label may render in native bitmap");
+    bitmap.drawText("保林 隼人",0,0,160,30);
+    assert.equal(bitmap.lastText,"Hobayashi Hayato",
+        "pilot nameplate should display a consistent Latin reading");
+    bitmap.drawText("08月 24日 (金)",0,0,180,30);
+    assert.equal(bitmap.lastText,"24/08 (vie.)");
+    bitmap.drawText("午前07時00分",0,0,180,30);
+    assert.equal(bitmap.lastText,"07:00 a. m.");
+    w.drawText("タスク手帳",0,0,160,"left");
+    assert.equal(w.lastText,"Agenda de tareas");
+    f.context.SceneManager._scene=new f.context.Scene_Name();
+    bitmap.drawText("夏実",0,0,100,30);
+    assert.equal(bitmap.lastText,"夏実",
+        "name editing must preserve original player data");
+}
+async function testSpeakerHeadersAreNotMixedWithSpanish(){
+    const f=fixture(1);await wait(24);
+    const source="夏実\nおはようございます。";
+    f.$gameMessage._texts=source.split("\n");
+    const message=new f.context.Window_Message();message.startMessage();
+    assert.equal(message.originalStarts,1);
+    await wait(42);
+    assert.equal(f.posts.length,1,"only spoken line can reach neural engine");
+    assert.equal(f.posts[0].text,"おはようございます。");
+    f.$gameMessage._texts=source.split("\n");
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"Natsumi\nBuenos días.",
+        "speaker and speech must never be glued together");
+}
+async function testNativeControlsNeverReachNeuralOrChangeOnScreen(){
+    const samples=[
+        {src:"\\C[6]おはようございます。\\C[0]",
+            expected:"\\C[6]Buenos días.\\C[0]"},
+        {src:"おはようございます。%1",
+            expected:"Buenos días.%1"},
+        {src:"おはようございます。\${actor}",
+            expected:"Buenos días.\${actor}"},
+        {src:"\\N[2] おはようございます。",
+            expected:"\\N[2] Buenos días."},
+        {src:"\\N[2]おはようございます。",
+            expected:"\\N[2] Buenos días."},
+        {src:"\\N<保林 \\N[2]>「おはようございます。」",
+            expected:"\\N<保林 \\N[2]>「Buenos días.」"},
+        {src:"（【おはようございます。】）",expected:"（【Buenos días.】）"},
+        {src:"(おはようございます。",expected:"(Buenos días."}
+    ];
+    for(const sample of samples){
+        const f=fixture(1);await wait(22);
+        f.$gameMessage._texts=[sample.src];
+        new f.context.Window_Message().startMessage();
+        await wait(28);
+        assert.deepEqual(f.posts.map(x=>x.text),["おはようございます。"],
+            "control codes must never reach the neural model");
+        f.$gameMessage._texts=[sample.src];
+        new f.context.Window_Message().startMessage();
+        assert.equal(f.$gameMessage.allText(),sample.expected,
+            "result must contain every exact RPG/format control");
+    }
+}
+async function testApprovedBilingualCorrectionsOverridePreviousNeuralCache(){
+    const shared={files:{},dirs:{}};
+    const original="おはようございます。";
+    const first=fixture(1,{fsState:shared});await wait(35);
+    first.$gameMessage._texts=[original];
+    new first.context.Window_Message().startMessage();
+    await wait(35);
+    const folder=path.join("/tmp","servidor-qa-juego-日本語",
+        "IA Traductora",".local","Rpg","cache");
+    shared.files[path.join(folder,"traducciones_aprobadas_es.json")]=
+        JSON.stringify({[original]:"Buen día."});
+    shared.files[path.join(folder,"nombres_es.json")]=
+        JSON.stringify({"保林 隼人":"Hayato Hobayashi (revisado)"});
+    const reopened=fixture(1,{fsState:shared,disconnected:true});await wait(40);
+    reopened.$gameMessage._texts=[original];
+    new reopened.context.Window_Message().startMessage();
+    assert.equal(reopened.$gameMessage.allText(),"Buen día.",
+        "owner-approved phrase must supersede an old persisted result");
+    assert.equal(reopened.posts.length,0,"approved phrase never calls neural model");
+    const w=new reopened.context.Window_Base();w.initialize(0,0,300,90);
+    w.drawText("保林 隼人",0,0,240);
+    assert.equal(w.lastText,"Hayato Hobayashi (revisado)",
+        "owner-approved name reading must supersede pilot default");
+}
+async function testNamesStayVisibleWhenMentionedInsideDialogue(){
+    const text="夏実が隣に住んでいます。";
+    const f=fixture(1,{namedResponse:true});await wait(20);
+    f.$gameMessage._texts=[text];
+    new f.context.Window_Message().startMessage();
+    await wait(30);
+    assert.equal(f.posts.length,1);
+    assert.ok(f.posts[0].text.indexOf("Natsumi")>=0);
+    assert.equal(f.posts[0].text.indexOf("夏実"),-1,
+        "Japanese proper name reading must be supplied before neural inference");
+    f.$gameMessage._texts=[text];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"Natsumi vive al lado.");
+    const bad=fixture(1);await wait(20);
+    bad.$gameMessage._texts=[text];
+    new bad.context.Window_Message().startMessage();await wait(30);
+    bad.$gameMessage._texts=[text];
+    new bad.context.Window_Message().startMessage();
+    assert.equal(bad.$gameMessage.allText(),text,
+        "neural output dropping a character's name must be rejected");
+}
+async function testJapaneseDialogAndF10(){
+    const f=fixture(1);await wait(12);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();msg.startMessage();
+    assert.equal(msg.originalStarts,1,"native first dialogue cannot wait on IA");
+    assert.equal(f.$gameMessage.allText(),"おはようございます。");
+    await wait(22);
+    assert.equal(f.posts.length,1);
+    assert.equal(f.posts[0].source,"ja");
+    f.$gameMessage._texts=["おはようございます。"];
+    const second=new f.context.Window_Message();second.startMessage();
+    assert.equal(second.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),"Buenos días.",
+        "verified cached result renders inside native message");
+    assert.equal(f.posts.length,1,"cached text avoids repeated inference");
+    const scene=new f.context.Scene_Map();scene.createAllWindows();
+    assert.equal(scene.windows.length,2);
+    assert.equal(scene.windows[0].lastText,"◆ IA Traductora · F10");
+    assert.equal(scene.windows[1].visible,false);
+    assert.ok(scene.windows[1].height>=340);
+    const ys=scene.windows[1].drawn.map(v=>v.y);
+    assert.ok(ys.every((v,i)=>i===0||v-ys[i-1]>=36),
+        "F10 must be readable");
+    f.context.Input.isTriggered=()=>true;
+    scene.update();assert.equal(scene.windows[1].visible,true);
+    scene.update();assert.equal(scene.windows[1].visible,false);
+    assert.equal(f.spawnCount(),0);
+}
+async function testEnglishAndSpanish(){
+    const f=fixture(1);await wait(12);
+    f.$gameMessage._texts=["Hello, how are you today?"];
+    new f.context.Window_Message().startMessage();
+    await wait(22);
+    assert.equal(f.posts.length,1);assert.equal(f.posts[0].source,"en");
+    f.$gameMessage._texts=["Hola, ¿cómo estás hoy?"];
+    const spanish=new f.context.Window_Message();spanish.startMessage();
+    assert.equal(spanish.originalStarts,1);
+    assert.equal(f.posts.length,1,"never retranslate Spanish");
+}
+async function testRPGControlsAndNoLateRewrite(){
+    const f=fixture(12);await wait(12);
+    f.$gameMessage._texts=["\\V[1] おはようございます。"];
+    const first=new f.context.Window_Message();first.startMessage();
+    assert.equal(first.originalStarts,1);
+    await wait(30);
+    assert.equal(f.posts.length,1);
+    assert.equal(f.posts[0].text,"おはようございます。",
+        "model must not receive native variable escape");
+    f.$gameMessage._texts=["\\V[1] おはようございます。"];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"\\V[1] Buenos días.");
+    f.$gameMessage._texts=["さようなら。"];
+    new f.context.Window_Message().startMessage();
+    f.$gameMessage._texts=["次のシーンです。"];
+    await wait(30);
+    assert.equal(f.$gameMessage.allText(),"次のシーンです。",
+        "late result may only enter cache; it must not modify a new message");
+}
+async function testChoiceCacheOnlyAndNoOverwrite(){
+    const f=fixture(1);await wait(12);
+    f.$gameMessage.setChoices(["はい","いいえ"],0,1);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),["Sí","No"]);
+    await wait(22);
+    f.$gameMessage.setChoices(["はい","いいえ"],0,1);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),
+        ["Sí","No"],"deterministic choices preserve their distinct indices");
+    assert.equal(f.posts.length,0,"known choices must not use neural inference");
+    const late=fixture(25);await wait(12);
+    late.$gameMessage.setChoices(["はい"],0,0);
+    late.$gameMessage.setChoices(["No, gracias."],0,0);
+    await wait(40);
+    assert.deepEqual(Array.from(late.$gameMessage._choices),["No, gracias."],
+        "async choice must never overwrite later prompt");
+}
+async function testOriginalNWJSWithoutBufferFromOrNumberIsInteger(){
+    const f=fixture(1,{legacyBuffer:true,legacyPromise:true});
+    await wait(15);
+    f.$gameMessage._texts=["おはようございます。"];
+    new f.context.Window_Message().startMessage();
+    await wait(25);
+    assert.equal(f.posts.length,1,
+        "older NW.js must still send a real UTF-8 neural request");
+    f.$gameMessage._texts=["おはようございます。"];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.",
+        "verified translation must show on old NW.js");
+}
+async function testOldNWJSAndPathFallback(){
+    const f=fixture(1,{legacyPromise:true});await wait(12);
+    f.$gameMessage._texts=["おはようございます。"];
+    new f.context.Window_Message().startMessage();await wait(22);
+    f.$gameMessage._texts=["おはようございます。"];
+    new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.",
+        "Promise.finally must not be required");
+    const script=path.join("/tmp","servidor-qa-juego-日本語",
+        "www","js","plugins","IATraductora.js");
+    const fallback=fixture(1,{pathname:"/not-the-game/index.html",
+        scriptSrc:"file://"+encodeURI(script)});
+    await wait(12);
+    fallback.$gameMessage._texts=["おはようございます。"];
+    new fallback.context.Window_Message().startMessage();await wait(22);
+    fallback.$gameMessage._texts=["おはようございます。"];
+    new fallback.context.Window_Message().startMessage();
+    assert.equal(fallback.$gameMessage.allText(),"Buenos días.");
+}
+async function testUnconnectedGameIsPlayableAndF10Safe(){
+    const f=fixture(0,{disconnected:true});await wait(16);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();msg.startMessage();
+    assert.equal(msg.originalStarts,1);
+    assert.equal(msg._iaWaiting,undefined);
+    msg.update();assert.equal(msg.updates,1);
+    assert.equal(f.spawnCount(),0,"worker must not start at title");
+    const bad=fixture(1,{pathname:"/no-such-mv-game/index.html"});
+    const scene=new bad.context.Scene_Map();scene.createAllWindows();
+    const content=scene.windows[1].drawn.map(v=>v.text).join("\n");
+    assert.match(content,/IA_INICIO_RUTA_FALLIDO/);
+}
+async function testSlowModelNeverPausesText(){
+    const f=fixture(80);await wait(12);
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();msg.startMessage();
+    assert.equal(msg.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),"おはようございます。");
+    f.$gameMessage._texts=["次のシーンです。"];
+    await wait(95);
+    assert.equal(f.$gameMessage.allText(),"次のシーンです。");
+}
+async function testNameIdentityMigrationAndNameSetupFirstPaint(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語");
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const state={files:{},dirs:{[folder]:true}};
+    const cacheFile=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const old=[
+        ["保林","Conservación"],
+        ["保林 Mc","Conservación Mc"],
+        ["姫乃 Hanami","Su Alteza Hanami"],
+        ["※苗字は《姫乃（ひめの）》で固定です。","Apellido incorrecto."],
+        ["モブ生徒Ａ","Estupenda Mob A."],
+        ["モブ生徒Ｂ","Estupenda MobB."],
+        ["おはようございます。","Buenos días."]
+    ];
+    state.files[cacheFile]=old.map(row=>JSON.stringify({schema:"ia-traductora-cache-v2",
+        source:"ja",original:row[0],translated:row[1],composed:false})).join("\n")+"\n";
+    const untouched=state.files[cacheFile];
+    const f=fixture(1,{fsState:state,disconnected:true});await wait(40);
+    const msg=new f.context.Window_Message();msg.createSubWindows();
+    const name=msg._nameWindow;
+    for(const [source,expected] of [
+        ["保林 Mc","Hobayashi Mc"],["姫乃 Hanami","Himeno Hanami"],
+        ["モブ生徒Ａ","Estudiante A"],["モブ生徒Ｂ","Estudiante B"],
+        ["未知の名前","未知の名前"]
+    ]){
+        name.setText(source);
+        assert.equal(name.assigned,expected,"name must be correct before window measures width");
+        assert.equal(name.lastText,expected);
+    }
+    const lines=["このキャラクターの名前を決めて下さい。",
+        "デフォルト名は『隼人』(はやと)です。","",
+        "※苗字は《保林（ほばやし）》で固定です。"];
+    f.$gameMessage._texts=lines.slice();
+    msg.startMessage();
+    assert.equal(f.$gameMessage.allText(),
+        "Elige el nombre de este personaje.\nEl nombre predeterminado es «Hayato».\n\nEl apellido «Hobayashi» es fijo.",
+        "name setup must be readable on first paint even offline");
+    f.$gameMessage._texts=["おはようございます。"];msg.startMessage();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.","valid previous cache must survive");
+    assert.ok(state.files[cacheFile].startsWith(untouched),"old journal is not deleted or overwritten");
+    assert.equal(f.posts.length,0,"neither names nor fixed setup need neural translation");
+}
+async function testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const state={files:{},dirs:{[data]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:2});
+    const makeMap=lines=>({events:[null,{pages:[{list:[
+        {code:101,parameters:["Actor1",0,0,2]},
+        ...lines.map(t=>({code:401,parameters:[t]})),
+        {code:355,parameters:["実行禁止スクリプト"]},
+        {code:102,parameters:[["おはようございます。"],0,0,2,0]}
+    ]}]}]});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify(makeMap(["別の町です。"]));
+    state.files[path.join(data,"Map002.json")]=JSON.stringify(makeMap(["こんにちは。","今日は晴れです。"]));
+    state.files[path.join(data,"CommonEvents.json")]=JSON.stringify([null,{list:[{code:401,parameters:["ようこそ。"]}]}]);
+    state.files[path.join(data,"Actors.json")]=JSON.stringify([null,{name:"未知の俳優",profile:"元気です。"}]);
+    state.files[path.join(data,"Save01.json")]=JSON.stringify({text:"絶対読まない"});
+    const originals=Object.assign({},state.files);
+    const f=fixture(1,{fsState:state,batch:true});
+    const title=new f.context.Scene_Title();title.start();assert.equal(title.starts,1);
+    title.commandNewGame();
+    assert.equal(title.launches,0,"cold title prepares first map without starting the original handler");
+    assert.equal(title.titleActive,true,"title remains interactive during bounded preparation");
+    title.update();assert.equal(title.frames,1,"native title updates are never blocked");
+    // Wait for an observed readiness condition, not a scheduler-dependent
+    // 350ms deadline. The test still fails if the unvisited map never loads.
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&!f.posts.some(x=>x.text==="別の町です。"))await wait(25);
+    const scene=new f.context.Scene_Map();scene.createAllWindows();
+    const diag=scene.windows[1].drawn.map(x=>x.text).join(" | ");
+    assert.ok(f.posts.some(x=>x.text==="別の町です。"),
+        "never visited map must be translated; posts="+JSON.stringify(f.posts.map(x=>x.text))+"; "+diag);
+    // The final network response and cache write may be one turn behind POST.
+    await wait(50);
+    title.update();
+    assert.equal(title.launches,1,"first-map preparation launches once");
+    title.update();assert.equal(title.launches,1,"deferred start must not repeat");
+    assert.ok(f.posts.some(x=>x.text==="ようこそ。"),"common events must be preloaded");
+    assert.ok(f.batches.some(n=>n>1&&n<=6),"genuine batch endpoint must group requests");
+    assert.ok(!f.posts.some(x=>/実行禁止|絶対読まない|未知の俳優/.test(x.text)),
+        "scripts, saves and actor identities must not be sent to model");
+    for(const k of Object.keys(originals))assert.equal(state.files[k],originals[k],"original game files stay byte-identical");
+    f.$gameMessage._texts=["別の町です。"];const m=new f.context.Window_Message();m.startMessage();
+    assert.equal(f.$gameMessage.allText(),"Buenos días.","unvisited map already available on first draw");
+    assert.equal(m.originalStarts,1);
+}
+async function testR3PatchRepairsStandardNoticeAndKeepsColor(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語",
+        "IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const old=[
+        ["この物語はフィクションであり、","(Aplausos)"],
+        ["これは架空の人物です。","Es un personaje ficticio."]
+    ];
+    const state={files:{[journal]:old.map(row=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"ja",original:row[0],
+        translated:row[1],composed:false})).join("\n")+"\n"},dirs:{[folder]:true}};
+    const f=fixture(1,{fsState:state,disconnected:true});await wait(40);
+    const message=new f.context.Window_Message();
+    // Synthetic Latin acronym; no commercial game content is needed.
+    const lines=["この物語はフィクションであり、","これは架空の人物です。",
+        "また、本作では\\C[6]ＡＢＣ\\C[0]要素が含まれております。予めご了承下さい。"];
+    f.$gameMessage._texts=lines.slice();message.startMessage();
+    assert.equal(message.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),
+        "Esta historia es ficticia y\nEs un personaje ficticio.\nAdemás, esta obra incluye elementos de tipo \\C[6]ＡＢＣ\\C[0]. Tenlo en cuenta.");
+    assert.equal(f.posts.length,0,"known repaired notice works offline without new inference");
+    assert.ok(state.files[journal].includes("Es un personaje ficticio."),
+        "unaffected old cache is preserved");
+    const online=fixture(1);await wait(25);
+    online.$gameMessage._texts=lines.slice();
+    const m=new online.context.Window_Message();m.startMessage();
+    await wait(45);
+    assert.deepEqual(online.posts.map(v=>v.text),["これは架空の人物です。"],
+        "a missing ordinary line cannot force already reviewed colored lines through the neural model");
+    online.$gameMessage._texts=lines.slice();m.startMessage();
+    assert.equal(online.$gameMessage.allText(),
+        "Esta historia es ficticia y\nBuenos días.\nAdemás, esta obra incluye elementos de tipo \\C[6]ＡＢＣ\\C[0]. Tenlo en cuenta.");
+}
+async function testR3P2NoticeVariantsOnFirstNativeDraw(){
+    const first="この物語はフィクションであり、";
+    const second="実在する人物・団体・その他法律等とは一切関係ありません。";
+    const forms=[
+        ["\\C[6]ＡＢＣ\\C[0]","\\C[6]ＡＢＣ\\C[0]"],
+        ["\\c[6]ＡＢＣ\\c[0]","\\c[6]ＡＢＣ\\c[0]"],
+        ["ＡＢＣ","ＡＢＣ"],
+        ["\\c[27]Ａ　Ｂ　Ｃ\\C[0]","\\c[27]Ａ　Ｂ　Ｃ\\C[0]"],
+        ["\x1bC[6]ABC\x1bc[0]","\x1bC[6]ABC\x1bc[0]"]
+    ];
+    for(const form of forms){
+        const f=fixture(1,{disconnected:true});await wait(20);
+        const last="また、本作では"+form[0]+"要素が含まれております。予めご了承下さい。";
+        f.$gameMessage._texts=[first,second,last];
+        const win=new f.context.Window_Message();win.startMessage();
+        assert.equal(win.originalStarts,1);
+        assert.equal(f.$gameMessage.allText(),
+            "Esta historia es ficticia y\nno tiene relación con personas, organizaciones ni leyes reales.\nAdemás, esta obra incluye elementos de tipo "+form[1]+". Tenlo en cuenta.",
+            "full notice must render even offline; no return to menu required");
+        assert.equal(f.posts.length,0);
+    }
+}
+async function testR3P2KnownLinesNotHiddenByOnePendingLine(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語",
+        "IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const first="おはようございます。",missing="明日は雨が降ります。";
+    const original=[first,missing];
+    const record=JSON.stringify({schema:"ia-traductora-cache-v2",source:"ja",
+        original:first,translated:"Buenos días.",composed:false})+"\n";
+    const shared={files:{[journal]:record},dirs:{[folder]:true}};
+    const f=fixture(1,{fsState:shared,disconnected:true});await wait(35);
+    const win=new f.context.Window_Message();
+    f.$gameMessage._texts=original.slice();win.startMessage();
+    assert.equal(win.originalStarts,1);
+    assert.equal(f.$gameMessage.allText(),"Buenos días.\n"+missing,
+        "one pending line must not hide a validated ordinary line");
+    assert.equal(shared.files[journal],record,"mixed output is not persisted");
+    // Name/variable and timing-bearing messages retain R3's safe fallback.
+    const dynamic="\\N[2]"+missing;
+    f.$gameMessage._texts=[first,dynamic];win.startMessage();
+    assert.equal(f.$gameMessage.allText(),first+"\n"+dynamic);
+    const online=fixture(20,{fsState:shared});await wait(35);
+    const second=new online.context.Window_Message();
+    online.$gameMessage._texts=original.slice();second.startMessage();
+    assert.equal(online.$gameMessage.allText(),"Buenos días.\n"+missing);
+    await wait(65);
+    assert.deepEqual(online.posts.map(x=>x.text),[missing],
+        "only missing Japanese line reaches the model");
+    assert.equal(online.$gameMessage.allText(),"Buenos días.\n"+missing,
+        "late response does not restart or alter the active message");
+    online.$gameMessage._texts=original.slice();second.startMessage();
+    assert.equal(online.$gameMessage.allText(),"Buenos días.\nBuenos días.");
+    assert.equal(second.originalStarts,2);
+}
+
+async function testR4EnglishFormatContextAndStaleCache(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語");
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const plain="A visitor opens the gate and enters the hall.";
+    const raw="<WordWrap>A visitor opens the \\m[things]gate\\c[0] and enters the \\c[6]hall\\c[0].";
+    const bad="Hay un sonido <<<W wordwordWrap> Hay Hay Hay \\m[things]gate\\c[0] \\c[6]hall\\c[0].";
+    const old=JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:bad,composed:true})+"\n";
+    const shared={files:{[journal]:old},dirs:{[folder]:true}};
+    const responses={};responses[plain]="Un visitante abre la puerta y entra en el salón.";
+    responses.gate="puerta";responses.hall="salón";
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{"Macro 1 Name":"Things","Macro 1 Text":"\\c[11]"}}];
+    const f=fixture(1,{fsState:shared,responses,nativeWait:true,nativePaint:true,plugins});await wait(30);
+    const m=new f.context.Window_Message();
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    f.$gameMessage._texts=[raw];m.startMessage();
+    assert.equal(m.originalStarts,1,"untranslated text cannot pause native message start");
+    assert.equal(m.updateWait(),false,"no artificial message wait");
+    m.finishPage();const bitmap=m.contents;
+    await wait(60);m.update();
+    assert.equal(m.originalStarts,1,"late answer does not restart native message");
+    assert.equal(f.$gameMessage.allText(),raw,"late result cannot mutate active source");
+    assert.equal(scene.windows.length,0,"late translation must never create a window");
+    assert.equal(m.contents,bitmap,"native bitmap instance remains the same");
+    assert.equal(bitmap.clears,1,"replace the English in its original region");
+    assert.ok(bitmap.ops.some(x=>x.text==="FACE"),"native face retained");
+    assert.ok(bitmap.ops.some(x=>x.text==="puerta"&&x.color==="color-11"));
+    assert.ok(bitmap.ops.some(x=>x.text==="salón"&&x.color==="color-6"));
+    assert.ok(!bitmap.ops.some(x=>x.text.includes("A visitor")));
+    m.terminateMessage();assert.equal(m.terminated,1);assert.equal(m._iaLateTicket,null);
+    f.$gameMessage._texts=[raw];m.startMessage();
+    const expected="<WordWrap>Un visitante abre la \\m[things]puerta\\c[0] y entra en el \\c[6]salón\\c[0].";
+    assert.equal(m.originalStarts,2);
+    assert.equal(f.$gameMessage.allText(),expected);
+    assert.ok(f.posts.some(x=>x.text===plain),"model sees complete natural context");
+    assert.ok(f.posts.some(x=>x.text==="gate")&&f.posts.some(x=>x.text==="hall"),
+        "short colored words are no longer skipped");
+    assert.ok(f.posts.every(x=>!/[<>\\]/.test(x.text)),"never send controls to model");
+    await wait(30);
+    const reopened=fixture(1,{fsState:shared,disconnected:true});await wait(35);
+    reopened.$gameMessage._texts=[raw];new reopened.context.Window_Message().startMessage();
+    assert.equal(reopened.$gameMessage.allText(),f.$gameMessage.allText());
+    assert.equal(reopened.posts.length,0);
+}
+async function testR4InkAndCsvReadOnlyPreload(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const ink=path.join(data,"ink"),loc=path.join(data,"localization");
+    const state={files:{},dirs:{[data]:true,[ink]:true,[loc]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    const story="There is a sound at the gate.";
+    const plain="A traveler enters the hall.";
+    state.files[path.join(ink,"main.json")]=JSON.stringify({inkVersion:21,root:[
+        ["ev","str","^this is an internal value","/str","/ev","#","^this is a private tag","/#",
+        "^There is a sound at the (mt:gate).","\n",null],
+        {branch:["^A traveler enters the (mp:hall).","\n",null],
+         "global decl":["^this is global data",null]}
+    ],listDefs:{example:{"this is a key":1}}});
+    state.files[path.join(ink,"test.json")]=JSON.stringify({inkVersion:21,root:["^this is a test backup",null]});
+    state.files[path.join(loc,"strings.csv")]='id,en,es\r\nK1,"Hello, how are you today?",\r\nK2,"We are here.",\r\nK3,"=this is a formula",';
+    state.files[path.join(loc,"unrelated.csv")]="id,script\r\nA,this is a command";
+    const originals=Object.assign({},state.files);
+    const responses={[story]:"Se oye un ruido en la puerta.",[plain]:"Un viajero entra en el salón.",
+        gate:"puerta",hall:"salón","Hello, how are you today?":"Hola, ¿cómo estás hoy?",
+        "We are here.":"Estamos aquí."};
+    const f=fixture(1,{fsState:state,batch:true,responses,nativeWait:true});
+    new f.context.Scene_Title().start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&![story,plain,"We are here."].every(v=>f.posts.some(x=>x.text===v)))await wait(25);
+    await wait(70);
+    assert.ok([story,plain,"We are here."].every(v=>f.posts.some(x=>x.text===v)),
+        "preload compiled unseen story and schema-validated CSV");
+    assert.ok(!f.posts.some(x=>/internal value|private tag|global data|test backup|formula|command/.test(x.text)));
+    for(const k of Object.keys(originals))assert.equal(state.files[k],originals[k],"data files are read-only");
+    const m=new f.context.Window_Message();
+    f.$gameMessage._texts=["<WordWrap>A traveler enters the \\m[places]hall\\c[0]."];m.startMessage();
+    assert.equal(m.originalStarts,1,"unvisited compiled text is ready on first draw");
+    assert.equal(f.$gameMessage.allText(),"<WordWrap>Un viajero entra en el \\m[places]salón\\c[0].");
+    const smart="“We are here.”";
+    f.$gameMessage._texts=[smart];m.startMessage();await wait(30);m.startMessage();
+    assert.ok(f.posts.some(x=>x.text===smart&&x.source==="en"),"typographic quotes detected");
+}
+
+
+async function testR4P2NoStaleLateOverlayAndNoArtificialWait(){
+    const sentence="We are ready to open the gate.";
+    const response={};response[sentence]="Estamos listos para abrir la puerta.";
+    const f=fixture(90,{responses:response,nativeWait:true,nativePaint:true});await wait(30);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    const m=new f.context.Window_Message();f.$gameMessage._texts=[sentence];m.startMessage();
+    assert.equal(m.originalStarts,1);assert.equal(m.updateWait(),false);
+    m.finishPage();const before=JSON.stringify(m.contents.ops);
+    f.context.SceneManager._scene=new f.context.Scene_Map();
+    await wait(120);m.update();
+    assert.equal(JSON.stringify(m.contents.ops),before,"no old dialogue may appear in another scene");
+    assert.equal(m._iaLateTicket,null);
+    assert.equal(m.originalStarts,1);assert.equal(m.updates,1);
+}
+async function testR4P2QuestMetadataAndVisibleRefresh(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const state={files:{},dirs:{[root]:true}};
+    state.files[path.join(root,"System.json")]=JSON.stringify({startMapId:1});
+    const title="Find the missing key",desc="You must find the key before dawn.",obj="Search the garden.";
+    const quest=JSON.stringify({Title:title,Description:JSON.stringify([JSON.stringify(desc)]),
+        "Objectives List":JSON.stringify([obj]),"Rewards List":JSON.stringify(["20 gold"]),
+        From:"Aldren",Location:"Westbridge", "Visible Objectives":"[1]",Script:"this is never a display field"});
+    const plugins=[{name:"YEP_QuestJournal",status:true,parameters:{"Quest 1":quest}},
+        {name:"YEP_X_MoreQuests1",status:false,parameters:{"Quest 101":JSON.stringify({Title:"This is disabled content."})}},
+        {name:"Unrelated",status:true,parameters:{"Quest 1":JSON.stringify({Title:"This is unrelated content."})}}];
+    const untouched=JSON.stringify(plugins);
+    const responses={[title]:"Encuentra la llave perdida",[desc]:"Debes encontrar la llave antes del amanecer.",
+        [obj]:"Registra el jardín.","20 gold":"20 monedas","This is a live objective.":"Este es un objetivo activo."};
+    const f=fixture(5,{fsState:state,plugins,batch:true,responses});
+    new f.context.Scene_Title().start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&![title,desc,obj].every(x=>f.posts.some(p=>p.text===x)))await wait(25);
+    await wait(70);
+    assert.ok([title,desc,obj].every(x=>f.posts.some(p=>p.text===x)),"nested mission fields inventoried before opening quest journal");
+    assert.ok(!f.posts.some(p=>/disabled content|unrelated content|never a display field|Aldren|Westbridge/.test(p.text)));
+    assert.equal(JSON.stringify(plugins),untouched,"quest parameters are not modified");
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    function Window_QuestData(){this.initialize(0,0,400,200);this.parent=scene;this.visible=true;this.selection=3;this.refreshes=0;}
+    Window_QuestData.prototype=Object.create(f.context.Window_Base.prototype);
+    Window_QuestData.prototype.constructor=Window_QuestData;
+    Window_QuestData.prototype.index=function(){return this.selection;};
+    Window_QuestData.prototype.refresh=function(){this.refreshes++;this.drawTextEx("This is a live objective.",0,0);};
+    const win=new Window_QuestData();
+    win.drawText(title,0,0,400);assert.equal(win.lastText,"Encuentra la llave perdida");
+    win.drawTextEx(desc,0,0);assert.equal(win.lastTextEx,"Debes encontrar la llave antes del amanecer.");
+    win.refresh();assert.equal(win.lastTextEx,"This is a live objective.");
+    await wait(160);assert.equal(win.lastTextEx,"Este es un objetivo activo.");
+    assert.equal(win.selection,3);assert.equal(win.refreshes,2);
+}
+async function testR4P2PriorityCommonAndInkChoice(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data"),ink=path.join(data,"ink");
+    const state={files:{},dirs:{[data]:true,[ink]:true}};
+    const initial="We have arrived at the city.",background="The far village is quiet.",choice="Open the gate.";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[{code:117,parameters:[2]}]}]}]});
+    state.files[path.join(data,"CommonEvents.json")]=JSON.stringify([null,
+        {list:[{code:401,parameters:[background]}]},
+        {list:[{code:117,parameters:[3]}]},
+        {list:[{code:401,parameters:[initial]},{code:117,parameters:[2]}]}]);
+    state.files[path.join(ink,"main.json")]=JSON.stringify({inkVersion:21,root:[[
+        "ev","str","^"+choice,"/str","/ev",{"*":"dest","flg":4},
+        "ev","str","^This is an internal string.","/str","/ev","pop",null],null]});
+    const f=fixture(1,{fsState:state,batch:true});
+    new f.context.Scene_Title().start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&![initial,background,choice].every(v=>f.posts.some(x=>x.text===v)))await wait(25);
+    assert.ok([initial,background,choice].every(v=>f.posts.some(x=>x.text===v)),"transitive event chain and literal choice are prepared");
+    assert.ok(f.posts.findIndex(x=>x.text===initial)<f.posts.findIndex(x=>x.text===background),"starting common event ahead of distant event");
+    assert.ok(!f.posts.some(x=>/internal string/.test(x.text)));
+}
+
+
+async function testR4P3NativeSafetyAndNames(){
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{
+        "Macro 1 Name":"People","Macro 1 Text":"\\c[25]",
+        "Macro 2 Name":"Quests","Macro 2 Text":"\\c[23]"}}];
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const person="<WordWrap>\\n<Captain>\\c[25]Silver-Fox\\c[0] is here.";
+    const wrong="<WordWrap>\\n<Captain>\\c[25]Zorro Plateado\\c[0] está aquí.";
+    const quest="<WordWrap>Choose a \\m[Quests]Quest\\c[0] from the categories.";
+    const qbad="<WordWrap>Elija una \\m[Quests]búsqueda\\c[0] de las categorías.";
+    const shared={files:{[journal]:[[person,wrong],[quest,qbad]].map(v=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:v[0],translated:v[1],composed:true})).join("\n")+"\n"},dirs:{[folder]:true}};
+    const f=fixture(1,{plugins,fsState:shared,disconnected:true});await wait(40);
+    const m=new f.context.Window_Message();
+    f.$gameMessage._texts=[person];m.startMessage();
+    assert.equal(f.$gameMessage.allText(),"<WordWrap>\\n<Captain>\\c[25]Silver-Fox\\c[0] está aquí.","only author-declared proper-name color is preserved");
+    f.$gameMessage._texts=[quest];m.startMessage();
+    assert.equal(f.$gameMessage.allText(),"<WordWrap>Elija una \\m[Quests]misión\\c[0] de las categorías.");
+    assert.equal(f.posts.length,0,"repair existing journal without inference");
+    const bitmap=new f.context.Bitmap(500,100);
+    bitmap.drawText("-Main Quests (3)",0,0,500,30);
+    assert.equal(bitmap.lastText,"-Misiones principales (3)","custom book category and count");
+    const long="We are ready to go.";
+    const responses={[long]:"Estamos preparados para emprender un recorrido de considerable duración."};
+    const slow=fixture(10,{nativePaint:true,nativeWidth:320,nativeHeight:32,responses});
+    await wait(30);
+    const scene=new slow.context.Scene_Map();slow.context.SceneManager._scene=scene;
+    const win=new slow.context.Window_Message();
+    slow.$gameMessage._texts=[long];win.startMessage();win.finishPage();
+    const before=JSON.stringify(win.contents.ops);await wait(40);win.update();
+    assert.equal(JSON.stringify(win.contents.ops),before,"overflow never erases or clips the original");
+    assert.equal(scene.windows.length,0);
+    const command="We are here.\\!";
+    slow.$gameMessage._texts=[command];win.startMessage();win.finishPage();await wait(30);win.update();
+    assert.equal(win._iaLateTicket,null,"wait escape cannot be replayed by late renderer");
+    assert.equal(scene.windows.length,0);
+}
+async function testR4P3PageAndChoiceSafety(){
+    const line="We are here.",response={[line]:"Estamos aquí."};
+    const f=fixture(25,{responses:response,nativePaint:true});await wait(30);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    const m=new f.context.Window_Message();f.$gameMessage._texts=[line];m.startMessage();
+    m.newPage(m._textState);m.finishPage();const before=JSON.stringify(m.contents.ops);
+    await wait(50);m.update();
+    assert.equal(JSON.stringify(m.contents.ops),before,"multi-page messages do not get repainted as one page");
+    const other="We are ready.";f.$gameMessage._texts=[other];m.startMessage();m.finishPage();
+    m.choiceActive=true;const active=JSON.stringify(m.contents.ops);await wait(45);m.update();
+    assert.equal(JSON.stringify(m.contents.ops),active,"active choices never receive a late repaint");
+    assert.equal(scene.windows.length,0);
+}
+
+
+async function testR4P4ShortTextAndMacroAlias(){
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{"Macro 1 Name":"Things","Macro 1 Text":"\\c[11]"}}];
+    const raw="Ancient \\m[Things]writing\\c[0]? Absurd!";
+    const result="¿Escritura \\m[Things]antigua\\c[0]? ¡Absurdo!";
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const state={files:{[journal]:JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true})+"\n"},dirs:{[folder]:true}};
+    const f=fixture(1,{plugins,fsState:state,disconnected:true});await wait(40);
+    const m=new f.context.Window_Message();
+    f.$gameMessage._texts=[raw.replace("\\m[Things]","\\c[11]")];m.startMessage();
+    assert.equal(f.$gameMessage.allText(),result.replace("\\m[Things]","\\c[11]"),
+        "same words and equivalent macro/color use existing cache while preserving original controls");
+    assert.equal(f.posts.length,0);
+    const short='"Typical. Always looking out for herself."';
+    const n=fixture(1,{responses:{[short]:'"Típico. Siempre pensando en sí misma."'}});await wait(25);
+    n.$gameMessage._texts=[short];new n.context.Window_Message().startMessage();
+    await wait(50);n.$gameMessage._texts=[short];new n.context.Window_Message().startMessage();
+    assert.equal(n.$gameMessage.allText(),'"Típico. Siempre pensando en sí misma."');
+}
+async function testR4P4LateIconAndAmount(){
+    const text="\\nc<Guide>We will pay \\i[17]5 coins.";
+    const f=fixture(5,{nativePaint:true,nativeWait:true,responses:{"We will pay":"Pagaremos","5 coins.":"5 monedas."}});await wait(35);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    const m=new f.context.Window_Message();f.$gameMessage._texts=[text];m.startMessage();
+    assert.equal(m.originalStarts,1);assert.equal(m.updateWait(),false);
+    m.finishPage();const bitmap=m.contents;
+    const deadline=Date.now()+900;
+    while(Date.now()<deadline&&!bitmap.clears){await wait(25);m.update();}
+    assert.equal(m.contents,bitmap);assert.equal(scene.windows.length,0);
+    assert.equal(bitmap.clears,1,"late icon-bearing message repaints original");
+    assert.ok(bitmap.ops.some(x=>x.text==="ICON17"),"native icon retained");
+    assert.ok(bitmap.ops.some(x=>x.text==="5"),"amount retained");
+    assert.ok(bitmap.ops.some(x=>x.text==="Pagaremos"));
+    assert.ok(!bitmap.ops.some(x=>x.text.includes("We will pay")));
+    assert.ok(f.posts.every(x=>!/[\\<>]/.test(x.text)),"speaker and icon codes never reach inference");
+}
+async function testR4P4FullQuestTemplateAndAccents(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const title="Find the missing key",desc="The key is hidden in the garden.",objective="Look in the garden.";
+    const entries=[[title,"Encuentra la llave perdida"],[desc,"La llave está escondida en el jardín."],[objective,"Busca en el jardín."]];
+    const state={files:{},dirs:{[data]:true,[folder]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=entries.map(v=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:v[0],translated:v[1],composed:false})).join("\n")+"\n";
+    const plugins=[{name:"YEP_QuestJournal",status:true,parameters:{
+        "Quest Data Window":JSON.stringify({"Font Face":"Handwritten","Quest Data Format":"From: %3"}),
+        "Quest 1":JSON.stringify({Title:title,From:"Aldren Fox",Location:"Castle",Description:JSON.stringify([desc]),"Objectives List":JSON.stringify([objective])})}}];
+    const before=JSON.stringify(plugins);
+    const f=fixture(1,{fsState:state,plugins,disconnected:true});await wait(80);
+    function Window_QuestData(){this.initialize(0,0,600,500);}
+    Window_QuestData.prototype=Object.create(f.context.Window_Base.prototype);Window_QuestData.prototype.constructor=Window_QuestData;
+    const win=new Window_QuestData();
+    const template="\\c[15]<WordWrap>\\{"+title+"\\}\n<br>From: Aldren Fox\n<br>Location: Castle\n<br>Description:\n<br>"+desc+"\n<br>Objectives:\n<br>"+objective+"\\c[0]";
+    win.drawTextEx(template,0,0);
+    assert.equal(win.lastTextEx,"\\c[15]<WordWrap>\\{Encuentra la llave perdida\\}\n<br>De: Aldren Fox\n<br>Ubicación: Castillo\n<br>Descripción:\n<br>La llave está escondida en el jardín.\n<br>Objetivos:\n<br>Busca en el jardín.\\c[0]");
+    win.drawTextEx("Location: Westbridge",0,0);assert.equal(win.lastTextEx,"Ubicación: Westbridge");
+    win.drawTextEx("\\c[15]Available (4)",0,0);assert.equal(win.lastTextEx,"\\c[15]Disponibles (4)");
+    win.drawTextEx("\\c[15]-Tutorial Quests (1)",0,0);assert.equal(win.lastTextEx,"\\c[15]-Misiones de tutorial (1)");
+    const bitmap=new f.context.Bitmap(500,100);bitmap.fontFace="Handwritten";
+    bitmap.drawText("Barón",0,0,400,40);assert.equal(bitmap.ops[0].font,"Georgia, serif");
+    bitmap.measureTextWidth("Barón");assert.equal(bitmap.measuredFont,"Georgia, serif");
+    assert.equal(bitmap.fontFace,"Handwritten","font fallback does not permanently change font");
+    bitmap.drawText("ABC",0,0,400,40);assert.equal(bitmap.ops[1].font,"Handwritten");
+    assert.equal(JSON.stringify(plugins),before,"no quest objects, parameters or script changes");
+    assert.equal(f.posts.length,0);
+}
+async function testR4P4AmbientNativeCaption(){
+    const text="Keep moving, friend.",response="Sigue caminando, amigo.";
+    const plugins=[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}];
+    const f=fixture(10,{plugins,responses:{[text]:response,"Wait here, friend.":"Espera aquí, amigo."}});await wait(30);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    function Window_GalvCaption(){
+        this.contents=new f.context.Bitmap(500,80);this.parent=scene;this.visible=true;
+        this.duration=75;this._testAmbientPaint=true;
+    }
+    Window_GalvCaption.prototype=Object.create(f.context.Window_Base.prototype);
+    Window_GalvCaption.prototype.constructor=Window_GalvCaption;
+    Window_GalvCaption.prototype.textColor=function(i){return "color-"+i;};
+    const win=new Window_GalvCaption(),bitmap=win.contents;
+    win.drawTextEx(text,4,0);assert.equal(bitmap.lastText,text);
+    const deadline=Date.now()+900;
+    while(Date.now()<deadline&&!bitmap.clears)await wait(20);
+    assert.equal(win.contents,bitmap);assert.equal(scene.windows.length,0);
+    assert.equal(win.duration,75);assert.equal(bitmap.clears,1);
+    assert.ok(bitmap.ops.some(x=>x.text==="Sigue"));
+    assert.ok(!bitmap.ops.some(x=>x.text===text));
+    const stale=new Window_GalvCaption();stale.drawTextEx("Wait here, friend.",4,0);
+    stale.visible=false;await wait(60);
+    assert.ok(!stale.contents.clears,"expired caption never reappears");
+}
+
+
+async function testR4P5QuestOverrideAndCaptionAlias(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const questTitle="Find the missing letter",desc="The letter is hidden in the garden.";
+    const tag="<c:3,160,0,WindowSpeech,-40>",body="Keep walking, friend.";
+    const colored="Keep walking, \\c[5]friend\\c[0].";
+    const cache=[
+        [questTitle,"Encuentra la carta perdida",false],
+        [desc,"La carta está escondida en el jardín.",false],
+        ["Castle Westbridge","Castillo Westbridge",false],
+        [tag+body,tag+"Sigue caminando, amigo.",true],
+        [colored,"Sigue caminando, \\c[5]amigo\\c[0].",true]
+    ];
+    const state={files:{},dirs:{[folder]:true,[data]:true}};
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=cache.map(v=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:v[0],translated:v[1],composed:v[2]})).join("\n")+"\n";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    const plugins=[
+        {name:"YEP_QuestJournal",status:true,parameters:{"Quest 1":JSON.stringify({
+            Title:questTitle,Description:JSON.stringify([JSON.stringify(desc)]),From:"Baroness",
+            Location:"Castle Westbridge"})}},
+        {name:"GALV_TimedMessagePopups",status:true,parameters:{}}
+    ];
+    const before=JSON.stringify(plugins);
+    const f=fixture(2,{fsState:state,plugins,disconnected:true,configure(c){
+        c.Window_Base.prototype.convertEscapeCharacters=function(v){return v;};
+        function Window_QuestData(){this.initialize(0,0,600,500);}
+        Window_QuestData.prototype=Object.create(c.Window_Base.prototype);
+        Window_QuestData.prototype.constructor=Window_QuestData;
+        // The author has captured a base conversion before the IA loads,
+        // and its own drawing method does not invoke Window_Base.drawTextEx.
+        Window_QuestData.prototype.convertEscapeCharacters=function(text){return text;};
+        Window_QuestData.prototype.drawTextEx=function(text){
+            this.lastTextEx=this.convertEscapeCharacters(text);return 17;
+        };
+        c.window.Window_QuestData=Window_QuestData;
+        function Window_Caption(){this.initialize(0,0,500,80);this.duration=90;}
+        Window_Caption.prototype=Object.create(c.Window_Base.prototype);
+        Window_Caption.prototype.constructor=Window_Caption;
+        Window_Caption.prototype.drawTextEx=function(text){
+            this.lastTextEx=this.convertEscapeCharacters(text);return 9;
+        };
+        c.window.Window_Caption=Window_Caption;
+        function Game_Interpreter(){}
+        Game_Interpreter.prototype.command101=function(){
+            this.captured=this._list[this._index+1].parameters[0];this._index++;return true;
+        };
+        c.Game_Interpreter=Game_Interpreter;
+    }});
+    await wait(100);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    const w=new c.window.Window_QuestData();
+    const original="\\c[15]<WordWrap>\\{"+questTitle+"\\}\\n<br>From: Baroness\\n<br>Location: Castle Westbridge\\n<br>Description:\\n<br>"+desc+"\\c[0]";
+    // Match actual newlines, not a literal backslash-n.
+    const template=original.replace(/\\n(?=<br>)/g,"\n");
+    assert.equal(w.drawTextEx(template,0,0),17);
+    assert.ok(w.lastTextEx.includes("Descripción:"),w.lastTextEx);
+    assert.ok(w.lastTextEx.includes("La carta está escondida en el jardín."),w.lastTextEx);
+    assert.ok(w.lastTextEx.includes("De: Baronesa"),w.lastTextEx);
+    assert.ok(w.lastTextEx.includes("Ubicación: Castillo Westbridge"),w.lastTextEx);
+    assert.equal(JSON.stringify(plugins),before);
+    // A custom-named data window reaches the lower conversion path directly.
+    const generic=new c.Window_Base();
+    const projected=generic.convertEscapeCharacters(template);
+    assert.ok(projected.includes("La carta está escondida en el jardín."));
+    assert.equal(generic.convertEscapeCharacters("Unrelated internal token"),"Unrelated internal token");
+    const caption=new c.window.Window_Caption();
+    assert.equal(caption.drawTextEx(body,0,0),9);
+    assert.equal(caption.lastTextEx,"Sigue caminando, amigo.");
+    caption.drawTextEx(colored,0,0);
+    assert.equal(caption.lastTextEx,"Sigue caminando, \\c[5]amigo\\c[0].");
+    assert.equal(caption.duration,90);
+    const commands=[{code:101,parameters:["",0,0,2]},{code:401,parameters:[tag+body]},{code:0,parameters:[]}];
+    const saved=JSON.stringify(commands),interp=new c.Game_Interpreter();
+    interp._list=commands;interp._index=0;
+    assert.equal(interp.command101(),true);
+    assert.equal(interp.captured,tag+"Sigue caminando, amigo.");
+    assert.equal(interp._list,commands);assert.equal(interp._index,1);
+    assert.equal(JSON.stringify(commands),saved);
+    assert.equal(scene.windows.length,0);assert.equal(f.posts.length,0);
+}
+async function testR4P5DynamicNativeCaptionConversion(){
+    const original="Keep walking, friend.",translated="Sigue caminando, amigo.";
+    const plugins=[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}];
+    const f=fixture(2,{plugins,responses:{[original]:translated},configure(c){
+        c.Window_Base.prototype.convertEscapeCharacters=function(v){return v;};
+        function Window_Caption(){this.duration=120;}
+        Window_Caption.prototype=Object.create(c.Window_Base.prototype);
+        Window_Caption.prototype.constructor=Window_Caption;
+        c.window.Window_Caption=Window_Caption;
+    }});
+    await wait(35);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    const win=new c.window.Window_Caption();
+    assert.equal(win.convertEscapeCharacters(original),original);
+    await wait(150);
+    assert.equal(win.convertEscapeCharacters(original),translated);
+    assert.ok(f.posts.some(p=>p.text===original),"dynamic caption enters real request pipeline");
+    assert.equal(win.duration,120);assert.equal(scene.windows.length,0);
+}
+
+
+async function testR4P5BFormattedMessageBodyReplay(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const header="<WordWrap>\\n<Commander>";
+    const raw=header+"We must find the \\m[Things]missing key\\c[0] before dawn.";
+    const result=header+"Debemos encontrar la \\m[Things]llave perdida\\c[0] antes del amanecer.";
+    const body="We must find the \x1bC[11]missing key\x1bC[0] before dawn.";
+    const expected="Debemos encontrar la \x1bC[11]llave perdida\x1bC[0] antes del amanecer.";
+    const state={files:{},dirs:{[folder]:true,[data]:true}};
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true})+"\n";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{"Macro 1 Name":"Things","Macro 1 Text":"\\c[11]"}}];
+    const f=fixture(2,{fsState:state,plugins,disconnected:true,configure(c){
+        c.Window_Message.prototype.convertEscapeCharacters=function(v){return v;};
+    }});
+    await wait(100);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    f.$gameMessage._texts=[raw];
+    const w=new c.Window_Message();
+    assert.equal(w.convertEscapeCharacters(body),expected);
+    assert.equal(w.convertEscapeCharacters("Commander"),"Commander");
+    assert.equal(w.convertEscapeCharacters("We must open the door."),"We must open the door.");
+    assert.equal(f.$gameMessage.allText(),raw,"presentation conversion cannot rewrite the event");
+    assert.equal(scene.windows.length,0);assert.equal(f.posts.length,0);
+}
+
+
+// This fixture reproduces the published Galv factory contract: a closure-
+// private caption, third argument textArray, native layout before addWindow,
+// and the actual _captionWindows / _time lifecycle. No third-party source
+// or commercial game assets are redistributed.
+function configurePrivateGalv(c){
+    const nativeDraw=c.Window_Base.prototype.drawTextEx;
+    function Window_GalvCaption(target,time,textArray,data,delay,skin,yoffset,actor){
+        this.initialize(0,0,1280,100);
+        this.target=target;this._time=time+delay;this._delayTime=time;
+        this._txtArray=textArray;this.data=data;this.delay=delay;this.skin=skin;
+        this.yoffset=yoffset;this.actor=actor;this.active=true;this.visible=true;
+        this.imagesLoaded=true;this.contents=new c.Bitmap(1280,100);
+        this.layoutCount=0;this.setWindowDimensions();
+    }
+    Window_GalvCaption.prototype=Object.create(c.Window_Base.prototype);
+    Window_GalvCaption.prototype.constructor=Window_GalvCaption;
+    Window_GalvCaption.prototype.setWindowDimensions=function(){
+        this.layoutCount++;
+        this.contents.clearRect(0,0,1280,100);
+        this.painted=this._txtArray.map((line,i)=>{
+            // A cached alias to the original native draw bypasses later
+            // Window_Base.prototype wrappers, just like a custom renderer.
+            nativeDraw.call(this,line,0,i*32);
+            this.contents.drawText(line,0,i*32,1280,32);
+            return line;
+        });
+        this.width=Math.max(...this.painted.map(v=>v.length*12))+24;
+    };
+    Window_GalvCaption.prototype.update=function(){this._time--;this.x=(this.x||0)+1;return "updated";};
+    c.Scene_Map.prototype.createCaptionWindow=function(target,time,textArray,data,delay,skin,yoffset,actor){
+        const w=new Window_GalvCaption(target,time,textArray,data,delay,skin,yoffset,actor);
+        (this._captionWindows||(this._captionWindows=[])).push(w);w.parent=this;
+        this.addWindow(w);return "native-created";
+    };
+}
+async function testR4P6GalvRealFactoryContract(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const original="Please wait, \\c[5]friend\\c[0].",translated="Espera, \\c[5]amigo\\c[0].";
+    const late="Stay near the door.",lateEs="Quédate cerca de la puerta.";
+    const short="Wait here, friend.",shortEs="Espera aquí, amigo.";
+    const dyn="Please close the gate.",dynEs="Por favor, cierra la puerta.";
+    const state={files:{},dirs:{[data]:true,[folder]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original,translated,composed:true})+"\n";
+    let dynamic=dyn;
+    const plugins=[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}];
+    const f=fixture(20,{fsState:state,plugins,responses:{[late]:lateEs,[short]:shortEs,[dyn]:dynEs},configure(c){
+        configurePrivateGalv(c);
+        c.$gameVariables={value(id){assert.equal(id,49);return dynamic;}};
+    }});
+    await wait(90);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    const target={id:7},metadata=["",0,0,2],list=[original],before=JSON.stringify(list);
+    assert.equal(scene.createCaptionWindow(target,100,list,metadata,5,"WindowSpeech",-40,false),"native-created");
+    const win=scene._captionWindows[0];
+    assert.equal(c.window.Window_GalvCaption,undefined,"native class is not a browser global");
+    assert.equal(win.painted[0],translated,"cached translation must reach first native layout");
+    assert.equal(win.target,target);assert.equal(win.data,metadata);assert.equal(win._time,105);
+    assert.equal(win.skin,"WindowSpeech");assert.equal(win.yoffset,-40);
+    assert.equal(win.layoutCount,1);assert.equal(scene.windows.length,1);
+    assert.equal(JSON.stringify(list),before);
+    assert.ok(!f.posts.some(p=>p.text===original));
+    const raw=[late,original];scene.createCaptionWindow(target,100,raw,metadata,0,"WindowSpeech",-40,false);
+    const w=scene._captionWindows[1],bitmap=w.contents;
+    assert.equal(w.painted[0],late);assert.equal(w.painted[1],translated);
+    // An independently expiring native caption cannot be resurrected.
+    scene.createCaptionWindow(target,2,[short],metadata,0,"WindowSpeech",-40,false);
+    const expired=scene._captionWindows[2];expired.update();expired.update();expired.active=false;
+    // Variable-only message is resolved as visual text; variable never written.
+    scene.createCaptionWindow(target,120,["\\v[49]"],metadata,0,"WindowSpeech",-40,false);
+    const variable=scene._captionWindows[3];
+    await wait(180);
+    for(let i=0;i<8;i++){assert.equal(w.update(),"updated");expired.update();variable.update();}
+    assert.equal(w.painted[0],lateEs);assert.equal(w.painted[1],translated);
+    assert.equal(w.contents,bitmap);assert.equal(w._time,92);
+    assert.equal(w.layoutCount,2);assert.equal(w.x,8);
+    assert.ok(!bitmap.ops.some(v=>v.text===late),"native redraw erased the original");
+    assert.equal(expired.layoutCount,1);assert.equal(expired.painted[0],short);
+    assert.equal(variable.painted[0],dynEs);assert.equal(dynamic,dyn);
+    assert.equal(scene.windows.length,4,"no extra window from translation");
+    assert.deepEqual(raw,[late,original]);
+    const second=[late];scene.createCaptionWindow(target,60,second,metadata,0,"WindowSpeech",-40,false);
+    assert.equal(scene._captionWindows[4].painted[0],lateEs,"repeat uses cache at first paint");
+    assert.equal(f.posts.filter(p=>p.text===late).length,1);
+    assert.ok(f.posts.some(p=>p.text===dyn),"resolved visual variable reaches inference");
+    assert.ok(f.posts.every(p=>!p.text.includes("v[49]")));
+    const old=scene._captionWindows[4];c.SceneManager._scene=new c.Scene_Map();
+    old.update();assert.equal(old.layoutCount,1);
+    assert.equal(f.$gameMessage.allText(),"");
+}
+
+
+function csvFixtureRows(rows){
+    return rows.map(r=>r.map(v=>'"'+String(v||"").replace(/"/g,'""')+'"').join(",")).join("\r\n")+"\r\n";
+}
+async function testR4P7ExternalSheetPreparesBeforeFirstGame(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:2,locale:"en_US"});
+    state.files[path.join(data,"Map002.json")]=JSON.stringify({events:[null]});
+    const message="\\c[2][\\n[7]]\\c[0]\nPlease bring the lantern.\\I[17]";
+    const choice="Accept delivery",other="Decline delivery",late="The ferry leaves tomorrow.";
+    const rows=[["","Script","日本語","英語","スペイン語","",""],["$map2","","","","","",""],["$event1","","","","","",""],["$page2","","","","","",""],
+        ["$text1","$v[23] = 0","\\c[2][\\n[7]]\\c[0]\nランタンを持ってきて。\\I[17]",message,"","",""],
+        ["$text2","","配達を引き受ける",choice,"Aceptar el encargo","",""],
+        ["$text3","","配達を断る",other,"","",""],
+        ["","$v[23] = 9","","Wait by the bridge.","","",""],
+        ["","","","※Developer annotation","","",""],
+        ["$text4","","","if(s[10]) This is a condition","","",""]];
+    // Large file with all narrative rows above and a unique text after row
+    // 25,000. A quoted comma/newline must stay in its cell.
+    for(let i=0;i<26000;i++)rows.push(["","","","","","",""]);
+    rows.push(["$map99","","","","","",""],["$event1","","","","","",""],["$page1","","","","","",""],
+        ["$text1","","明日出発する。",late,"","",""]);
+    state.files[path.join(csv,"sheet.csv")]=csvFixtureRows(rows);
+    state.files[path.join(csv,"DB_Variable.csv")]=csvFixtureRows([["$id=0","JPN_NAME","ENG_NAME","SPN_NAME"],["$id=17","内部値","Internal event value",""]]);
+    state.files[path.join(csv,"DB_Item.csv")]=csvFixtureRows([["$id=0","free","JPN_NAME","DESCRIPTION","ENG_NAME","DESCRIPTION","SPN_NAME","DESCRIPTION"],["$id=5","","鍵","古い鍵","Old key","A key, made of iron.","",""]]);
+    state.files[path.join(csv,"DB_NPCJob.csv")]=csvFixtureRows([["","",""],["12","配達人","Courier"]]);
+    state.files[path.join(csv,"status.csv")]=csvFixtureRows([["species","種族","Species:"],["species_value","人間","Human"]]);
+    const saved=Object.assign({},state.files);
+    const responses={"Courier":"Mensajero","Species:":"Especie:","Human":"Humano","Please bring the lantern.":"Por favor, trae la linterna.",[other]:"Rechazar el encargo","Wait by the bridge.":"Espera junto al puente.",[late]:"El ferry sale mañana.","Old key":"Llave antigua","A key, made of iron.":"Una llave, hecha de hierro."};
+    const plugins=[{name:"KNS_CsvReader",status:true,parameters:{}}];
+    const f=fixture(2,{fsState:state,batch:true,responses,plugins});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();title.commandNewGame();
+    assert.equal(title.launches,0,"external tables hold the optional first-game preparation");
+    const deadline=Date.now()+4500;
+    while(Date.now()<deadline&&!title.launches){await wait(30);title.update();}
+    assert.equal(title.launches,1,"preparation finishes automatically without a second click");
+    assert.ok(f.posts.some(p=>p.text===late),"text after row 25000 and on an unvisited map is prepared");
+    assert.ok(f.posts.some(p=>p.text===other),"short labelled English choice without stopword is prepared");
+    assert.ok(!f.posts.some(p=>p.text===choice),"validated authored Spanish column reused without inference");
+    assert.ok(!f.posts.some(p=>/Internal event value|Developer annotation|This is a condition|\$v\[|\\[cnI]\[/.test(p.text)),"no control or internal field reaches inference");
+    const w=new f.context.Window_Message();f.$gameMessage._texts=message.split("\n");w.startMessage();
+    assert.equal(f.$gameMessage.allText(),"\\c[2][\\n[7]]\\c[0]\nPor favor, trae la linterna.\\I[17]");
+    f.$gameMessage.setChoices([choice,other],0,1);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),["Aceptar el encargo","Rechazar el encargo"]);
+    const conditional="Take the ferry if(s[10])";
+    f.$gameMessage.setChoices([conditional,choice],0,1);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),[conditional,"Aceptar el encargo"]);
+    await wait(30);
+    assert.ok(!f.posts.some(p=>p.text.includes("if(s[10])")),"executable choice condition is never sent to inference");
+    const bitmap=new f.context.Bitmap(640,100);
+    assert.equal(bitmap.measureTextWidth("Courier"),"Mensajero".length*12);
+    bitmap.drawText("Courier",0,0,600,36);
+    assert.equal(bitmap.lastText,"Mensajero");
+    // Alternate source from the same bilingual row has the same exact
+    // control contract and is reusable without a second neural inference.
+    f.$gameMessage._texts=["明日出発する。"];w.startMessage();
+    assert.equal(f.$gameMessage.allText(),"El ferry sale mañana.");
+    for(const k of Object.keys(saved))assert.equal(state.files[k],saved[k],"original files unchanged");
+    assert.equal(title.launches,1);
+}
+async function testR4P7JapanesePrimaryAndLiveChoice(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"ja_JP"});
+    state.files[path.join(csv,"commonSheet.csv")]=csvFixtureRows([["","","日本語","英語",""],["$common1","","","",""],["$text1","","手紙を届ける","Deliver letter",""]]);
+    const f=fixture(35,{fsState:state,responses:{"手紙を届ける":"Entregar la carta"},plugins:[{name:"MEO_Csv",status:true,parameters:{}}],configure(c){
+        function Window_ChoiceList(){this.active=true;this.openness=255;this._index=0;this._list=[{name:"Deliver letter",symbol:"choice",enabled:true,ext:7}];this.draws=0;}
+        Window_ChoiceList.prototype.update=function(){};
+        Window_ChoiceList.prototype.itemRectForText=function(){return {width:400};};
+        Window_ChoiceList.prototype.textWidthEx=function(v){return v.length*8;};
+        Window_ChoiceList.prototype.redrawItem=function(i){this.draws++;this.painted=this._list[i].name;};
+        c.Window_ChoiceList=Window_ChoiceList;
+    }});
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&!f.posts.some(p=>p.text==="手紙を届ける"))await wait(20);
+    await wait(100);
+    const win=new f.context.Window_ChoiceList();
+    for(let i=0;i<12;i++)win.update();
+    assert.equal(win.painted,"Entregar la carta");assert.equal(win._list[0].name,"Deliver letter");
+    assert.equal(win._list[0].ext,7);assert.equal(win._list[0].symbol,"choice");
+    assert.equal(win._list[0].enabled,true);assert.equal(win._index,0);assert.equal(win.draws,1);
+    assert.ok(f.posts.some(p=>p.text==="手紙を届ける"&&p.source==="ja"));
+    assert.ok(!f.posts.some(p=>p.text==="Deliver letter"));
+}
+
+
+async function testR4P8CsvVariablesAndPresentation(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:2,locale:"en_US"});
+    const first="Deliver the parcel",second="Wait by the bridge",hint="※Use the lantern.",note="※Developer annotation";
+    const profile="An unknown traveler.\nHe meets \\n[2].",log="“I am feeling tired.”",world="Northern forest";
+    state.files[path.join(csv,"sheet.csv")]=csvFixtureRows([["","Script","日本語","英語","スペイン語","",""],["$map2","","","","","",""],["$event1","","","","","",""],["$page2","","","","","",""],
+        ["$text1","","荷物を届ける",first,"","",""],["$text2","","橋で待つ",second,"","",""],
+        ["$text3","","※ランタンを使う。",hint,"","",""],["","","",note,"","",""],
+        ["$text4","$v[8] = 9","","Choose the road if(s[10])","","",""],
+        ["$text5","","明日。/\n橋を渡る。","We leave tomorrow.","","",""]]);
+    state.files[path.join(csv,"EroWindowText.csv")]=csvFixtureRows([["key","jp","en"],["profile_actor_1","旅人。","An unknown traveler.\nHe meets \\n[2]."],["Information","情報","Information"]]);
+    state.files[path.join(csv,"logsheet.csv")]=csvFixtureRows([["","日本語","英語","Spanish","","",""],["npc_tired","疲れた。",log,"","","",""],["world_map/2/name","北の森",world,"","","",""]]);
+    const head=["共通部","","","","","","日本語","","","","","","","English","","","","","","","Espanol","","","","","",""];
+    const labels=Array(27).fill("");labels[0]="$quest_id=0";
+    const quest=Array(27).fill("");quest[0]="$quest_id=9";quest[6]="手紙";quest[13]="The letter";quest[8]="商人";quest[15]="Merchant";quest[10]="$progress1= 橋へ行く。\n$progress2= 帰る。";quest[17]="$progress1= Go to the bridge.\n$progress2= Return home.";
+    state.files[path.join(csv,"QuestList.csv")]=csvFixtureRows([head,labels,quest]);
+    const originalFiles=Object.assign({},state.files);
+    const responses={[first]:"Entrega el paquete",[second]:"Espera junto al puente","Use the lantern.":"Usa la linterna.","Choose the road":"Elige el camino","We leave tomorrow.":"Salimos mañana.","明日。":"Mañana.","橋を渡る。":"Cruza el puente.","An unknown traveler.":"Un viajero desconocido.","He meets":"Conoce a",[log]:"«Me siento cansado.»",[world]:"Bosque del norte","The letter":"La carta","Merchant":"Comerciante","Go to the bridge.":"Ve al puente.","Return home.":"Regresa a casa."};
+    const values={61:first,62:second};
+    const f=fixture(2,{fsState:state,batch:true,responses,plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}],configure(c){
+        c.$gameVariables={value(id){return values[id];},setValue(){throw Error("no game writes");}};
+        c.$gameActors={actor(id){assert.equal(id,2);return {name(){return "Alice";}};}};
+        c.Window_Base.prototype.convertEscapeCharacters=function(text){return text.replace(/\\v\[(\d+)\]/gi,(_,id)=>values[id]);};
+        function Window_ChoiceList(){this.active=true;this.openness=255;this._index=1;this._list=[{name:"\\v[61]",symbol:"choice",enabled:true,ext:61},{name:"\\v[62]",symbol:"choice",enabled:false,ext:62}];this.painted=[];}
+        Window_ChoiceList.prototype=Object.create(c.Window_Base.prototype);
+        Window_ChoiceList.prototype.constructor=Window_ChoiceList;
+        // Custom renderer performs its own final conversion.
+        Window_ChoiceList.prototype.convertEscapeCharacters=function(text){return text.replace(/\\v\[(\d+)\]/gi,(_,id)=>values[id]);};
+        Window_ChoiceList.prototype.textWidthEx=function(v){return this.convertEscapeCharacters(v).length*8;};
+        Window_ChoiceList.prototype.drawItem=function(i){this.painted[i]=this.convertEscapeCharacters(this._list[i].name);};
+        Window_ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
+        Window_ChoiceList.prototype.itemRectForText=function(){return {width:500};};
+        Window_ChoiceList.prototype.update=function(){};
+        c.Window_ChoiceList=Window_ChoiceList;
+    }});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();title.commandNewGame();
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline&&!title.launches){await wait(25);title.update();}
+    assert.equal(title.launches,1,"external profile, quest and choices prepare before play");
+    const w=new f.context.Window_ChoiceList(),before=JSON.stringify(w._list);
+    w.drawItem(0);w.drawItem(1);
+    assert.deepEqual(w.painted,["Entrega el paquete","Espera junto al puente"]);
+    assert.equal(w.textWidthEx("\\v[61]"),"Entrega el paquete".length*8);
+    for(let i=0;i<24;i++)w.update();
+    assert.equal(JSON.stringify(w._list),before);assert.equal(w._index,1);
+    assert.equal(values[61],first);assert.equal(values[62],second);
+    f.$gameMessage.setChoices(["\\v[61]","\\v[62]"],1,0);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),["\\v[61]","\\v[62]"]);
+    const b=new f.context.Window_Base();b.initialize(0,0,600,300);
+    assert.equal(b.convertEscapeCharacters("An unknown traveler."),"Un viajero desconocido.");
+    const bitmap=new f.context.Bitmap(640,200);bitmap.drawText("Information",0,0,640,30);
+    assert.equal(bitmap.lastText,"Información");
+    bitmap.drawText("NAME : Alice",0,0,640,30);assert.equal(bitmap.lastText,"NOMBRE : Alice");
+    assert.equal(b.convertEscapeCharacters("Northern forest"),"Bosque del norte");
+    assert.equal(b.convertEscapeCharacters("Merchant"),"Comerciante");
+    assert.equal(b.convertEscapeCharacters("Go to the bridge."),"Ve al puente.");
+    assert.ok(f.posts.some(p=>p.text==="Use the lantern."),"explicit display note prepared");
+    assert.ok(f.posts.some(p=>p.text==="橋を渡る。"),"unequal bilingual block counts retain alternate");
+    assert.ok(f.posts.some(p=>p.text==="Choose the road"),"conditional display label extracted");
+    assert.ok(!f.posts.some(p=>/Developer annotation|if\(s\[|\$progress|\$v\[|\\v\[/.test(p.text)),"no executable field inferred");
+    for(const k of Object.keys(originalFiles))assert.equal(state.files[k],originalFiles[k]);
+}
+
+
+function r4p9Progress(f){
+    const m=new f.context.Scene_Map();m.createAllWindows();m._iaPanel.refresh();
+    const line=m._iaPanel.drawn.filter(x=>/^Textos listos: /.test(x.text)).pop();
+    const match=/Textos listos: (\d+)\/(\d+)\s+Fallos: (\d+)/.exec(line.text);
+    return {ready:Number(match[1]),total:Number(match[2]),failed:Number(match[3])};
+}
+async function testR4P9ContinueInventoryAndRestore(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const cache=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const state={files:{},dirs:{[data]:true,[csv]:true,[folder]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"en_US"});
+    const rows=[["","Script","日本語","英語","スペイン語","",""],["$map1","","","","","",""],["$event1","","","","","",""],["$page1","","","","","",""]];
+    const responses={},texts=[];
+    for(let i=0;i<16;i++){
+        const text="Please open the door "+i+".";
+        texts.push(text);responses[text]="Por favor, abre la puerta "+i+".";
+        rows.push(["$text"+(i+1),"","",text,"","",""]);
+    }
+    state.files[path.join(csv,"sheet.csv")]=csvFixtureRows(rows);
+    // A valid last record without its terminal newline is recoverable.
+    state.files[cache]=JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:texts[0],translated:responses[texts[0]],composed:false});
+    const originalCsv=state.files[path.join(csv,"sheet.csv")];
+    const f=fixture(80,{fsState:state,batch:true,responses,cacheReadDelay:100,appendFailures:1,plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}]});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();title.commandNewGame();title.commandNewGame();
+    assert.equal(title.launches,1,"skip gate never blocks gameplay");
+    const map=new f.context.Scene_Map();f.context.SceneManager._scene=map;map.createAllWindows();
+    await wait(190);
+    const early=r4p9Progress(f);
+    assert.ok(early.total>=16&&early.ready>=1&&early.ready<early.total,"restored cache is counted before inference completes");
+    // An unvisited end-of-table message should not wait for the whole queue.
+    f.$gameMessage._texts=[texts[15]];new f.context.Window_Message().startMessage();
+    const end=Date.now()+6000;
+    while(Date.now()<end&&r4p9Progress(f).ready<early.total)await wait(40);
+    const done=r4p9Progress(f);
+    assert.equal(done.ready,done.total,"background queue drains while in gameplay without title updates");
+    assert.equal(done.failed,0);
+    assert.ok(f.posts.some(p=>p.text===texts[15]));
+    assert.ok(!f.posts.some(p=>p.text===texts[0]),"cached item never needs neural inference");
+    const secondTitle=new f.context.Scene_Title();f.context.SceneManager._scene=secondTitle;secondTitle.start();
+    assert.ok(r4p9Progress(f).ready>=done.ready,"returning to title cannot reset completed progress");
+    secondTitle.commandNewGame();assert.equal(secondTitle.launches,1);
+    await wait(1300);
+    const journal=state.files[cache].split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(texts.every(v=>journal.some(r=>r.original===v)),"temporary disk failure must not lose translations");
+    const reboot=fixture(1,{fsState:state,disconnected:true,cacheReadDelay:100,plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}]});
+    const restoredTitle=new reboot.context.Scene_Title();reboot.context.SceneManager._scene=restoredTitle;restoredTitle.start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&r4p9Progress(reboot).ready<done.ready)await wait(30);
+    assert.equal(r4p9Progress(reboot).ready,done.ready,"offline restart restores full completed count");
+    reboot.$gameMessage._texts=[texts[15]];new reboot.context.Window_Message().startMessage();
+    assert.equal(reboot.$gameMessage.allText(),responses[texts[15]]);
+    assert.equal(reboot.posts.length,0);
+    assert.equal(state.files[path.join(csv,"sheet.csv")],originalCsv);
+}
+async function testR4P9LateCsvNamedMessage(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"en_US"});
+    const head="\\c[6][\\n[2]]\\c[0]\n",body="Please wait by the gate.",text=head+body;
+    const f=fixture(120,{fsState:state,nativePaint:true,responses:{[body]:"Espera junto a la puerta."},plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}],configure(c){
+        c.$gameActors={actor(id){assert.equal(id,2);return {name(){return "Alice";}};}};
+        const original=c.Window_Message.prototype.startMessage;
+        c.Window_Message.prototype.startMessage=function(){original.apply(this,arguments);this._textState.text=this._textState.text.replace(/\\n\[2\]/gi,"Alice");};
+    }});
+    await wait(35);
+    const map=new f.context.Scene_Map();f.context.SceneManager._scene=map;
+    f.$gameMessage._texts=text.split("\n");const msg=new f.context.Window_Message();msg.startMessage();msg.finishPage();
+    const deadline=Date.now()+3000;
+    while(Date.now()<deadline&&!msg.contents.ops.some(x=>x.text==="Espera")){await wait(30);msg.update();}
+    assert.ok(msg.contents.ops.some(x=>x.text==="Espera"),"late Spanish paints on the current native message");
+    assert.equal(msg.originalStarts,1);assert.equal(msg.pages,1);
+    assert.equal(f.$gameMessage.allText(),text,"active game message and actor name remain untouched");
+    assert.ok(msg.contents.ops.some(x=>x.text==="[Alice]"));
+    assert.ok(msg.contents.ops.some(x=>x.text==="FACE"));
+    assert.equal(map.windows.length,0,"no extra dialogue window");
+}
+
+async function testTitlePreparationCanBeSkipped(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const state={files:{},dirs:{[data]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{
+        list:[{code:401,parameters:["はじめまして。"]}]
+    }]}]});
+    const f=fixture(300,{fsState:state,disconnected:true});
+    const title=new f.context.Scene_Title();title.start();
+    title.commandNewGame();
+    assert.equal(title.launches,0);
+    title.commandNewGame();
+    assert.equal(title.launches,1,"explicit second selection skips preparation");
+    title.update();assert.equal(title.launches,1);
+}
+async function testPermanentQualityFailureIsNotRetried(){
+    const f=fixture(1,{qualityReject:true});await wait(25);
+    const original="おはようございます。";
+    for(let i=0;i<3;i++){
+        f.$gameMessage._texts=[original];new f.context.Window_Message().startMessage();
+        await wait(30);
+    }
+    await wait(950);
+    assert.equal(f.posts.length,1,"permanent QA rejection is not a transport error");
+    assert.equal(f.$gameMessage.allText(),original);
+}
+async function testBoundedMapPrefetchAndPressure(){
+    const f=fixture(1);await wait(12);
+    const commands=[];
+    for(let i=0;i<600;i++)commands.push({code:401,parameters:["こんにちは "+i+"。"]});
+    f.context.$dataMap={events:[null,{pages:[{list:commands}]}]};
+    const scene=new f.context.Scene_Map();scene.createAllWindows();scene.update();
+    await wait(70);
+    assert.ok(f.posts.length<=12,"background scan must not flood requests");
+    f.$gameMessage._texts=["おはようございます。"];
+    const msg=new f.context.Window_Message();
+    for(let i=0;i<300;i++)msg.startMessage();
+    assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
+}
+
+async function testExternalTsvLookupAndLatePresentation(mz){
+    const content=path.join("/tmp","servidor-qa-juego-日本語",mz?"":"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const line="Please wait here...\\. Can we leave?",spanish="Espera aquí...\\. ¿Podemos salir?";
+    const key="\\tl{A0001}",choiceKey="\\tl{A0002}",chineseKey="\\tl{请开门}";
+    const rows=[
+        ["Key","English","Chinese(Simplified)","Chinese(Traditional)","Japanese"],
+        ["A0001",line,"等一下...\\. 可以离开吗？","等一下...\\. 可以離開嗎？","待って...\\. 出られますか？"],
+        ["A0002","Open the gate","开门","開門","門を開ける"],
+        ["请开门","Take the lantern","请开门","請開門","ランタンを取る"],
+        ["A0003","Please read this note.","请阅读","請閱讀","このメモを読んでください。"],
+        ["A0004","Please check the door.","查门","查門","ドアを確認してください。"],
+        ["A0004","Please check the window.","查窗","查窗","窓を確認してください。"]
+    ];
+    const raw="\uFEFF"+rows.map(r=>r.join("\t")).join("\r\n")+"\r\n";
+    state.files[path.join(data,"Languages.tsv")]=raw;
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"zh_CN",startMapId:1});
+    const originalMap=JSON.stringify({events:[null,{pages:[{list:[
+        {code:401,parameters:[key]},{code:102,parameters:[[choiceKey,chineseKey],0,0,2,0]},
+        {code:355,parameters:["Do not translate executable instructions."]}
+    ]}]}]});
+    state.files[path.join(data,"Map001.json")]=originalMap;
+    const f=fixture(110,{mz,fsState:state,nativePaint:true,batch:true,
+        responses:{"Please wait here...":"Espera aquí...","Can we leave?":"¿Podemos salir?","Open the gate":"Abre la puerta","Take the lantern":"Toma la linterna","Please read this note.":"Lee esta nota, por favor."},
+        configure(c){
+            const native=function(text){
+                return text.replace(/(?:\\|\x1b)tl\{([^{}]+)\}/gi,(token,k)=>{
+                    const row=rows.find(r=>r[0]===k);return row?row[1]:token;
+                }).replace(/\\/g,"\x1b");
+            };
+            c.Window_Base.prototype.convertEscapeCharacters=native;
+            c.Window_Message.prototype.convertEscapeCharacters=native;
+            const start=c.Window_Message.prototype.startMessage;
+            c.Window_Message.prototype.startMessage=function(){
+                start.apply(this,arguments);this._textState.text=this.convertEscapeCharacters(c.$gameMessage.allText());
+            };
+            function Window_ChoiceList(){this._list=[{name:choiceKey,symbol:"choice",enabled:true,ext:0}];this.active=true;this.openness=255;this.painted=[];}
+            Window_ChoiceList.prototype=Object.create(c.Window_Base.prototype);
+            Window_ChoiceList.prototype.constructor=Window_ChoiceList;
+            Window_ChoiceList.prototype.drawItem=function(i){this.painted[i]=this.convertEscapeCharacters(this._list[i].name);};
+            Window_ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
+            Window_ChoiceList.prototype.textWidthEx=function(v){return v.length*8;};
+            Window_ChoiceList.prototype.textSizeEx=function(v){return {width:v.length*8,height:32};};
+            Window_ChoiceList.prototype.itemRectForText=function(){return {width:600};};
+            Window_ChoiceList.prototype.itemLineRect=function(){return {width:600};};
+            Window_ChoiceList.prototype.update=function(){};
+            c.Window_ChoiceList=Window_ChoiceList;
+        }
+    });
+    const map=new f.context.Scene_Map();f.context.SceneManager._scene=map;map.createAllWindows();map.update();
+    await wait(35);
+    f.$gameMessage._texts=[key];
+    const msg=new f.context.Window_Message();msg.startMessage();msg.finishPage();
+    const limit=Date.now()+6000;
+    while(Date.now()<limit&&!msg.contents.ops.some(x=>x.text.includes("Espera"))){await wait(40);msg.update();}
+    assert.ok(msg.contents.ops.some(x=>x.text.includes("Espera")),"TSV message must translate in the original window, even if the first paint was English");
+    assert.equal(msg.originalStarts,1);assert.equal(msg.pages,1);
+    assert.equal(f.$gameMessage.allText(),key,"the localization reference remains unchanged");
+    assert.ok(msg.contents.ops.some(x=>x.text==="FACE"),"native face preserved");
+    f.$gameMessage._texts=[key];
+    const again=new f.context.Window_Message();again.startMessage();
+    assert.equal(again._textState.text,spanish.replace(/\\/g,"\x1b"),"cache preserves native pause on replay");
+    assert.equal(f.$gameMessage.allText(),key);
+    const choice=new f.context.Window_ChoiceList(),before=JSON.stringify(choice._list);
+    while(Date.now()<limit&&choice.painted[0]!=="Abre la puerta"){choice.drawItem(0);await wait(35);}
+    assert.equal(choice.painted[0],"Abre la puerta");
+    assert.equal(JSON.stringify(choice._list),before,"branch symbol, index and key are unchanged");
+    const other=new f.context.Window_Base();other.initialize.apply(other,mz?[new f.context.Rectangle(0,0,400,100)]:[0,0,400,100]);
+    assert.notEqual(other.convertEscapeCharacters("\\tl{A0004}"),"\\tl{A0004}","native loader retains ownership of conflicting keys");
+    assert.ok(!f.posts.some(v=>/\\tl\{|A000[1-4]|请开门|開門|executable instructions/.test(v.text)),"never send keys, Chinese columns or script to inference");
+    assert.equal(state.files[path.join(data,"Languages.tsv")],raw);
+    assert.equal(state.files[path.join(data,"Map001.json")],originalMap);
+    assert.equal(map.windows.length,2,"no additional dialogue overlay");
+    console.log("SERVIDOR_EXTERNAL_TSV_NATIVE_"+(mz?"MZ":"MV")+"_PASS");
+}
+
+
+async function testR4NativeTsvMixedControlsAndCoverage(mz){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const key="\\tl{R4002}\n\\tl{R4003}",one="The door is locked. You need the key.",two="\\. Please take the lantern.";
+    const rows=[["Key","English","Chinese(Simplified)","Chinese(Traditional)","Japanese"],
+        ["R4001","Guide","指南","導覽","ガイド"],
+        ["R4002",one,"门锁了。\\. 需要钥匙。","門鎖了。\\. 需要鑰匙。","扉は閉まっている。\\. 鍵が必要だ。"],
+        ["R4003",two,"\\. 拿灯。","\\. 拿燈。","ランタンを取ってください。"],
+        ["R4004","Please check the window.","查窗","查看窗戶","窓を調べてください。"]];
+    const raw=rows.map(r=>r.join("\t")).join("\n")+"\n";
+    state.files[path.join(data,"Languages.tsv")]=raw;
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"zh_CN",startMapId:1});
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    state.dirs[folder]=true;
+    // Older neural output dropped a complete sentence; it must not win.
+    state.files[journal]=JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:one,translated:"La puerta está cerrada.",composed:false})+"\n";
+    const mapData={events:[null,{pages:[{list:[{code:401,parameters:["\\tl{R4002}"]},{code:401,parameters:["\\tl{R4003}"]}]}]}]};
+    const mapJson=JSON.stringify(mapData);state.files[path.join(data,"Map001.json")]=mapJson;
+    let locale=1;
+    const f=fixture(80,{mz,fsState:state,cacheReadDelay:100,batch:true,nativePaint:true,
+        plugins:[{name:"VisuMZ_1_MessageCore",status:true,parameters:{"Localization:struct":JSON.stringify({"Enable:eval":"true","LangFiletype:str":"tsv","TsvFilename:str":"Languages.tsv"})}}],
+        responses:{"The door is locked.":"La puerta está cerrada.","You need the key.":"Necesitas la llave.","Please take the lantern.":"Toma la linterna.","Please check the window.":"Revisa la ventana.","扉は閉まっている。":"La puerta está cerrada.","鍵が必要だ。":"Necesitas la llave.","ランタンを取ってください。":"Toma la linterna."},
+        configure(c){
+            c.$dataMap=mapData;
+            function resolve(text){return text.replace(/(?:\\|\x1b)tl\{([^}]+)\}/gi,(token,k)=>{const row=rows.find(r=>r[0]===k);return row?row[locale]:token;});}
+            c.Window_Base.prototype.convertEscapeCharacters=resolve;
+            c.Window_Message.prototype.convertEscapeCharacters=resolve;
+            const base=c.Window_Message.prototype.startMessage;
+            c.Window_Message.prototype.startMessage=function(){
+                // A custom loader obtains the message directly, *before*
+                // it creates or measures the native text state. Its own
+                // wrapping path bypasses Window_Base.drawTextEx entirely.
+                this.nativeInput=c.$gameMessage.allText();base.apply(this,arguments);
+                this._textState.text=resolve(this.nativeInput).replace(/\\/g,"\x1b");
+            };
+        }});
+    const c=f.context,title=new c.Scene_Title();c.SceneManager._scene=title;title.start();title.commandNewGame();
+    assert.equal(title.launches,1,"TSV game enters before full translation");
+    const map=new c.Scene_Map();c.SceneManager._scene=map;map.createAllWindows();map.update();
+    f.$gameMessage._texts=key.split("\n");const first=new c.Window_Message();first.startMessage();first.finishPage();
+    const deadline=Date.now()+6500;
+    while(Date.now()<deadline&&!first.contents.ops.some(x=>x.text==="Necesitas")){await wait(35);first.update();}
+    assert.ok(first.contents.ops.some(x=>x.text==="Necesitas"),"late result restores omitted sentence in original window");
+    assert.equal(first.originalStarts,1);assert.equal(first.pages,1);
+    assert.equal(f.$gameMessage.allText(),key);
+    assert.ok(first.contents.ops.some(x=>x.text==="FACE"));
+    const replay=new c.Window_Message();replay.startMessage();
+    assert.equal(replay.nativeInput,"La puerta está cerrada. Necesitas la llave.\n\\. Toma la linterna.","native layout receives complete Spanish before drawing, using actual English controls");
+    assert.equal(f.$gameMessage.allText(),key);
+    while(Date.now()<deadline&&!f.posts.some(v=>v.text==="Please check the window."))await wait(30);
+    assert.ok(f.posts.some(v=>v.text==="Please check the window."),"unvisited content still processed in game");
+    assert.ok(f.posts.some(v=>v.text==="You need the key."));assert.ok(!f.posts.some(v=>v.text===one),"do not fetch the known incomplete whole sentence again");
+    // Switch to Japanese. Do not carry English's extra pause into the
+    // Japanese lantern message merely because it is in the same key.
+    locale=4;f.$gameMessage._texts=["\\tl{R4003}"];
+    let other=null;
+    while(Date.now()<deadline){
+        other=new c.Window_Message();other.startMessage();
+        if(other.nativeInput==="Toma la linterna.")break;
+        await wait(40);
+    }
+    assert.equal(other.nativeInput,"Toma la linterna.","native selected language is revalidated");
+    assert.equal(f.$gameMessage.allText(),"\\tl{R4003}");
+    const title2=new c.Scene_Title();c.SceneManager._scene=title2;title2.start();title2.commandNewGame();assert.equal(title2.launches,1);
+    assert.equal(state.files[path.join(data,"Languages.tsv")],raw);assert.equal(state.files[path.join(data,"Map001.json")],mapJson);
+    assert.ok(!f.posts.some(v=>/\\tl\{|R400[1-4]/.test(v.text)));
+}
+
+
+async function testR5DynamicNamesAndAuthoredRepetition(mz){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const one="\\c[1](Please wait here. \\v[21], I'm sorry...)";
+    const two="\\c[1](Judging by \\v[23]'s expression, something happened...)";
+    const three="Hahahaha! \\.What a lovely day! \\.What a lovely day!";
+    const rows=[["Key","English","Chinese(Simplified)","Chinese(Traditional)","Japanese"],
+        ["R5001","Guide","指南","導覽","ガイド"],
+        ["R5002",one,"等一下。","等一下。","待ってください。"],
+        ["R5003",two,"看表情。","看表情。","表情を見ると。"],
+        ["R5004",three,"好天气！","好天氣！","いい天気！"],
+        ["R5005","Please check the window.","查窗","查看窗戶","窓を調べてください。"]];
+    const raw=rows.map(r=>r.join("\t")).join("\n")+"\n";
+    state.files[path.join(data,"Languages.tsv")]=raw;
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    const folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");state.dirs[folder]=true;
+    const translations={"Please wait here.":"Espera aquí.",", I'm sorry...":"Lo siento...","Judging by":"A juzgar por",
+        "the expression":"La expresión","something happened...":"Algo pasó...",
+        "Hahahaha!":"¡Jajaja!","What a lovely day!":"¡Qué día maravilloso!","Please check the window.":"Revisa la ventana."};
+    state.files[journal]=Object.entries(translations).map(([original,translated])=>JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original,translated,composed:false})).join("\n")+"\n";
+    const values={21:"Alex",23:"小林"};let writes=0;
+    const f=fixture(15,{mz,fsState:state,cacheReadDelay:70,batch:true,nativePaint:true,nativeWidth:1000,
+        plugins:[{name:"VisuMZ_1_MessageCore",status:true,parameters:{"Localization:struct":JSON.stringify({"Enable:eval":"true","LangFiletype:str":"tsv","TsvFilename:str":"Languages.tsv"})}}],
+        responses:translations,configure(c){
+            c.$gameVariables={value(i){return values[i]},setValue(){writes++;throw Error("unexpected write")}};
+            const expand=t=>t.replace(/(?:\\|\x1b)tl\{([^}]+)\}/gi,(token,k)=>{const r=rows.find(r=>r[0]===k);return r?r[1]:token})
+                .replace(/(?:\\|\x1b)v\[(\d+)\]/gi,(_,i)=>values[i]).replace(/\\c\[/gi,"\x1bC[").replace(/\\\./g,"\x1b.");
+            c.Window_Base.prototype.convertEscapeCharacters=expand;c.Window_Message.prototype.convertEscapeCharacters=expand;
+            const base=c.Window_Message.prototype.startMessage;
+            c.Window_Message.prototype.startMessage=function(){
+                this.nativeInput=c.$gameMessage.allText();base.apply(this,arguments);
+                this._textState.text=expand(this.nativeInput);
+            };
+        }});
+    const c=f.context,title=new c.Scene_Title();c.SceneManager._scene=title;title.start();title.commandNewGame();
+    assert.equal(title.launches,1);
+    const map=new c.Scene_Map();c.SceneManager._scene=map;map.createAllWindows();map.update();
+    const key=id=>"\\tl{R500"+id+"}";
+    f.$gameMessage._texts=[key(2)];const first=new c.Window_Message();first.startMessage();first.finishPage();
+    const limit=Date.now()+6000;
+    while(Date.now()<limit&&!first.contents.ops.some(x=>x.text.includes("Espera"))){await wait(35);first.update();}
+    assert.ok(first.contents.ops.some(x=>x.text.includes("Espera")),"late colored template must match expanded variable");
+    assert.ok(first.contents.ops.some(x=>x.text.includes("Alex")),"runtime name stays visible");
+    assert.equal(first.originalStarts,1);assert.equal(f.$gameMessage.allText(),key(2));
+    async function replay(id,expected){
+        f.$gameMessage._texts=[key(id)];
+        let w;
+        while(Date.now()<limit){
+            w=new c.Window_Message();w.startMessage();
+            if(w.nativeInput===expected)return w;
+            await wait(35);
+        }
+        assert.equal(w.nativeInput,expected,"template not reconstructed "+id);
+    }
+    const oneExpected="\\c[1](Espera aquí. \\v[21], Lo siento...)";
+    await replay(2,oneExpected);
+    values[21]="Taylor";const changed=await replay(2,oneExpected);
+    assert.ok(changed._textState.text.includes("Taylor"));assert.ok(!changed._textState.text.includes("Alex"));
+    const p=await replay(3,"\\c[1](A juzgar por la expresión de \\v[23], Algo pasó...)");
+    assert.ok(p._textState.text.includes("小林"));
+    await replay(4,"¡Jajaja! \\.¡Qué día maravilloso! \\.¡Qué día maravilloso!");
+    assert.equal(writes,0);assert.equal(state.files[path.join(data,"Languages.tsv")],raw);
+    assert.ok(!f.posts.some(v=>/\\tl\{|\\v\[|Taylor|小林/.test(v.text)));
+}
+
+(async()=>{
+    await testR5DynamicNamesAndAuthoredRepetition(false);
+    await testR4NativeTsvMixedControlsAndCoverage(false);
+    await testExternalTsvLookupAndLatePresentation(false);
+    await testNameIdentityMigrationAndNameSetupFirstPaint();
+    await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
+    await testR3PatchRepairsStandardNoticeAndKeepsColor();
+    await testR3P2NoticeVariantsOnFirstNativeDraw();
+    await testR4EnglishFormatContextAndStaleCache();
+    await testR4InkAndCsvReadOnlyPreload();
+    await testR4P2NoStaleLateOverlayAndNoArtificialWait();
+    await testR4P2QuestMetadataAndVisibleRefresh();
+    await testR4P2PriorityCommonAndInkChoice();
+    await testR4P3NativeSafetyAndNames();
+    await testR4P3PageAndChoiceSafety();
+    await testR4P4ShortTextAndMacroAlias();
+    await testR4P4LateIconAndAmount();
+    await testR4P4FullQuestTemplateAndAccents();
+    await testR4P4AmbientNativeCaption();
+    await testR4P5QuestOverrideAndCaptionAlias();
+    await testR4P5DynamicNativeCaptionConversion();
+    await testR4P5BFormattedMessageBodyReplay();
+    await testR4P6GalvRealFactoryContract();
+    await testR4P7ExternalSheetPreparesBeforeFirstGame();
+    await testR4P7JapanesePrimaryAndLiveChoice();
+    await testR4P8CsvVariablesAndPresentation();
+    await testR4P9ContinueInventoryAndRestore();
+    await testR4P9LateCsvNamedMessage();
+    await testR3P2KnownLinesNotHiddenByOnePendingLine();
+    await testTitlePreparationCanBeSkipped();
+    await testPermanentQualityFailureIsNotRetried();
+    await testApprovedBilingualCorrectionsOverridePreviousNeuralCache();
+    await testFullNativeMenusAndNameOnlyText();
+    await testSpeakerHeadersAreNotMixedWithSpanish();
+    await testNativeControlsNeverReachNeuralOrChangeOnScreen();
+    await testNamesStayVisibleWhenMentionedInsideDialogue();
+    await testPersistentCacheAfterRestartWithoutWorker();
+    await testRejectDamagedOutputBeforeDiskOrRender();
+    await testUnconnectedGameIsPlayableAndF10Safe();
+    await testSlowModelNeverPausesText();
+    await testOriginalNWJSWithoutBufferFromOrNumberIsInteger();
+    await testOldNWJSAndPathFallback();
+    await testJapaneseDialogAndF10();
+    await testEnglishAndSpanish();
+    await testRPGControlsAndNoLateRewrite();
+    await testChoiceCacheOnlyAndNoOverwrite();
+    await testBoundedMapPrefetchAndPressure();
+    console.log("SERVIDOR_V2_MV_NATIVE_FAIL_OPEN_CACHE_PREFETCH_AND_F10_PASS");
+})().catch(e=>{console.error(e.stack);process.exitCode=1});

@@ -1,0 +1,46 @@
+name: Servidor v2 - selector EXE Windows native regression
+on:
+  push:
+    branches:
+      - feature/servidor-v2-identidad-rpg-mv-20261123
+    paths:
+      - "servidor_v2/cmd/servidor/**"
+      - ".github/workflows/servidor-v2-selector-win.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-selector:
+    name: Windows 64-bit EXE picker cancel and panic regression
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.2"
+      - name: Tests that caught the Windows EXE button crash
+        shell: pwsh
+        run: |
+          Push-Location servidor_v2
+          try {
+            go test -v ./cmd/servidor -run 'TestEXE|TestWinProc'
+            if ($LASTEXITCODE -ne 0) { throw 'IA_SELECTOR_WINDOWS_TEST_FAILURE' }
+            go vet ./cmd/servidor
+            if ($LASTEXITCODE -ne 0) { throw 'IA_SELECTOR_GO_VET_FAILED' }
+          } finally { Pop-Location }
+      - name: Cross-safe standalone Windows GUI executable
+        shell: pwsh
+        run: |
+          Push-Location servidor_v2
+          try {
+            go build -trimpath -ldflags '-H=windowsgui' -o (Join-Path $env:RUNNER_TEMP "Servidor-UI-Prueba.exe") ./cmd/servidor
+            if ($LASTEXITCODE -ne 0) { throw 'IA_SELECTOR_WINDOWS_BUILD_FAILED' }
+            if (!(Test-Path -LiteralPath (Join-Path $env:RUNNER_TEMP "Servidor-UI-Prueba.exe"))) {
+              throw 'IA_SELECTOR_WINDOWS_NO_EXE'
+            }
+          } finally { Pop-Location }
+      - name: Windows native picker API regression approved
+        run: echo "SERVIDOR_WINDOWS_EXE_SELECTOR_NULL_FILTER_AND_CANCEL_PASS"
