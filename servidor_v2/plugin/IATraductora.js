@@ -2390,12 +2390,11 @@ function firstViewMissing(win,raw,choice){
     firstViewRequest(source,raw);return true;
 }
 function firstViewWait(win){
-    // Large MV projects must never suspend the game loop while neural
-    // inference is pending. Visible messages and choices already enqueue
-    // foreground requests and can render the late result when it arrives.
-    // Keep the bounded first-view gate for MZ contracts and authored TSV
-    // localization, which may need variable/key resolution before display.
-    if(!isMZ&&!tsv.detected)return false;
+    // Large MV inventories must fail open: foreground messages and choices
+    // still request translation, but a 30-second neural wait can freeze a
+    // project with thousands of authored strings. Smaller MV projects retain
+    // a short first-view gate; MZ contracts and TSV localization keep theirs.
+    if(!isMZ&&!tsv.detected&&discovered.size>=1200)return false;
     if(inputFormActive()||win.pause||win._textState||
        (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return false;
     var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
@@ -2409,7 +2408,9 @@ function firstViewWait(win){
     if(!g||g.message!==m||g.scene!==scene||g.key!==key)
         g=win._iaFirstGate={message:m,scene:scene,key:key,started:now,checked:0,waiting:true};
     if(g.done)return false;
-    if(now-g.started>=FIRST_VIEW_LIMIT||(!state.connected&&now-g.started>=FIRST_VIEW_OFFLINE)){
+    var viewLimit=isMZ?FIRST_VIEW_LIMIT:2500;
+    var offlineLimit=isMZ?FIRST_VIEW_OFFLINE:1200;
+    if(now-g.started>=viewLimit||(!state.connected&&now-g.started>=offlineLimit)){
         g.done=true;g.waiting=false;return false;
     }
     if(g.checked&&now-g.checked<40)return g.waiting;
