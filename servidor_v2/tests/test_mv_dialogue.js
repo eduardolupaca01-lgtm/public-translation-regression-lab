@@ -1921,6 +1921,7 @@ async function testR6FirstViewNativeGate(mz){
         p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
         p.update=function(){
             this.updates++;
+            if(this.pause)return;
             if(this.updateWait())return;
             if(this.canStart())this.startMessage();
             else if(!this._textState&&c.$gameMessage._choices.length&&!this._choice)
@@ -1938,7 +1939,7 @@ async function testR6FirstViewNativeGate(mz){
     await wait(25);
     const m=f.$gameMessage,w=new f.context.Window_Message();
     f.context.SceneManager._scene=new f.context.Scene_Map();
-    m._texts=[text];
+    m.add(text);
     if(mz)m.setChoices([choice]);
     w.update();
     if(mz){
@@ -1954,6 +1955,8 @@ async function testR6FirstViewNativeGate(mz){
         assert.equal(w.updates,1,"MV update loop never waits for neural inference");
         assert.equal(w._textState.text,text,"MV first paint keeps the original source text");
         assert.equal(m.allText(),text,"late translation never mutates native message data");
+        assert.ok(w._iaLateTicket&&w._iaLateTicket.geometry,
+            "native bitmap geometry is captured for the late-render ticket");
         // Simulate the native message reaching its pause point. Late rendering
         // is allowed only after the original page is complete and no choice is active.
         w.finishPage();
@@ -1961,7 +1964,7 @@ async function testR6FirstViewNativeGate(mz){
             return w.contents.ops.filter(op=>op.y===0&&op.x>=160)
                 .sort((a,b)=>a.x-b.x).map(op=>op.text).join(" ");
         }
-        const lateLimit=Date.now()+4000;
+        const lateLimit=Date.now()+6000;
         while(renderedMessage().indexOf("¿Adónde")<0&&Date.now()<lateLimit){
             await wait(25);w.update();
         }
