@@ -2390,6 +2390,12 @@ function firstViewMissing(win,raw,choice){
     firstViewRequest(source,raw);return true;
 }
 function firstViewWait(win){
+    // Neural inference is asynchronous and must never suspend the native
+    // MV/MZ message loop. Visible messages and choices already enqueue their
+    // own foreground requests and can render the late result when it arrives.
+    // Keep the bounded first-view gate only for authored TSV localization,
+    // where the source table must resolve a native key before display.
+    if(!tsv.detected)return false;
     if(inputFormActive()||win.pause||win._textState||
        (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return false;
     var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
@@ -4194,11 +4200,14 @@ function scanDatabase(name,data){
             scriptProfile=true;
             if(prefetchedMap)scanMap(prefetchedMap,true);
         }
-        commonDeferred.forEach(function(initial,id){priorityCommon(id,initial);});commonDeferred.clear();
+        // The CommonEvents file can contain hundreds of thousands of event
+        // commands. Its command inventory is processed in small timer slices
+        // by scanCommonEventsChunked so JSON parsing does not lead into one
+        // more long synchronous walk on the game thread.
+        return;
     }
     data.forEach(function(row){
         if(!row||typeof row!=="object")return;
-        if(name==="CommonEvents.json"){scanCommands(row.list,false);return;}
         if(name==="Troops.json"){
             if(Array.isArray(row.pages))row.pages.forEach(function(p){if(p)scanCommands(p.list,false);});
             return;
@@ -4212,6 +4221,31 @@ function scanDatabase(name,data){
             if(typeof row[k]==="string")addPrefetch(row[k],false);
         });
     });
+}
+function scanCommonEventsChunked(data,done){
+    if(!Array.isArray(data)){done();return;}
+    var deferred=Array.from(commonDeferred.entries()),deferredAt=0,at=0;
+    commonDeferred.clear();
+    function slice(){
+        var started=Date.now(),worked=0;
+        try{
+            while(deferredAt<deferred.length&&worked<4&&Date.now()-started<5){
+                var entry=deferred[deferredAt++];
+                priorityCommon(entry[0],entry[1]);worked++;
+            }
+            while(at<data.length&&worked<12&&Date.now()-started<7&&discovered.size<MAX_DISCOVERED){
+                var row=data[at++];
+                if(row&&typeof row==="object")scanCommands(row.list,false);
+                worked++;
+            }
+        }catch(_){state.errors++;}
+        if(deferredAt<deferred.length||(at<data.length&&discovered.size<MAX_DISCOVERED)){
+            setTimeout(slice,0);return;
+        }
+        if(at<data.length)scanStats.limited=true;
+        done();
+    }
+    slice();
 }
 function startFullScan(){
     if(scanStarted||!content||(externalTables()&&!cacheReadDone))return;
@@ -4266,7 +4300,15 @@ function startFullScan(){
                             else files.unshift(first);
                         }
                     }
-                    scanDatabase(name,data);scanStats.files++;
+                    scanDatabase(name,data);
+                    if(name==="CommonEvents.json"){
+                        scanStats.files++;
+                        scanCommonEventsChunked(data,function(){
+                            nextPrefetch();setTimeout(step,0);
+                        });
+                        return;
+                    }
+                    scanStats.files++;
                     if(name==="System.json"&&data)csvPreferred=/^ja(?:[_-]|$)/i.test(data.locale||"")?"ja":"en";
                 }catch(_){scanStats.skipped++;}
                 nextPrefetch();
@@ -4298,16 +4340,27 @@ function deferPrefetch(item,retryAt){
         item.status="queued";(item.priority?priorityQueue:prefetchQueue).push(item);nextPrefetch();
     },Math.min(60000,Math.max(1500,(retryAt||Date.now()+1500)-Date.now()+30)));
 }
-// A single scheduler survives all native scene transitions.
+// A single scheduler survives all native scene transitions. Large projects
+// keep foreground text responsive by pausing bulk prefetch while a map or
+// battle is active; visible messages still use requestVisible directly.
+function activeGameplayScene(){
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    return !!scene&&(
+        (typeof Scene_Map!=="undefined"&&scene instanceof Scene_Map)||
+        (typeof Scene_Battle!=="undefined"&&scene instanceof Scene_Battle));
+}
 function nextPrefetch(){
     if(prefetchBusy||!state.connected||!cacheReadDone)return;
+    var largeInventory=discovered.size>=1200;
+    if(largeInventory&&activeGameplayScene())return;
     if(externalTables()&&diskReady&&diskQueue.length>=3000)return;
     if(!priorityQueue.length&&!prefetchQueue.length)return;
     prefetchBusy=true;
     setTimeout(function(){
         var jobs=[];
         function release(){
-            prefetchBusy=false;setTimeout(nextPrefetch,state.batch?15:45);
+            prefetchBusy=false;
+            setTimeout(nextPrefetch,discovered.size>=1200?120:(state.batch?15:45));
         }
         function failed(item){
             if(item.status==="ready")return;
@@ -4317,7 +4370,7 @@ function nextPrefetch(){
         }
         try{
             if(!state.connected){release();return;}
-            var cap=state.batch?4:1,budget=256;
+            var cap=state.batch?(discovered.size>=1200?1:4):1,budget=256;
             while(jobs.length<cap&&budget--&&(priorityQueue.length||prefetchQueue.length)){
                 var item=priorityQueue.length?priorityQueue.shift():prefetchQueue.shift();
                 if(item.status!=="queued")continue;
