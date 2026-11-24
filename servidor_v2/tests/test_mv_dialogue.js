@@ -111,8 +111,23 @@ function fixture(translationDelay=0,options={}){
         if(!this.drawn)this.drawn=[];
         this.drawn.push({text:t,y:y});
     };
-    function Bitmap(){}
-    Bitmap.prototype.drawText=function(t){this.lastText=String(t);return t;};
+    function Bitmap(w,h){
+        this.width=w||0;this.height=h||0;this.fontFace="GameFont";this.fontSize=24;
+        this.textColor="#ffffff";this.outlineWidth=2;this.paintOpacity=255;this.ops=[];
+    }
+    Bitmap.prototype.measureTextWidth=function(t){return String(t).length*12;};
+    Bitmap.prototype.drawText=function(t,x,y,w,h){
+        this.lastText=String(t);this.ops.push({text:String(t),x:x||0,y:y||0,w:w||0,h:h||0,color:this.textColor});return t;
+    };
+    Bitmap.prototype.clearRect=function(x,y,w,h){
+        this.ops=this.ops.filter(v=>v.x<x||v.y<y||v.x>=x+w||v.y>=y+h);
+        this.clears=(this.clears||0)+1;
+    };
+    Bitmap.prototype.blt=function(src,sx,sy,sw,sh,dx,dy){
+        const copied=src.ops.filter(v=>v.x>=sx&&v.y>=sy&&v.x<sx+sw&&v.y<sy+sh)
+            .map(v=>Object.assign({},v,{x:v.x-sx+dx,y:v.y-sy+dy}));
+        this.ops=this.ops.concat(copied);
+    };
     function Scene_Name(){}
     function Scene_Title(){
         this.starts=0;this.launches=0;this.frames=0;this.windows=[];
@@ -129,7 +144,28 @@ function fixture(translationDelay=0,options={}){
         name.setText=function(t){this.assigned=t;this.drawText(t,0,0,300);};
         this._nameWindow=name;
     };
-    Window_Message.prototype.startMessage=function(){this.originalStarts++};
+    Window_Message.prototype.startMessage=function(){
+        this.originalStarts++;
+        if(options.nativePaint){
+            this.pause=false;this._textState={text:$gameMessage.allText()
+                .replace(/<\/?wordwrap>/gi,"").replace(/\\n<[^>]+>/gi,"")
+                .replace(/\\m\[things\]/gi,"\x1bC[11]")
+                .replace(/\\m\[quests\]/gi,"\x1bC[23]")
+                .replace(/\\c\[/gi,"\x1bC["),index:0,x:168,left:168,y:0,height:32};
+            this.contents=new Bitmap(options.nativeWidth||900,options.nativeHeight||128);
+            this.contents.drawText("FACE",0,0,144,128);
+            this.newPage(this._textState);
+        }
+    };
+    if(options.nativePaint){
+        Window_Message.prototype.textColor=function(i){return "color-"+i;};
+        Window_Message.prototype.newPage=function(){this.pages=(this.pages||0)+1;};
+        Window_Message.prototype.finishPage=function(){
+            this.contents.drawText(this._textState.text,168,0,720,32);
+            this._textState=null;this.pause=true;
+        };
+        Window_Message.prototype.isAnySubWindowActive=function(){return !!this.choiceActive;};
+    }
     Window_Message.prototype.update=function(){this.updates++};
     Window_Message.prototype.terminateMessage=function(){this.terminated=(this.terminated||0)+1;};
     if(options.nativeWait){
@@ -660,18 +696,25 @@ async function testR4EnglishFormatContextAndStaleCache(){
     const shared={files:{[journal]:old},dirs:{[folder]:true}};
     const responses={};responses[plain]="Un visitante abre la puerta y entra en el salón.";
     responses.gate="puerta";responses.hall="salón";
-    const f=fixture(1,{fsState:shared,responses,nativeWait:true});await wait(30);
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{"Macro 1 Name":"Things","Macro 1 Text":"\\c[11]"}}];
+    const f=fixture(1,{fsState:shared,responses,nativeWait:true,nativePaint:true,plugins});await wait(30);
     const m=new f.context.Window_Message();
     const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
     f.$gameMessage._texts=[raw];m.startMessage();
     assert.equal(m.originalStarts,1,"untranslated text cannot pause native message start");
     assert.equal(m.updateWait(),false,"no artificial message wait");
-    m.pause=true;await wait(60);m.update();
+    m.finishPage();const bitmap=m.contents;
+    await wait(60);m.update();
     assert.equal(m.originalStarts,1,"late answer does not restart native message");
     assert.equal(f.$gameMessage.allText(),raw,"late result cannot mutate active source");
-    assert.ok(m._iaLateOverlay&&m._iaLateOverlay.visible,"same scene receives validated late Spanish");
-    assert.ok(m._iaLateOverlay.drawn.some(x=>x.text==="Un visitante abre la puerta y entra en el salón."));
-    m.terminateMessage();assert.equal(m.terminated,1);assert.equal(m._iaLateOverlay.visible,false);
+    assert.equal(scene.windows.length,0,"late translation must never create a window");
+    assert.equal(m.contents,bitmap,"native bitmap instance remains the same");
+    assert.equal(bitmap.clears,1,"replace the English in its original region");
+    assert.ok(bitmap.ops.some(x=>x.text==="FACE"),"native face retained");
+    assert.ok(bitmap.ops.some(x=>x.text==="puerta"&&x.color==="color-11"));
+    assert.ok(bitmap.ops.some(x=>x.text==="salón"&&x.color==="color-6"));
+    assert.ok(!bitmap.ops.some(x=>x.text.includes("A visitor")));
+    m.terminateMessage();assert.equal(m.terminated,1);assert.equal(m._iaLateTicket,null);
     f.$gameMessage._texts=[raw];m.startMessage();
     const expected="<WordWrap>Un visitante abre la \\m[things]puerta\\c[0] y entra en el \\c[6]salón\\c[0].";
     assert.equal(m.originalStarts,2);
@@ -728,13 +771,15 @@ async function testR4InkAndCsvReadOnlyPreload(){
 async function testR4P2NoStaleLateOverlayAndNoArtificialWait(){
     const sentence="We are ready to open the gate.";
     const response={};response[sentence]="Estamos listos para abrir la puerta.";
-    const f=fixture(90,{responses:response,nativeWait:true});await wait(30);
+    const f=fixture(90,{responses:response,nativeWait:true,nativePaint:true});await wait(30);
     const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
     const m=new f.context.Window_Message();f.$gameMessage._texts=[sentence];m.startMessage();
     assert.equal(m.originalStarts,1);assert.equal(m.updateWait(),false);
-    m.pause=true;f.context.SceneManager._scene=new f.context.Scene_Map();
+    m.finishPage();const before=JSON.stringify(m.contents.ops);
+    f.context.SceneManager._scene=new f.context.Scene_Map();
     await wait(120);m.update();
-    assert.ok(!m._iaLateOverlay,"no old dialogue may appear in another scene");
+    assert.equal(JSON.stringify(m.contents.ops),before,"no old dialogue may appear in another scene");
+    assert.equal(m._iaLateTicket,null);
     assert.equal(m.originalStarts,1);assert.equal(m.updates,1);
 }
 async function testR4P2QuestMetadataAndVisibleRefresh(){
@@ -794,6 +839,58 @@ async function testR4P2PriorityCommonAndInkChoice(){
     assert.ok(!f.posts.some(x=>/internal string/.test(x.text)));
 }
 
+
+async function testR4P3NativeSafetyAndNames(){
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{
+        "Macro 1 Name":"People","Macro 1 Text":"\\c[25]",
+        "Macro 2 Name":"Quests","Macro 2 Text":"\\c[23]"}}];
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const person="<WordWrap>\\n<Captain>\\c[25]Silver-Fox\\c[0] is here.";
+    const wrong="<WordWrap>\\n<Captain>\\c[25]Zorro Plateado\\c[0] está aquí.";
+    const quest="<WordWrap>Choose a \\m[Quests]Quest\\c[0] from the categories.";
+    const qbad="<WordWrap>Elija una \\m[Quests]búsqueda\\c[0] de las categorías.";
+    const shared={files:{[journal]:[[person,wrong],[quest,qbad]].map(v=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:v[0],translated:v[1],composed:true})).join("\n")+"\n"},dirs:{[folder]:true}};
+    const f=fixture(1,{plugins,fsState:shared,disconnected:true});await wait(40);
+    const m=new f.context.Window_Message();
+    f.$gameMessage._texts=[person];m.startMessage();
+    assert.equal(f.$gameMessage.allText(),"<WordWrap>\\n<Captain>\\c[25]Silver-Fox\\c[0] está aquí.","only author-declared proper-name color is preserved");
+    f.$gameMessage._texts=[quest];m.startMessage();
+    assert.equal(f.$gameMessage.allText(),"<WordWrap>Elija una \\m[Quests]misión\\c[0] de las categorías.");
+    assert.equal(f.posts.length,0,"repair existing journal without inference");
+    const bitmap=new f.context.Bitmap(500,100);
+    bitmap.drawText("-Main Quests (3)",0,0,500,30);
+    assert.equal(bitmap.lastText,"-Misiones principales (3)","custom book category and count");
+    const long="We are ready to go.";
+    const responses={[long]:"Estamos preparados para emprender un recorrido de considerable duración."};
+    const slow=fixture(10,{nativePaint:true,nativeWidth:320,nativeHeight:32,responses});
+    await wait(30);
+    const scene=new slow.context.Scene_Map();slow.context.SceneManager._scene=scene;
+    const win=new slow.context.Window_Message();
+    slow.$gameMessage._texts=[long];win.startMessage();win.finishPage();
+    const before=JSON.stringify(win.contents.ops);await wait(40);win.update();
+    assert.equal(JSON.stringify(win.contents.ops),before,"overflow never erases or clips the original");
+    assert.equal(scene.windows.length,0);
+    const command="We are here.\\!";
+    slow.$gameMessage._texts=[command];win.startMessage();win.finishPage();await wait(30);win.update();
+    assert.equal(win._iaLateTicket,null,"wait escape cannot be replayed by late renderer");
+    assert.equal(scene.windows.length,0);
+}
+async function testR4P3PageAndChoiceSafety(){
+    const line="We are here.",response={[line]:"Estamos aquí."};
+    const f=fixture(25,{responses:response,nativePaint:true});await wait(30);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    const m=new f.context.Window_Message();f.$gameMessage._texts=[line];m.startMessage();
+    m.newPage(m._textState);m.finishPage();const before=JSON.stringify(m.contents.ops);
+    await wait(50);m.update();
+    assert.equal(JSON.stringify(m.contents.ops),before,"multi-page messages do not get repainted as one page");
+    const other="We are ready.";f.$gameMessage._texts=[other];m.startMessage();m.finishPage();
+    m.choiceActive=true;const active=JSON.stringify(m.contents.ops);await wait(45);m.update();
+    assert.equal(JSON.stringify(m.contents.ops),active,"active choices never receive a late repaint");
+    assert.equal(scene.windows.length,0);
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -843,6 +940,8 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P2NoStaleLateOverlayAndNoArtificialWait();
     await testR4P2QuestMetadataAndVisibleRefresh();
     await testR4P2PriorityCommonAndInkChoice();
+    await testR4P3NativeSafetyAndNames();
+    await testR4P3PageAndChoiceSafety();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();

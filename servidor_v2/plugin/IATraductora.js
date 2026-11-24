@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P2-20261123"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P3-20261123"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -22,6 +22,7 @@ var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var runtimeActivated=false,connectionProbe=false,lastStatusProbe=0;
 var cache=new Map(),approvedKeys=new Map(),pending=new Map(),rejectedKeys=new Map(),maxWait=45000;
 var cacheReadDone=false,identityDrawDepth=0;
+var displayMacros=Object.create(null),personColors=Object.create(null);
 var cacheDir="",cacheFile="",diskReady=false,diskBusy=false,diskQueue=[];
 var diskStats={loaded:0,saved:0,rejected:0,errors:0};
 // A cache never includes game assets or saves. The schema is versioned to
@@ -301,7 +302,7 @@ function translate(source,text,priority){
     var key=source+"\u0000"+text;
     var fixed=stableDisplay(text,false);
     if(fixed!==null)return Promise.resolve(fixed);
-    var existing=cache.get(key);
+    var existing=repairDisplayTerms(source,text,cache.get(key));
     if(typeof existing==="string"&&validTranslation(source,text,existing,false))
         return Promise.resolve(existing);
     if(existing!==undefined)cache.delete(key);
@@ -398,6 +399,7 @@ function validTranslation(source,original,result,composed){
     return true;
 }
 function acceptCache(source,original,result,composed,persist){
+    result=repairDisplayTerms(source,original,result);
     if(!validTranslation(source,original,result,!!composed)){
         diskStats.rejected++;return false;
     }
@@ -488,6 +490,7 @@ function startPersistentCache(){
                     if(!lines[at]||lines[at].length>6000)continue;
                     try{
                         var r=JSON.parse(lines[at]);
+                        r.translated=repairDisplayTerms(r.source,r.original,r.translated);
                         if(r.schema!==CACHE_SCHEMA||!/^(ja|en)$/.test(r.source)||
                            !validTranslation(r.source,r.original,r.translated,r.composed)){
                             diskStats.rejected++;continue;
@@ -522,17 +525,85 @@ function startPersistentCache(){
 function isJapanese(s){return /[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff\uff66-\uff9d]/.test(s||"");}
 var englishUi={"Yes":"Sí","No":"No","New Game":"Nueva partida","Continue":"Continuar",
     "Options":"Opciones","Save":"Guardar","Load":"Cargar","Cancel":"Cancelar",
-    "Items":"Objetos","Equipment":"Equipo","Exit":"Salir","Quit Game":"Salir del juego"};
+    "Items":"Objetos","Equipment":"Equipo","Exit":"Salir","Quit Game":"Salir del juego",
+    "Quest":"Misión","Quests":"Misiones","Quest Journal":"Diario de misiones","Main Quests":"Misiones principales","Side Quests":"Misiones secundarias"};
 function englishLabel(text){
     return Object.prototype.hasOwnProperty.call(englishUi,text)?englishUi[text]:null;
 }
 function visibleProse(text){
     return protectedParts(text).filter(function(p){return !p.locked;}).map(function(p){return p.value;}).join("");
 }
+// Read only explicit, pure-color macro definitions; never execute or expand
+// arbitrary author macros. A color is a person marker only if the author
+// uses an identity label and no other macro assigns that color another role.
+function loadDisplayMacros(){
+    if(typeof $plugins==="undefined"||!Array.isArray($plugins))return;
+    var roles=Object.create(null);
+    $plugins.forEach(function(plugin){
+        if(!plugin||!plugin.status||!/^YEP_X_MessageMacros\d+$/.test(plugin.name)||!plugin.parameters)return;
+        var p=plugin.parameters;
+        for(var i=1;i<=300;i++){
+            var name=p["Macro "+i+" Name"],value=p["Macro "+i+" Text"];
+            if(typeof name!=="string"||!name.trim()||typeof value!=="string")continue;
+            var m=/^\\c\[(\d{1,3})\]$/i.exec(value.trim());if(!m)continue;
+            var color=Number(m[1]);if(color>255)continue;
+            var key=name.trim().toLowerCase();
+            if(!Object.prototype.hasOwnProperty.call(displayMacros,key))displayMacros[key]=color;
+            if(!Object.prototype.hasOwnProperty.call(displayMacros,String(i)))displayMacros[String(i)]=color;
+            var person=/^(?:people|person|persons|names|characters|npcs|npc)$/.test(key);
+            roles[color]=(roles[color]||0)|(person?1:2);
+        }
+    });
+    Object.keys(roles).forEach(function(k){if(roles[k]===1)personColors[k]=true;});
+}
+function formatColor(code){
+    var m=/^(?:\\|\x1b)c\[(\d{1,3})\]$/i.exec(code);
+    if(m&&Number(m[1])<=255)return Number(m[1]);
+    m=/^(?:\\|\x1b)m\[([A-Za-z0-9 _\-]{1,60})\]$/i.exec(code);
+    return m&&Object.prototype.hasOwnProperty.call(displayMacros,m[1].trim().toLowerCase())?
+        displayMacros[m[1].trim().toLowerCase()]:null;
+}
+function protectedPerson(open,value){
+    var color=formatColor(open),name=value.trim();
+    if(actorNames[name])return name;
+    return color!==null&&personColors[color]&&/^[A-Z][A-Za-z0-9'’.-]{0,30}(?:[ \-][A-Z][A-Za-z0-9'’.-]{0,30}){0,4}$/.test(name)&&
+        name.length<=75?name:null;
+}
+function repairDisplayTerms(source,original,result){
+    if(source!=="en"||typeof original!=="string"||typeof result!=="string")return result;
+    // Only matching paired color/macro spans are repaired. Never change the
+    // code, speaker tag, variable or unrelated narrative from the journal.
+    var pattern=/(\\(?:c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\]))([^\\\r\n]+)(\\c\[0\])/gi;
+    var expected=[],m;
+    while((m=pattern.exec(original))!==null)expected.push([m[1],m[2],m[3]]);
+    var at=0;
+    result=result.replace(pattern,function(all,open,body,close){
+        var e=expected[at++];
+        if(!e||e[0]!==open||e[2]!==close)return all;
+        var name=protectedPerson(open,e[1]);
+        if(name!==null)return open+e[1]+close;
+        if(/^\\m\[quests?\]$/i.test(open)&&/^\s*quests?\s*$/i.test(e[1])){
+            return open+(/quests/i.test(e[1])?"misiones":"misión")+close;
+        }
+        return all;
+    });
+    if(/\bquests?\b/i.test(visibleProse(original))&&
+       (/\\m\[quests?\]/i.test(original)||/\b(?:categories|journal|objectives|quest log|main quests|side quests)\b/i.test(visibleProse(original)))){
+        result=protectedParts(result).map(function(c){
+            return c.locked?c.value:c.value.replace(/\bbúsquedas?\b/gi,function(v){
+                var out=/s$/i.test(v)?"misiones":"misión";
+                return /^[A-ZÁÉÍÓÚ]/.test(v)?out.charAt(0).toUpperCase()+out.slice(1):out;
+            });
+        }).join("");
+    }
+    return result;
+}
 function languageFor(s){
     if(typeof s!=="string"||!s||s.length>1800)return null;
     if(isJapanese(s))return "ja";
     if(actorNames[s])return null;
+    if((typeof questTexts!=="undefined"&&questTexts.has(s))||
+       (typeof discovered!=="undefined"&&discovered.has("en\u0000"+s)))return "en";
     var visible=visibleProse(s);
     if(englishLabel(visible.trim())!==null)return "en";
     var prose=visible.replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
@@ -644,10 +715,11 @@ function englishFormatPlan(text){
     for(var i=0;i<parts.length;i++){
         var p=parts[i],v=p.value;
         if(!p.locked){plain+=v;if(v.trim())seen=true;if(active)active.text+=v;continue;}
-        if(!seen&&!active&&/^<[A-Za-z][A-Za-z .'\-]{0,48}>$/i.test(v)){prefix+=v;continue;}
+        if(!seen&&!active&&(/^<[A-Za-z][A-Za-z .'\-]{0,48}>$/i.test(v)||
+            /^\\n<[^\\<>\r\n]{1,75}>$/i.test(v))){prefix+=v;continue;}
         if(!active&&/^<\/wordwrap>$/i.test(v)&&i===parts.length-1){suffix+=v;continue;}
         if(!active&&/^(?:\\|\x1b)(?:c\[\d+\]|m\[[A-Za-z][A-Za-z0-9 _\-]{0,60}\])$/i.test(v)&&!/^(?:\\|\x1b)c\[0\]$/i.test(v)){active={open:v,text:"",close:""};continue;}
-        if(active&&/^(?:\\|\x1b)c\[0\]$/i.test(v)&&active.text.trim()){active.close=v;spans.push(active);active=null;continue;}
+        if(active&&/^(?:\\|\x1b)c\[0\]$/i.test(v)&&active.text.trim()){active.close=v;active.person=protectedPerson(active.open,active.text);spans.push(active);active=null;continue;}
         return null;
     }
     if(active||!plain.trim()||(!prefix&&!suffix&&!spans.length))return null;
@@ -668,14 +740,14 @@ function renderEnglishPlan(plan,whole,spanValues){
 }
 function englishPlanReady(text,plan){
     var whole=cachedPart("en",plan.plain);if(whole===null)return null;
-    var values=plan.spans.map(function(span){var k=span.text.trim();return actorNames[k]?k:cachedPart("en",k);});
+    var values=plan.spans.map(function(span){var k=span.text.trim();return span.person!==null&&span.person!==undefined?span.person:actorNames[k]?k:cachedPart("en",k);});
     if(values.some(function(x){return x===null;}))return null;
     var out=renderEnglishPlan(plan,whole,values);
     return out&&acceptCache("en",text,out,true,true)?cache.get("en\u0000"+text):null;
 }
 function englishPlanTranslate(text,plan,priority){
     var tasks=[translate("en",plan.plain,priority)];
-    plan.spans.forEach(function(span){var k=span.text.trim();tasks.push(actorNames[k]?Promise.resolve(k):translate("en",k,priority));});
+    plan.spans.forEach(function(span){var k=span.text.trim();tasks.push(span.person!==null&&span.person!==undefined?Promise.resolve(span.person):actorNames[k]?Promise.resolve(k):translate("en",k,priority));});
     return Promise.all(tasks).then(function(values){
         if(values.some(function(v){return v===null;}))return null;
         var out=renderEnglishPlan(plan,values[0],values.slice(1));
@@ -733,8 +805,9 @@ function translatePreservingControls(source,text,skipPlan,priority){
     var rest=chunks.filter(function(c){return !c.locked;}).map(function(c){return c.value;}).join("");
     if(/\\[A-Za-z]/.test(rest))return Promise.resolve(null);
     if(chunks.length===1 && !chunks[0].locked)return translate(source,text,priority);
-    return Promise.all(chunks.map(function(chunk){
+    return Promise.all(chunks.map(function(chunk,index){
         if(chunk.locked)return Promise.resolve(chunk.value);
+        if(source==="en"&&index>0&&index+1<chunks.length&&/^(?:\\|\x1b)c\[0\]$/i.test(chunks[index+1].value)&&protectedPerson(chunks[index-1].value,chunk.value)!==null)return Promise.resolve(chunk.value);
         var before=(chunk.value.match(/^\s*/)||[""])[0];
         var after=(chunk.value.match(/\s*$/)||[""])[0];
         var body=chunk.value.slice(before.length,chunk.value.length-after.length);
@@ -875,7 +948,7 @@ function cachedPart(source,text){
     if(approvedKeys.has(key))return approvedKeys.get(key);
     var fixed=stableDisplay(text,false);
     if(fixed!==null)return fixed;
-    var old=cache.get(key);
+    var old=repairDisplayTerms(source,text,cache.get(key));
     if(typeof old==="string"){
         if(validTranslation(source,text,old,true))return old;
         cache.delete(key);diskStats.rejected++;
@@ -921,7 +994,7 @@ function readyText(source,text){
         if(!body||!(source==="ja"?isJapanese(body):/[A-Za-z]{2}/.test(body)&&!actorNames[body])){
             parts.push(c.value);continue;
         }
-        var result=cachedPart(source,body);
+        var result=source==="en"&&i>0&&i+1<chunks.length&&/^(?:\\|\x1b)c\[0\]$/i.test(chunks[i+1].value)&&protectedPerson(chunks[i-1].value,c.value)!==null?body:cachedPart(source,body);
         if(result===null)return null;
         if(result!==body)changed=true;
         parts.push(before+result+after);
@@ -1021,7 +1094,18 @@ function translatedNativeLabel(text,identity){
 function isQuestWindow(win){
     return !!(win&&win.constructor&&/^Window_Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)/.test(win.constructor.name||""));
 }
+// Match only known quest labels/titles on nonstandard bitmap-based journals.
+// Decoration and numeric counters remain the author's original characters.
+function questCachedLabel(text){
+    if(typeof text!=="string"||text.length>220||actorNames[text])return null;
+    var m=/^([ \t\-–—]*)(.*?)([ \t]*(?:\(\d{1,6}\)|\[\d{1,6}\])?[ \t]*)$/.exec(text);
+    if(!m||!m[2])return null;
+    var value=m[2],translated=Object.prototype.hasOwnProperty.call(questLabels,value)?questLabels[value]:null;
+    if(translated===null&&questTexts.has(value))translated=readyText(questTexts.get(value),value);
+    return translated!==null&&translated!==value?m[1]+translated+m[3]:null;
+}
 function questDraw(win,text){
+    var label=questCachedLabel(text);if(label!==null)return label;
     if(Object.prototype.hasOwnProperty.call(questLabels,text))return questLabels[text];
     var source=questSource(text);
     if(!source)return text;
@@ -1062,7 +1146,8 @@ function hookNativeSurface(){
                 try{
                     if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
                         if(!identity&&isQuestWindow(this))args[0]=questDraw(this,args[0]);
-                        else args[0]=translatedNativeLabel(args[0],identity);
+                        else {var bookLabel=!identity?questCachedLabel(args[0]):null;
+                            args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
                         if(!identity&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
                            languageFor(args[0])==="en"){
@@ -1106,7 +1191,7 @@ function hookNativeSurface(){
             var args=Array.prototype.slice.call(arguments);
             try{
                 if(!identityDrawDepth&&typeof args[0]==="string"&&args[0].length>=2)
-                    args[0]=translatedNativeLabel(args[0],false);
+                    {var label=questCachedLabel(args[0]);args[0]=label!==null?label:translatedNativeLabel(args[0],false);}
             }catch(_){state.errors++;}
             return bitmapDraw.apply(this,args);
         };
@@ -1137,58 +1222,140 @@ function requestVisible(source,text){
 }
 // A late answer is presentation only. Never repeat native message start,
 // mutate an active text state, consume input or restart story execution.
-var lateStats={shown:0,requested:0};
-function hideLate(win){
-    if(win._iaLateOverlay&&typeof win._iaLateOverlay.hide==="function")win._iaLateOverlay.hide();
-    win._iaLateTicket=null;
+// Translate in the original native message bitmap, never in another window.
+// The late renderer accepts only simple, demonstrably presentation-only
+// content. All script/variable/choice/event state stays with the game.
+var lateStats={shown:0,requested:0,unsupported:0};
+function hideLate(win){win._iaLateTicket=null;}
+function nativeRenderParts(text){
+    if(typeof text!=="string"||text.length>1800)return null;
+    var re=/<\/?wordwrap>|\\n<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\])|\r?\n|<br>/gi;
+    var parts=[],flat="",at=0,m,color=null,seen=false;
+    function prose(value){
+        if(/[\\\x1b<>|\f]/.test(value))return false;
+        if(value){parts.push({text:value,color:color});flat+=value;if(value.trim())seen=true;}
+        return true;
+    }
+    while((m=re.exec(text))!==null){
+        if(!prose(text.slice(at,m.index)))return null;
+        var code=m[0];at=re.lastIndex;
+        if(/^\\n</i.test(code)){if(seen)return null;continue;}
+        if(/^<\/?wordwrap>$/i.test(code))continue;
+        if(/^(?:\r?\n|<br>)$/i.test(code)){parts.push({text:"\n",color:color});flat+="\n";continue;}
+        color=formatColor(code);if(color===null)return null;
+    }
+    if(!prose(text.slice(at))||!flat.trim())return null;
+    return {parts:parts,flat:flat};
 }
-function lateSafe(text){
-    return text.length<=1000&&text.split("\n").length<=4&&
-        protectedParts(text).every(function(c){
-            return !c.locked||c.literal||/^(?:\r?\n|<\/?wordwrap>|(?:\\|\x1b)c\[\d+\]|\\m\[[A-Za-z][A-Za-z0-9 _\-]{0,60}\])$/i.test(c.value);
+function plainCompare(text){return text.replace(/\s+/g," ").trim();}
+var nativeStyleKeys=["fontFace","fontSize","fontBold","fontItalic","textColor","outlineColor","outlineWidth","paintOpacity"];
+function snapshotMessage(win,ticket){
+    var ts=win._textState,b=win.contents;
+    if(!ts||!b||typeof ts.text!=="string"||!integer(ts.index)||ts.index!==0||
+       !integer(b.width)||!integer(b.height)||b.width>4096||b.height>2048||
+       typeof b.clearRect!=="function"||typeof b.blt!=="function"||
+       typeof win.textColor!=="function")return;
+    var original=nativeRenderParts(ticket.displayed),native=nativeRenderParts(ts.text);
+    if(!original||!native||plainCompare(original.flat)!==plainCompare(native.flat))return;
+    // Native plugin conversion can change a macro or text alignment.
+    // Require the same visible color runs, not merely the same words.
+    function signature(parsed){
+        return parsed.parts.filter(function(x){return x.text.trim();})
+            .map(function(x){return String(x.color)+":"+plainCompare(x.text);}).join("\u0002");
+    }
+    if(signature(original)!==signature(native))return;
+    var x=typeof ts.x==="number"?ts.x:ts.left,y=ts.y,h=ts.height;
+    if(!isFinite(x)||!isFinite(y)||!isFinite(h)||x<0||y<0||h<8||h>128||
+       x>=b.width||y>=b.height)return;
+    var style={};
+    nativeStyleKeys.forEach(function(k){if(b[k]!==undefined)style[k]=b[k];});
+    ticket.geometry={bitmap:b,x:Math.floor(x),y:Math.floor(y),line:Math.ceil(h),
+        width:b.width,height:b.height,style:style,original:native.flat};
+}
+function planNativeWords(parsed,bitmap,win,geometry){
+    var words=[],word=[],space=false;
+    function flush(){
+        if(word.length){words.push({runs:word,space:space});word=[];space=false;}
+    }
+    for(var i=0;i<parsed.parts.length;i++){
+        var part=parsed.parts[i],pieces=part.text.match(/\n|[ \t]+|[^\n \t]+/g)||[];
+        pieces.forEach(function(t){
+            if(t==="\n"){flush();words.push({line:true});space=false;}
+            else if(/^[ \t]+$/.test(t)){flush();space=true;}
+            else word.push({text:t,color:part.color});
         });
+    }
+    flush();
+    var left=geometry.x,top=geometry.y,line=geometry.line,
+        width=geometry.width-left,height=geometry.height-top,ops=[],x=0,y=0;
+    if(width<=0||height<line)return null;
+    var gap=bitmap.measureTextWidth(" ");
+    for(var j=0;j<words.length;j++){
+        var w=words[j];if(w.line){x=0;y+=line;continue;}
+        var lengths=w.runs.map(function(r){return bitmap.measureTextWidth(r.text);});
+        if(lengths.some(function(v){return !isFinite(v)||v<0;}))return null;
+        var total=lengths.reduce(function(a,b){return a+b;},0),pad=x&&w.space?gap:0;
+        if(total>width)return null;
+        if(x+pad+total>width){x=0;y+=line;pad=0;}
+        if(y+line>height)return null;
+        x+=pad;
+        for(var k=0;k<w.runs.length;k++){
+            var r=w.runs[k],c=r.color===null?geometry.style.textColor:win.textColor(r.color);
+            if(typeof c!=="string")return null;
+            ops.push({text:r.text,x:x,y:y,w:Math.max(1,Math.ceil(lengths[k])+4),color:c});
+            x+=lengths[k];
+        }
+    }
+    return ops.length?ops:null;
+}
+function replaceNativeMessage(win,ticket){
+    var g=ticket.geometry,b=win.contents,parsed=nativeRenderParts(ticket.result);
+    if(!g||b!==g.bitmap||b.width!==g.width||b.height!==g.height||!parsed||
+       typeof Bitmap!=="function")return false;
+    // Never clear a face or nameplate. The native text starts to the right
+    // of its face. Stage both the new render and a rollback copy offscreen.
+    var margin=Math.max(2,Math.ceil(Number(g.style.outlineWidth)||0)+1),
+        x=Math.max(0,g.x-margin),y=g.y,w=g.width-x,h=g.height-y;
+    if(w*h>4096*2048||w<=0||h<=0)return false;
+    var stage=null,backup=null,changed=false,opacity=b.paintOpacity;
+    try{
+        stage=new Bitmap(w,h);backup=new Bitmap(w,h);
+        if(typeof stage.measureTextWidth!=="function"||typeof stage.drawText!=="function"||typeof backup.blt!=="function")return false;
+        nativeStyleKeys.forEach(function(k){if(g.style[k]!==undefined)stage[k]=g.style[k];});
+        var ops=planNativeWords(parsed,stage,win,g);
+        if(!ops)return false; // no clipping; leave native original untouched
+        identityDrawDepth++;
+        try{
+            ops.forEach(function(op){
+                stage.textColor=op.color;
+                stage.drawText(op.text,op.x+g.x-x,op.y,op.w,g.line,"left");
+            });
+        }finally{identityDrawDepth--;}
+        backup.blt(b,x,y,w,h,0,0);
+        b.paintOpacity=255;changed=true;b.clearRect(x,y,w,h);
+        b.blt(stage,0,0,w,h,x,y);
+        return true;
+    }catch(_){
+        if(changed&&backup){try{b.clearRect(x,y,w,h);b.blt(backup,0,0,w,h,x,y);}catch(__){}}
+        return false;
+    }finally{
+        b.paintOpacity=opacity;
+        [stage,backup].forEach(function(v){if(v&&typeof v.destroy==="function")try{v.destroy();}catch(_){}});
+    }
 }
 function displayLate(win){
-    var ticket=win._iaLateTicket;
-    if(!ticket)return;
+    var ticket=win._iaLateTicket;if(!ticket)return;
     if(typeof SceneManager==="undefined"||!ticket.scene||SceneManager._scene!==ticket.scene||
        typeof $gameMessage==="undefined"||$gameMessage!==ticket.message||
        !$gameMessage.hasText()||$gameMessage.allText()!==ticket.displayed){
         hideLate(win);return;
     }
-    // Only final pause, never an intermediate page or active choice.
     if(!ticket.result||ticket.drawn||!win.pause||win._textState||
-       (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return;
-    if(typeof Window_Base==="undefined"||typeof ticket.scene.addWindow!=="function")return;
-    var plain=protectedParts(ticket.result).filter(function(c){return !c.locked||c.literal||/^\r?\n$/.test(c.value);})
-        .map(function(c){return c.value;}).join("");
-    if(!plain.trim())return;
-    var width=Math.min(1000,Math.max(280,(Graphics.boxWidth||816)-24)),rows=[];
-    var overlay=win._iaLateOverlay;
-    if(!overlay){
-        overlay=new Window_Base(12,8,width,192);overlay._iaOwnSurface=true;
-        if(!overlay.contents)overlay.initialize(12,8,width,192);
-        overlay.opacity=240;
-        ticket.scene.addWindow(overlay);win._iaLateOverlay=overlay;
-    }
-    overlay.contents.fontSize=20;
-    var measure=function(t){return typeof overlay.textWidth==="function"?overlay.textWidth(t):t.length*12;};
-    plain.split(/\r?\n/).forEach(function(line){
-        var current="";
-        line.split(/\s+/).forEach(function(word){
-            if(current&&measure(current+" "+word)>overlay.contentsWidth()){
-                rows.push(current);current=word;
-            }else current+=(current?" ":"")+word;
-        });
-        if(current)rows.push(current);
-    });
-    if(!rows.length||rows.length>4){overlay.hide();ticket.drawn=true;return;}
-    overlay.y=Math.max(4,Math.min((Graphics.boxHeight||624)-192,(typeof win.y==="number"&&win.y>=200)?win.y-196:8));
-    overlay.contents.clear();overlay.contents.fontSize=16;
-    overlay.drawText("IA Traductora · Español",0,0,overlay.contentsWidth(),"left");
-    overlay.contents.fontSize=20;
-    rows.forEach(function(row,i){overlay.drawText(row,0,28+i*30,overlay.contentsWidth(),"left");});
-    overlay.show();ticket.drawn=true;state.shown++;lateStats.shown++;
+       (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive())||
+       (typeof $gameMessage.isChoice==="function"&&$gameMessage.isChoice()))return;
+    ticket.drawn=true;
+    if(ticket.pages<=1&&replaceNativeMessage(win,ticket)){state.shown++;lateStats.shown++;}
+    else lateStats.unsupported++;
 }
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
@@ -1206,41 +1373,57 @@ function hookMessages(){
                     }else{
                         var partial=readyIndependentLines(source,text);
                         if(partial!==null)$gameMessage._texts=partial.split("\n");
-                        if(state.connected){
-                            var win=this,ticket=null;
-                            if(source==="en"&&lateSafe(text)){
-                                ticket={message:$gameMessage,displayed:$gameMessage.allText(),
-                                    scene:typeof SceneManager!=="undefined"?SceneManager._scene:null,
-                                    result:null,drawn:false};
-                                win._iaLateTicket=ticket;lateStats.requested++;
-                            }
-                            requestVisible(source,text).then(function(result){
-                                if(ticket&&win._iaLateTicket===ticket&&typeof result==="string"&&result!==text&&
-                                   validTranslation(source,text,result,true))ticket.result=result;
-                            },function(){state.errors++;});
-                        }else addPrefetch(text,true);
+                        var win=this,ticket=null;
+                        if(source==="en"&&nativeRenderParts(text)){
+                            ticket={message:$gameMessage,displayed:$gameMessage.allText(),
+                                scene:typeof SceneManager!=="undefined"?SceneManager._scene:null,
+                                result:null,drawn:false,pages:0,geometry:null};
+                            win._iaLateTicket=ticket;lateStats.requested++;
+                        }
+                        if(state.connected)requestVisible(source,text).then(function(result){
+                            if(ticket&&win._iaLateTicket===ticket&&typeof result==="string"&&result!==text&&
+                               validTranslation(source,text,result,true))ticket.result=result;
+                        },function(){state.errors++;});
+                        else addPrefetch(text,true);
                     }
                 }
             }
         }catch(_){state.errors++;}
-        return original.apply(this,arguments);
+        var out=original.apply(this,arguments);
+        if(this._iaLateTicket)try{snapshotMessage(this,this._iaLateTicket);}catch(_){hideLate(this);}
+        return out;
+    };
+    var newPage=proto.newPage;
+    if(typeof newPage==="function")proto.newPage=function(){
+        var t=this._iaLateTicket;if(t)t.pages++;
+        return newPage.apply(this,arguments);
     };
     var update=proto.update;
     if(typeof update==="function")proto.update=function(){
-        var out=update.apply(this,arguments);
+        // Apply before native input consumes a final pause. No new window.
+        var ticket=this._iaLateTicket;
+        if(ticket&&!ticket.result&&state.connected&&ticket.scene&&
+           typeof SceneManager!=="undefined"&&SceneManager._scene===ticket.scene&&
+           this.pause&&!this._textState){
+            try{var candidate=readyText("en",ticket.displayed);
+                if(typeof candidate==="string"&&candidate!==ticket.displayed&&validTranslation("en",ticket.displayed,candidate,true))ticket.result=candidate;
+            }catch(_){}
+        }
         try{displayLate(this);}catch(_){hideLate(this);state.errors++;}
-        return out;
+        return update.apply(this,arguments);
     };
     var terminate=proto.terminateMessage;
-    if(typeof terminate==="function")proto.terminateMessage=function(){
-        hideLate(this);return terminate.apply(this,arguments);
-    };
+    if(typeof terminate==="function")proto.terminateMessage=function(){hideLate(this);return terminate.apply(this,arguments);};
     if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.add==="function"){
         var add=Game_Message.prototype.add;
         Game_Message.prototype.add=function(text){
             var out=add.apply(this,arguments);
             try{
-                if(typeof text==="string"&&languageFor(text))addPrefetch(text,true);
+                var source=typeof text==="string"?languageFor(text):null;
+                if(source){
+                    addPrefetch(text,true);
+                    if(state.connected&&pending.size<90)requestVisible(source,text).catch(function(){state.errors++;});
+                }
                 nextPrefetch();
             }catch(_){state.errors++;}
             return out;
@@ -1286,7 +1469,8 @@ var tableStats={files:0,candidates:0};
 var questTexts=new Map(),questStats={records:0,fields:0,ready:0};
 var commonEventLists=null,commonPrioritySeen=new Map(),commonInitialSeen=new Map(),commonDeferred=new Map();
 var questLabels={"Quest":"Misión","Quests":"Misiones","Objectives":"Objetivos","Rewards":"Recompensas",
-    "Description":"Descripción","Completed":"Completadas","Failed":"Fallidas","Active":"Activas","All":"Todas"};
+    "Description":"Descripción","Completed":"Completadas","Failed":"Fallidas","Active":"Activas","All":"Todas",
+    "Main Quests":"Misiones principales","Side Quests":"Misiones secundarias","Quest Journal":"Diario de misiones","Available":"Disponibles","Journal":"Diario"};
 function questSource(text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text])return null;
     return questTexts.get(text)||languageFor(text)||null;
@@ -1299,6 +1483,9 @@ function registerQuestText(text){
     if(!source||questTexts.has(text)||questTexts.size>=6000)return;
     questTexts.set(text,source);questStats.fields++;
     addPrefetch(text,false,source);
+    // Titles may be drawn by a custom book directly without their color code.
+    var plain=text.replace(/^(?:<WordWrap>|\\c\[\d{1,3}\])+/gi,"").trim();
+    if(plain!==text&&plain&&!/[\\<>\x1b]/.test(plain))registerQuestText(plain);
 }
 function questValues(value,depth){
     if(depth>5||value===null||value===undefined)return;
@@ -1322,6 +1509,17 @@ function scanQuestParameters(done){
         Object.keys(plugin.parameters).forEach(function(k){
             if(/^Quest \d{1,5}$/.test(k)&&tasks.length<1000)tasks.push(plugin.parameters[k]);
         });
+        if(plugin.name==="YEP_QuestJournal"){
+            questValues(plugin.parameters["Quest Command"],0);
+            ["Quest Category Window","Quest List Window","Quest Title Window","Quest Data Window"].forEach(function(key){
+                try{
+                    var field=JSON.parse(plugin.parameters[key]||"{}");
+                    ["Available Text","Completed Text","Failed Text","All Text","Cancel Text","Type Order","No Quest Title","No Data Text"].forEach(function(k){
+                        if(Object.prototype.hasOwnProperty.call(field,k))questValues(field[k],0);
+                    });
+                }catch(_){}
+            });
+        }
     });
     function slice(){
         var cap=12;
@@ -1411,7 +1609,13 @@ function walkInkStory(data,done){
             if(typeof v==="string"){
                 if(v.charAt(0)!=="^")continue;
                 if(f.evalMode||f.tag){inkStats.excluded++;continue;}
+                // Output fragments after a dynamic macro value often begin with the
+                // closing parenthesis. Also inventory the corresponding visible suffix.
                 var item=inkDisplayText(v);
+                if(/^\^\)\s+/.test(v)&&f.values[f.index-2]==="/ev"){
+                    var suffix=inkDisplayText("^"+v.slice(2).trim());
+                    if(suffix)addPrefetch(suffix.text,false);
+                }
                 if(!item){inkStats.excluded++;continue;}
                 inkStats.candidates++;addPrefetch(item.text,false);
                 // Individual formatting spans use a dedicated trusted path.
@@ -1873,7 +2077,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
-            "Misiones: "+questStats.records+" · Tardías: "+lateStats.shown+" · F10"
+            "Misiones: "+questStats.records+" · Redibujos: "+lateStats.shown+" · F10"
         ];
         for(var i=0;i<lines.length;i++){
             if(i===4&&lines[i].length>32)this.contents.fontSize=16;
@@ -1915,7 +2119,7 @@ try{
     state.phase="RUTA";initPaths();
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
-    startPersistentCache();
+    loadDisplayMacros();startPersistentCache();
     state.phase="NUCLEO";
     if(!ordinary(path.join(content,"js","rpg_core.js")))
         throw Error("IA_NUCLEO_MV_NO_ENCONTRADO");
