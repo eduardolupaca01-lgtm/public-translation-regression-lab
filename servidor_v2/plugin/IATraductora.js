@@ -1950,6 +1950,10 @@ function scheduleNativeDisplayRefresh(owner,bitmap){
     if(typeof setTimeout==="function")setTimeout(finish,0);else finish();
 }
 function nativeDisplayProjection(text,context,bitmap){
+    // Name-entry bitmaps contain user-authored values, not translatable UI.
+    // Let translatedNativeLabel handle only the literal OK/Cancel buttons.
+    if(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&
+       SceneManager._scene instanceof Scene_Name)return null;
     if(inputFormActive()||identityDrawDepth||typeof text!=="string"||!text.trim()||
        text.length>1800||actorNames[text]||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
