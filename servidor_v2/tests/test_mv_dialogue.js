@@ -1859,6 +1859,11 @@ async function testLargeGamePausesBackgroundPrefetch(){
     await wait(450);
     assert.equal(f.posts.length,0,
         "bulk inventory must pause instead of competing with a large active game");
+    f.$gameMessage._texts=["Please open the gate now."];
+    const firstView=new f.context.Window_Message();
+    assert.equal(firstView.updateWait(),false,
+        "large MV inventories must fail open instead of waiting for cold neural text");
+    f.$gameMessage._texts=[];
     f.$gameMessage.add("Please translate this visible sentence.");
     await wait(80);
     assert.ok(f.posts.some(p=>p.text==="Please translate this visible sentence."),
@@ -1890,44 +1895,23 @@ async function testR6FirstViewNativeGate(mz){
     await wait(25);
     const m=f.$gameMessage,w=new f.context.Window_Message();
     m._texts=[text];m.setChoices([choice]);
-    w.update();
-    if(mz){
-        assert.equal(w.originalStarts,0,"MZ keeps its bounded first-view contract");
-        const limit=Date.now()+4000;
-        while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
-        assert.equal(w.originalStarts,1,"MZ native start occurs exactly once");
-        assert.equal(w._textState.text,"¿Adónde vas?");
-    }else{
-        assert.equal(w.originalStarts,1,"cold MV neural text must never block native message start");
-        assert.equal(w._textState.text,text,"MV first paint keeps source text while translation runs asynchronously");
-    }
-    if(mz)assert.ok(w.updates>1,"MZ update loop continues while its bounded first-view request is pending");
-    else assert.equal(w.updates,1,"MV update loop never waits for neural inference");
-    if(!mz)assert.equal(m.allText(),text,"MV message data stays unchanged on the immediate first paint");
-
+    w.update();assert.equal(w.originalStarts,0,"cold text must not paint in original language");
+    assert.equal(w.updates,1,"native update loop keeps running");
+    assert.equal(m.allText(),text,"waiting cannot mutate native message");
+    const limit=Date.now()+4000;
+    while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
+    assert.equal(w.originalStarts,1,"native start occurs exactly once");
+    assert.equal(w._textState.text,"¿Adónde vas?");
     const actual=new f.context.Window_ChoiceList(m._choices);
-    await wait(180);
-    actual.drawItem(0);
-    assert.equal(actual.painted[actual.painted.length-1],"Abre la puerta, por favor.",
-        "choice label is translated when the asynchronous result is ready");
-    assert.equal(actual._list[0].name,choice,"choice source label remains unchanged");
-    assert.equal(actual._list[0].ext,0,"choice branch index remains unchanged");
-
-    // A standalone choice follows the same engine-specific policy.
+    assert.equal(actual.painted[0],"Abre la puerta, por favor.");
+    assert.equal(actual._list[0].ext,0);
+    // Choices without a preceding dialogue must also wait.
     m.clear();m.setChoices([cold]);
     const only=new f.context.Window_Message();only.update();
-    if(mz){
-        assert.equal(only._choice,undefined,"MZ waits for its bounded first-view result");
-        const choiceLimit=Date.now()+4000;
-        while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
-        assert.ok(only._choice);
-        assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
-    }else{
-        assert.ok(only._choice,"cold MV standalone choice must remain immediately selectable");
-        await wait(180);
-        only._choice.drawItem(0);
-        assert.equal(only._choice.painted[only._choice.painted.length-1],"Cierra la ventana, por favor.");
-    }
+    assert.equal(only._choice,undefined,"cold standalone choice must not become selectable");
+    const choiceLimit=Date.now()+4000;
+    while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
+    assert.ok(only._choice);assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
 }
 async function testR6OfflineDeadlineAndForm(){
     const f=fixture(0,{mz:true,disconnected:true,configure(c){
