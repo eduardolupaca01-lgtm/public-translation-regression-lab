@@ -1937,7 +1937,8 @@ async function testR6FirstViewNativeGate(mz){
     }});
     await wait(25);
     const m=f.$gameMessage,w=new f.context.Window_Message();
-    m._texts=[text];m.setChoices([choice]);
+    m._texts=[text];
+    if(mz)m.setChoices([choice]);
     w.update();
     if(mz){
         assert.equal(w.originalStarts,0,"MZ keeps its bounded first-view translation gate");
@@ -1952,9 +1953,21 @@ async function testR6FirstViewNativeGate(mz){
         assert.equal(w.updates,1,"MV update loop never waits for neural inference");
         assert.equal(w._textState.text,text,"MV first paint keeps the original source text");
         assert.equal(m.allText(),text,"late translation never mutates native message data");
+        // Simulate the native message reaching its pause point. Late rendering
+        // is allowed only after the original page is complete and no choice is active.
+        w.finishPage();
+        function renderedMessage(){
+            return w.contents.ops.filter(op=>op.y===0&&op.x>=160)
+                .sort((a,b)=>a.x-b.x).map(op=>op.text).join(" ");
+        }
         const lateLimit=Date.now()+4000;
-        while(w._textState.text===text&&Date.now()<lateLimit){await wait(25);w.update();}
-        assert.equal(w._textState.text,"¿Adónde vas?","late result redraws the native message");
+        while(renderedMessage().indexOf("¿Adónde")<0&&Date.now()<lateLimit){
+            await wait(25);w.update();
+        }
+        assert.ok(renderedMessage().indexOf("¿Adónde")>=0&&renderedMessage().indexOf("vas?")>=0,
+            "late result redraws the original native message bitmap");
+        assert.equal(m.allText(),text,"late redraw leaves story/event data untouched");
+        m.setChoices([choice]);
     }
     const actual=new f.context.Window_ChoiceList(m._choices);
     await wait(180);
