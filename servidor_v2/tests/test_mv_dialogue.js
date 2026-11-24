@@ -33,8 +33,8 @@ function fixture(translationDelay=0,options={}){
         },
         readFileSync(p){if(!(p in read))throw Error("missing");return read[p];},
         readdir(p,callback){
-            setTimeout(()=>callback(null,Object.keys(read).filter(k=>path.dirname(k)===p)
-                .map(k=>path.basename(k))),0);
+            setTimeout(()=>callback(null,Array.from(new Set(Object.keys(read).concat(Object.keys(dirs)).filter(k=>path.dirname(k)===p)
+                .map(k=>path.basename(k))))),0);
         },
         readFile(p,encoding,callback){
             setTimeout(()=>{
@@ -1215,6 +1215,81 @@ async function testR4P6GalvRealFactoryContract(){
     assert.equal(f.$gameMessage.allText(),"");
 }
 
+
+function csvFixtureRows(rows){
+    return rows.map(r=>r.map(v=>'"'+String(v||"").replace(/"/g,'""')+'"').join(",")).join("\r\n")+"\r\n";
+}
+async function testR4P7ExternalSheetPreparesBeforeFirstGame(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:2,locale:"en_US"});
+    state.files[path.join(data,"Map002.json")]=JSON.stringify({events:[null]});
+    const message="\\c[2][\\n[7]]\\c[0]\nPlease bring the lantern.\\I[17]";
+    const choice="Accept delivery",other="Decline delivery",late="The ferry leaves tomorrow.";
+    const rows=[["","Script","日本語","英語","スペイン語","",""],["$map2","","","","","",""],["$event1","","","","","",""],["$page2","","","","","",""],
+        ["$text1","$v[23] = 0","\\c[2][\\n[7]]\\c[0]\nランタンを持ってきて。\\I[17]",message,"","",""],
+        ["$text2","","配達を引き受ける",choice,"Aceptar el encargo","",""],
+        ["$text3","","配達を断る",other,"","",""],
+        ["","$v[23] = 9","","Wait by the bridge.","","",""],
+        ["","","","※Developer annotation","","",""],
+        ["$text4","","","if(s[10]) This is a condition","","",""]];
+    // Large file with all narrative rows above and a unique text after row
+    // 25,000. A quoted comma/newline must stay in its cell.
+    for(let i=0;i<26000;i++)rows.push(["","","","","","",""]);
+    rows.push(["$map99","","","","","",""],["$event1","","","","","",""],["$page1","","","","","",""],
+        ["$text1","","明日出発する。",late,"","",""]);
+    state.files[path.join(csv,"sheet.csv")]=csvFixtureRows(rows);
+    state.files[path.join(csv,"DB_Variable.csv")]=csvFixtureRows([["$id=0","JPN_NAME","ENG_NAME","SPN_NAME"],["$id=17","内部値","Internal event value",""]]);
+    state.files[path.join(csv,"DB_Item.csv")]=csvFixtureRows([["$id=0","free","JPN_NAME","DESCRIPTION","ENG_NAME","DESCRIPTION","SPN_NAME","DESCRIPTION"],["$id=5","","鍵","古い鍵","Old key","A key, made of iron.","",""]]);
+    const saved=Object.assign({},state.files);
+    const responses={"Please bring the lantern.":"Por favor, trae la linterna.",[other]:"Rechazar el encargo","Wait by the bridge.":"Espera junto al puente.",[late]:"El ferry sale mañana.","Old key":"Llave antigua","A key, made of iron.":"Una llave, hecha de hierro."};
+    const plugins=[{name:"KNS_CsvReader",status:true,parameters:{}}];
+    const f=fixture(2,{fsState:state,batch:true,responses,plugins});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();title.commandNewGame();
+    assert.equal(title.launches,0,"external tables hold the optional first-game preparation");
+    const deadline=Date.now()+4500;
+    while(Date.now()<deadline&&!title.launches){await wait(30);title.update();}
+    assert.equal(title.launches,1,"preparation finishes automatically without a second click");
+    assert.ok(f.posts.some(p=>p.text===late),"text after row 25000 and on an unvisited map is prepared");
+    assert.ok(f.posts.some(p=>p.text===other),"short labelled English choice without stopword is prepared");
+    assert.ok(!f.posts.some(p=>p.text===choice),"validated authored Spanish column reused without inference");
+    assert.ok(!f.posts.some(p=>/Internal event value|Developer annotation|This is a condition|\$v\[|\\[cnI]\[/.test(p.text)),"no control or internal field reaches inference");
+    const w=new f.context.Window_Message();f.$gameMessage._texts=message.split("\n");w.startMessage();
+    assert.equal(f.$gameMessage.allText(),"\\c[2][\\n[7]]\\c[0]\nPor favor, trae la linterna.\\I[17]");
+    f.$gameMessage.setChoices([choice,other],0,1);
+    assert.deepEqual(Array.from(f.$gameMessage._choices),["Aceptar el encargo","Rechazar el encargo"]);
+    // Alternate source from the same bilingual row has the same exact
+    // control contract and is reusable without a second neural inference.
+    f.$gameMessage._texts=["明日出発する。"];w.startMessage();
+    assert.equal(f.$gameMessage.allText(),"El ferry sale mañana.");
+    for(const k of Object.keys(saved))assert.equal(state.files[k],saved[k],"original files unchanged");
+    assert.equal(title.launches,1);
+}
+async function testR4P7JapanesePrimaryAndLiveChoice(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"ja_JP"});
+    state.files[path.join(csv,"commonSheet.csv")]=csvFixtureRows([["","","日本語","英語",""],["$common1","","","",""],["$text1","","手紙を届ける","Deliver letter",""]]);
+    const f=fixture(35,{fsState:state,responses:{"手紙を届ける":"Entregar la carta"},plugins:[{name:"MEO_Csv",status:true,parameters:{}}],configure(c){
+        function Window_ChoiceList(){this.active=true;this.openness=255;this._index=0;this._list=[{name:"Deliver letter",symbol:"choice",enabled:true,ext:7}];this.draws=0;}
+        Window_ChoiceList.prototype.update=function(){};
+        Window_ChoiceList.prototype.itemRectForText=function(){return {width:400};};
+        Window_ChoiceList.prototype.textWidthEx=function(v){return v.length*8;};
+        Window_ChoiceList.prototype.redrawItem=function(){this.draws++;};
+        c.Window_ChoiceList=Window_ChoiceList;
+    }});
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&!f.posts.some(p=>p.text==="手紙を届ける"))await wait(20);
+    await wait(100);
+    const win=new f.context.Window_ChoiceList();
+    for(let i=0;i<12;i++)win.update();
+    assert.equal(win._list[0].name,"Entregar la carta");
+    assert.equal(win._list[0].ext,7);assert.equal(win._list[0].symbol,"choice");
+    assert.equal(win._list[0].enabled,true);assert.equal(win._index,0);assert.equal(win.draws,1);
+    assert.ok(f.posts.some(p=>p.text==="手紙を届ける"&&p.source==="ja"));
+    assert.ok(!f.posts.some(p=>p.text==="Deliver letter"));
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -1274,6 +1349,8 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P5DynamicNativeCaptionConversion();
     await testR4P5BFormattedMessageBodyReplay();
     await testR4P6GalvRealFactoryContract();
+    await testR4P7ExternalSheetPreparesBeforeFirstGame();
+    await testR4P7JapanesePrimaryAndLiveChoice();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();
