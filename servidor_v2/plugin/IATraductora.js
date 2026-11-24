@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P11-20261124"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P12-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -394,7 +394,7 @@ function validTranslation(source,original,result,composed){
     var words=result.toLowerCase().match(/[a-záéíóúñ]{2,}/g)||[];
     for(var i=5;i<words.length;i++){
         if(words[i]===words[i-3]&&words[i-1]===words[i-4]&&
-           words[i-2]===words[i-5])return false;
+           words[i-2]===words[i-5]&&!tsvAuthoredRepeat(original,result,composed))return false;
     }
     return true;
 }
@@ -2354,7 +2354,7 @@ function tsvVisuEnabled(){
     });
 }
 function tsvSurfaceKey(text){
-    return tsvVisualKey(tsvNormal(text).replace(/\\[.|]/g,"").replace(/<\/?wordwrap>/gi,"").replace(/<br>/gi,"\n"));
+    return tsvVisualKey(tsvNormal(text).replace(/\\([cvnpi])\[/gi,function(_,code){return "\\"+code.toLowerCase()+"[";}).replace(/\\[.|]/g,"").replace(/<\/?wordwrap>/gi,"").replace(/<br>/gi,"\n"));
 }
 function tsvProbeLocale(win){
     if(!tsv.valid||!tsv.probe||!tsv.visu||!win||typeof win.convertEscapeCharacters!=="function")return null;
@@ -2394,8 +2394,83 @@ function tsvTranslatedKeys(raw,source,request){
     });
     return changed&&complete?value:null;
 }
+// Match native-resolved values to the original, declared localization
+// template without translating the name or modifying any game state.
+function tsvHasDynamic(text){
+    return typeof text==="string"&&/(?:\\|\x1b)[NVP]\[\d{1,5}\]/i.test(text);
+}
+function tsvExpandDynamic(text){
+    var failed=false,expanded=tsvNormal(text).replace(/\\([NVP])\[(\d{1,5})\]/gi,function(token,type,id){
+        var value,actor,number=Number(id);type=type.toUpperCase();
+        try{
+            if(type==="V"&&typeof $gameVariables!=="undefined"&&$gameVariables&&typeof $gameVariables.value==="function")
+                value=$gameVariables.value(number);
+            else if(type==="N"&&typeof $gameActors!=="undefined"&&$gameActors&&typeof $gameActors.actor==="function"){
+                actor=$gameActors.actor(number);if(actor&&typeof actor.name==="function")value=actor.name();
+            }else if(type==="P"&&typeof $gameParty!=="undefined"&&$gameParty&&typeof $gameParty.members==="function"){
+                actor=$gameParty.members()[number-1];if(actor&&typeof actor.name==="function")value=actor.name();
+            }
+        }catch(_){failed=true;return token;}
+        if(typeof value!=="string"&&typeof value!=="number"){failed=true;return token;}
+        value=String(value);
+        if(value.length>160||/[\u0000-\u001f\\<>{}]/.test(value)){failed=true;return token;}
+        return value;
+    });
+    return failed?null:expanded;
+}
+function tsvMatchSurface(template,visual){
+    if(tsvSurfaceKey(template)===tsvSurfaceKey(visual))return true;
+    if(tsvHasDynamic(template)&&!tsvHasDynamic(visual)){
+        var expanded=tsvExpandDynamic(template);
+        return expanded!==null&&tsvSurfaceKey(expanded)===tsvSurfaceKey(visual);
+    }
+    return false;
+}
+// Author repetitions are not neural hallucinations. Require matching
+// repeated complete utterances at the corresponding sentence positions.
+function tsvAuthoredRepeat(original,result,composed){
+    if(!composed||!tsv.detected)return false;
+    function units(text){
+        return protectedParts(text).filter(function(p){return !p.locked;})
+            .map(function(p){return p.value;}).join(" ")
+            .split(/[.!?。！？…]+/).map(function(v){
+                return (v.toLowerCase().match(/[a-záéíóúüñà-ÿ\u3041-\u30fa\u3400-\u9fff]+/g)||[]).join(" ");
+            }).filter(Boolean);
+    }
+    var a=units(original),b=units(result);
+    if(a.length!==b.length||a.length<2)return false;
+    var repeats=0;
+    for(var i=1;i<b.length;i++){
+        if(b[i]===b[i-1]&&b[i].split(" ").length>=3){
+            if(a[i]!==a[i-1])return false;
+            repeats++;
+        }
+    }
+    return repeats>0;
+}
+function tsvJoinPlan(plan,translated){
+    var out=[];
+    for(var i=0;i<plan.length;i++){
+        var value=translated[i],part=plan[i];
+        if(!part.locked){
+            if(part.lower)value=value.replace(/^[A-ZÁÉÍÓÚÜÑ]/,function(c){return c.toLowerCase();});
+            if(i&&dynamicValue(plan[i-1].value)){
+                var punctuation=/^[,;:]/.exec(part.value);
+                if(punctuation&&!/^[,;:]/.test(value))value=punctuation[0]+" "+value;
+            }
+        }
+        out.push(value);
+    }
+    return joinNativeParts(out);
+}
+
 function tsvAdaptNative(visual,result){
     var raw=tsvNormal(visual),out=tsvNormal(result);
+    if(tsvHasDynamic(out)&&!tsvHasDynamic(raw)){
+        out=tsvExpandDynamic(out);
+        if(out===null)return null;
+    }
+    function standardCase(v){return v.replace(/\\([cvnpi])\[/gi,function(_,c){return "\\"+c.toLowerCase()+"[";});}
     // The author's layout may have consumed or removed timing markers.
     // Do not add a missing pause back after native conversion. Preserve
     // every actual non-layout control and every numeric argument.
@@ -2405,7 +2480,7 @@ function tsvAdaptNative(visual,result){
         }).map(function(p){return p.value;}).join("\u0002");
     }
     if(!/\\[.|]/.test(raw))out=out.replace(/\\[.|]/g,"");
-    if(signature(raw)!==signature(out)||numbersIn(raw)!==numbersIn(out))return null;
+    if(signature(standardCase(raw))!==signature(standardCase(out))||numbersIn(raw)!==numbersIn(out))return null;
     var front=/^<wordwrap>/i.exec(raw),back=/<\/wordwrap>$/i.exec(raw);
     if(front&&!/^<wordwrap>/i.test(out))out=front[0]+out;
     if(back&&!/<\/wordwrap>$/i.test(out))out+=back[0];
@@ -2447,6 +2522,20 @@ function tsvEnglishPlan(source,text){
         }
         push(value.slice(at));
     });
+    // A bounded, comma-terminated English possessive after an RPG
+    // placeholder can be assembled as "the noun" + " de " + placeholder.
+    // No model is allowed to translate or invent the placeholder itself.
+    for(var i=0;i+1<pieces.length;i++){
+        if(!dynamicValue(pieces[i].value)||pieces[i+1].locked)continue;
+        var tail=/^['’]s[ \t]+([A-Za-z][A-Za-z -]{1,49})([,;:])([ \t]*)([\s\S]*)$/.exec(pieces[i+1].value);
+        if(!tail)continue;
+        var preceding=i>0&&!pieces[i-1].locked?pieces[i-1].value:
+            i>1&&!pieces[i-2].locked?pieces[i-2].value:"";
+        var replacement=[{value:"the "+tail[1].trim(),locked:false,lower:!!preceding&&!/[.!?]$/.test(preceding)},
+            {value:" de ",locked:true},pieces[i],{value:tail[2]+(tail[3]||" "),locked:true}];
+        if(tail[4]){replacement.push({value:tail[4],locked:false});count++;}
+        pieces.splice.apply(pieces,[i,2].concat(replacement));i+=replacement.length-1;
+    }
     return count>=2&&count<=16?pieces:null;
 }
 function tsvCoverageSuspect(text,result,plan){
@@ -2464,7 +2553,7 @@ function tsvPlanReady(source,text,plan){
         var p=plan[i],v=p.locked?p.value:readyText(source,p.value);
         if(v===null)return null;pieces.push(v);
     }
-    var joined=pieces.join("");
+    var joined=tsvJoinPlan(plan,pieces);
     return acceptCache(source,text,joined,true,true)?cache.get(source+"\u0000"+text):null;
 }
 function tsvPlanTranslate(source,text,plan,priority){
@@ -2480,7 +2569,7 @@ function tsvPlanTranslate(source,text,plan,priority){
             if(retry)rejectedKeys.set(source+"\u0000"+text,retry);
             return null;
         }
-        var joined=parts.join("");
+        var joined=tsvJoinPlan(plan,parts);
         return acceptCache(source,text,joined,true,true)?cache.get(source+"\u0000"+text):null;
     });
 }
@@ -2656,7 +2745,7 @@ function tsvMessageEntry(raw,visual){
         var matches=[];
         ["en","ja"].forEach(function(source){
             var candidate=tsvResolveKeys(raw,source);
-            if(candidate&&tsvSurfaceKey(candidate)===key&&tsvCandidate(source,candidate))matches.push({source:source,text:candidate});
+            if(candidate&&tsvMatchSurface(candidate,visual)&&tsvCandidate(source,candidate))matches.push({source:source,text:candidate});
         });
         if(matches.length!==1)return null;
         var found=matches[0];
@@ -2670,7 +2759,8 @@ function tsvMessageEntry(raw,visual){
 function tsvTicketCurrent(win,t){
     return !!t&&win._iaLateTicket===t&&typeof SceneManager!=="undefined"&&SceneManager._scene===t.scene&&
         typeof $gameMessage!=="undefined"&&$gameMessage===t.message&&$gameMessage.hasText()&&
-        $gameMessage.allText()===t.displayed;
+        $gameMessage.allText()===t.displayed&&
+        (!t.entry||!tsvHasDynamic(t.entry.text)||tsvMatchSurface(t.entry.text,t.visualOriginal));
 }
 function tsvEarlyPaint(win,t){
     var ts=win._textState;
