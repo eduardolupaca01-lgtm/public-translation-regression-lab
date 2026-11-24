@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R5-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R6-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -1454,7 +1454,7 @@ function hookSurfaceConversion(proto,ownOnly){
        (ownOnly&&!Object.prototype.hasOwnProperty.call(proto,"convertEscapeCharacters")))return;
     var original=proto.convertEscapeCharacters;
     proto.convertEscapeCharacters=function(){
-        if(identityDrawDepth||this._iaNameSurface||this._iaOwnSurface||typeof arguments[0]!=="string")
+        if(inputFormActive()||identityDrawDepth||this._iaNameSurface||this._iaOwnSurface||typeof arguments[0]!=="string")
             return original.apply(this,arguments);
         var args=Array.prototype.slice.call(arguments),raw=args[0],csv=csvWindowEligible(this),choice=csv&&csvWindowChoice(this),out;
         // Other RPG dialects keep their previous native conversion behavior.
@@ -1493,7 +1493,7 @@ function hookSpecificSurfaces(){
             if(!Object.prototype.hasOwnProperty.call(p,method)||typeof p[method]!=="function")return;
             var original=p[method];
             p[method]=function(){
-                if(surfaceDepth||identityDrawDepth||this._iaOwnSurface||this._iaNameSurface||typeof arguments[0]!=="string")
+                if(inputFormActive()||surfaceDepth||identityDrawDepth||this._iaOwnSurface||this._iaNameSurface||typeof arguments[0]!=="string")
                     return original.apply(this,arguments);
                 var args=Array.prototype.slice.call(arguments);
                 surfaceDepth++;
@@ -1616,6 +1616,7 @@ function attachNativeCaption(scene,win,inputs,displayed){
     win.update=function(){
         var output=update.apply(this,arguments);
         if(finished||this!==win)return output;
+        if(inputFormActive()){finished=true;return output;}
         try{
             if(typeof SceneManager==="undefined"||SceneManager._scene!==scene||
                !Array.isArray(scene._captionWindows)||scene._captionWindows.indexOf(win)<0||
@@ -1723,7 +1724,7 @@ function ambientDraw(win,method,args,original){
         var style={};nativeStyleKeys.forEach(function(k){if(b[k]!==undefined)style[k]=b[k];});
         if(typeof win.normalColor==="function")style.textColor=win.normalColor();
         ticket={geometry:{bitmap:b,x:Math.floor(x),y:Math.floor(y),line:Math.ceil(h),
-            width:b.width,height:b.height,style:style},result:null};
+            width:b.width,height:b.height,style:style},result:null,formEpoch:formEpoch};
     }
     ambientStats.requested++;
     captionRequest(source,text).then(function(result){
@@ -1953,7 +1954,7 @@ function hookNativeSurface(){
             var original=Window_Base.prototype[method];
             if(typeof original!=="function")return;
             Window_Base.prototype[method]=function(){
-                if(surfaceDepth)return original.apply(this,arguments);
+                if(inputFormActive()||surfaceDepth)return original.apply(this,arguments);
                 var args=Array.prototype.slice.call(arguments),identity=!!this._iaNameSurface;
                 if(!identity&&!identityDrawDepth&&!this._iaOwnSurface&&typeof args[0]==="string"&&isAmbientWindow(this)){
                     surfaceDepth++;
@@ -2011,6 +2012,7 @@ function hookNativeSurface(){
     if(typeof Bitmap!=="undefined"&&Bitmap.prototype&&typeof Bitmap.prototype.drawText==="function"){
         var bitmapDraw=Bitmap.prototype.drawText;
         Bitmap.prototype.drawText=function(){
+            if(inputFormActive())return bitmapDraw.apply(this,arguments);
             var args=Array.prototype.slice.call(arguments);
             try{
                 if(!identityDrawDepth&&typeof args[0]==="string"&&args[0].length>=2)
@@ -2022,6 +2024,7 @@ function hookNativeSurface(){
         };
         var measure=Bitmap.prototype.measureTextWidth;
         if(typeof measure==="function")Bitmap.prototype.measureTextWidth=function(text){
+            if(inputFormActive())return measure.apply(this,arguments);
             var bitmap=this,args=Array.prototype.slice.call(arguments),label=null;
             try{label=csvPlainLabel(text);}catch(_){}
             if(label!==null)args[0]=label;
@@ -2097,6 +2100,7 @@ function nativeRenderParts(text){
 function plainCompare(text){return text.replace(/\s+/g," ").trim();}
 var nativeStyleKeys=["fontFace","fontSize","fontBold","fontItalic","textColor","outlineColor","outlineWidth","paintOpacity"];
 function snapshotMessage(win,ticket){
+    ticket.formEpoch=formEpoch;
     var ts=win._textState,b=win.contents;
     if(!ts||!b||typeof ts.text!=="string"||!integer(ts.index)||ts.index!==0||
        !integer(b.width)||!integer(b.height)||b.width>4096||b.height>2048||
@@ -2159,6 +2163,7 @@ function planNativeWords(parsed,bitmap,win,geometry){
     return ops.length?ops:null;
 }
 function replaceNativeMessage(win,ticket){
+    if(inputFormActive()||(ticket.formEpoch!==undefined&&ticket.formEpoch!==formEpoch))return false;
     var g=ticket.geometry,b=win.contents,parsed=nativeRenderParts(ticket.result);
     if(!g||b!==g.bitmap||b.width!==g.width||b.height!==g.height||!parsed||
        typeof Bitmap!=="function")return false;
@@ -2203,6 +2208,7 @@ function replaceNativeMessage(win,ticket){
 }
 function displayLate(win){
     var ticket=win._iaLateTicket;if(!ticket)return;
+    if(inputFormActive()||(ticket.formEpoch!==undefined&&ticket.formEpoch!==formEpoch)){hideLate(win);return;}
     if(typeof SceneManager==="undefined"||!ticket.scene||SceneManager._scene!==ticket.scene||
        typeof $gameMessage==="undefined"||$gameMessage!==ticket.message||
        !$gameMessage.hasText()||$gameMessage.allText()!==ticket.displayed){
@@ -2215,10 +2221,130 @@ function displayLate(win){
     if(ticket.pages<=1&&replaceNativeMessage(win,ticket)){state.shown++;lateStats.shown++;if(ticket.tsv){tsv.shown++;tsv.late++;}}
     else lateStats.unsupported++;
 }
+// R6: defer native message and choice presentation, not the game loop.
+// All asynchronous results go into the existing validated cache.
+var FIRST_VIEW_LIMIT=30000,FIRST_VIEW_OFFLINE=8000;
+function firstViewRequest(source,text){
+    if(!source)return;
+    addPrefetch(text,true,source);
+    if(state.connected&&cacheReadDone&&pending.size<90)
+        requestVisible(source,text).catch(function(){state.errors++;});
+    nextPrefetch();
+}
+function choiceDisplay(win,raw,requestMissing){
+    if(inputFormActive()||identityDrawDepth||typeof raw!=="string"||actorNames[raw])return null;
+    if(tsvRef(raw)&&tsv.valid){
+        var locale=tsvProbeLocale(win);
+        if(locale)return tsvTranslatedKeys(raw,locale,requestMissing);
+    }
+    var projected=csvProjectDisplay(raw,true,requestMissing);
+    if(projected!==null)return projected;
+    if(tsvExcluded(raw))return null;
+    var source=languageFor(raw);if(!source)return null;
+    var value=readyText(source,raw);
+    if(value!==null)return value;
+    if(requestMissing)firstViewRequest(source,raw);
+    return null;
+}
+function firstViewMissing(win,raw,choice){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||csvExecutableSyntax(raw))return false;
+    if(tsv.detected&&tsvRef(raw)){
+        tsvPrioritize(raw,true);
+        if(!tsv.valid)return !tsv.done;
+        var locale=tsvProbeLocale(win);
+        if(locale){
+            if(tsvResolveKeys(raw,locale)===null)return false;
+            return tsvTranslatedKeys(raw,locale,true)===null;
+        }
+        if(tsvProject(raw,true)!==null)return false;
+        return tsvResolveKeys(raw,"en")!==null||tsvResolveKeys(raw,"ja")!==null;
+    }
+    if(choice&&choiceDisplay(win,raw,true)!==null)return false;
+    var source=languageFor(raw);if(!source)return false;
+    if(readyText(source,raw)!==null||(tableStats.root&&csvKnownReady(raw)!==null))return false;
+    if(rejectedKeys.get(source+"\u0000"+raw)===Infinity)return false;
+    firstViewRequest(source,raw);return true;
+}
+function firstViewWait(win){
+    if(inputFormActive()||win.pause||win._textState||
+       (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return false;
+    var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
+    if(!m||(typeof m.scrollMode==="function"&&m.scrollMode()))return false;
+    var raw=m.hasText&&m.hasText()?tsvRawMessage():"";
+    var choices=typeof m.choices==="function"?m.choices():m._choices;
+    choices=Array.isArray(choices)&&choices.length<=24?choices.slice():[];
+    if(!raw&&!choices.length){win._iaFirstGate=null;return false;}
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null,
+        key=JSON.stringify([raw,choices,m._iaFirstGeneration||0]),now=Date.now(),g=win._iaFirstGate;
+    if(!g||g.message!==m||g.scene!==scene||g.key!==key)
+        g=win._iaFirstGate={message:m,scene:scene,key:key,started:now,checked:0,waiting:true};
+    if(g.done)return false;
+    if(now-g.started>=FIRST_VIEW_LIMIT||(!state.connected&&now-g.started>=FIRST_VIEW_OFFLINE)){
+        g.done=true;g.waiting=false;return false;
+    }
+    if(g.checked&&now-g.checked<40)return g.waiting;
+    g.checked=now;
+    var missing=firstViewMissing(win,raw,false);
+    choices.forEach(function(t){if(firstViewMissing(win,t,true))missing=true;});
+    g.waiting=missing;if(!missing)g.done=true;
+    return missing;
+}
+function hookFirstView(proto){
+    if(typeof proto.updateWait!=="function"||typeof proto.canStart!=="function")return;
+    var wait=proto.updateWait;
+    proto.updateWait=function(){
+        if(wait.apply(this,arguments))return true;
+        try{return firstViewWait(this);}catch(_){state.errors++;return false;}
+    };
+    if(typeof Game_Message!=="undefined"&&typeof Game_Message.prototype.clear==="function"){
+        var clear=Game_Message.prototype.clear;
+        Game_Message.prototype.clear=function(){
+            var out=clear.apply(this,arguments);this._iaFirstGeneration=(this._iaFirstGeneration||0)+1;return out;
+        };
+    }
+}
+// 111_InputForm creates two DOM nodes. Stop bubbling after the author's
+// own handlers, never preventDefault (editing, Enter and IME must work).
+var formEpoch=0,formWasOpen=false;
+function inputFormNodes(){
+    if(typeof document==="undefined"||!document||typeof document.getElementById!=="function")return null;
+    var input=document.getElementById("_111_input"),submit=document.getElementById("_111_submit");
+    return input?{input:input,submit:submit}:null;
+}
+function inputFormActive(){
+    if(typeof Input!=="undefined"&&Input.form_mode===true)return true;
+    return !!inputFormNodes();
+}
+function protectInputForm(){
+    var nodes=inputFormNodes(),active=!!nodes||inputFormActive();
+    if(active!==formWasOpen){formWasOpen=active;formEpoch++;}
+    if(!nodes)return;
+    [nodes.input,nodes.submit].forEach(function(node){
+        if(!node||node._iaKeyboardIsolated||typeof node.addEventListener!=="function")return;
+        node._iaKeyboardIsolated=true;
+        ["keydown","keyup","keypress"].forEach(function(type){
+            node.addEventListener(type,function(event){event.stopPropagation();},false);
+        });
+    });
+    if(nodes.submit&&String(nodes.submit.type).toLowerCase()==="submit"&&nodes.submit.value==="決定")
+        nodes.submit.value="Aceptar";
+}
+function hookInputForm(){
+    if(typeof Game_Interpreter==="undefined"||!Game_Interpreter.prototype||
+       typeof Game_Interpreter.prototype._inputForm!=="function")return;
+    var original=Game_Interpreter.prototype._inputForm;
+    Game_Interpreter.prototype._inputForm=function(){
+        var out=original.apply(this,arguments);
+        try{protectInputForm();}catch(_){state.errors++;}
+        return out;
+    };
+}
+
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var proto=Window_Message.prototype,original=proto.startMessage;
     if(typeof original!=="function")return;
+    hookFirstView(proto);
     // Scope the projection to the one native startMessage invocation.
     // A game may bypass our draw/convert hooks and call allText directly.
     if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.allText==="function"){
@@ -2231,6 +2357,7 @@ function hookMessages(){
     }
     proto.startMessage=function(){
         hideLate(this);this._iaSourceMessage=null;
+        if(inputFormActive()){identityDrawDepth++;try{return original.apply(this,arguments);}finally{identityDrawDepth--;}}
         var projection=null;
         try{
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
@@ -2241,7 +2368,7 @@ function hookMessages(){
                     var locale=resolved?resolved.source:tsvProbeLocale(this);
                     if(locale)tsv.language=locale;
                     tsvPrioritize(keys,true);
-                    var localized=locale?tsvTranslatedKeys(keys,locale,true):null;
+                    var localized=locale?tsvTranslatedKeys(keys,locale,true):tsvProject(keys,true);
                     if(localized!==null)projection={message:$gameMessage,raw:text,text:localized,used:false};
                     // Never replace the game's reference array.
                     source=null;
@@ -2307,7 +2434,7 @@ function hookMessages(){
         return update.apply(this,arguments);
     };
     var terminate=proto.terminateMessage;
-    if(typeof terminate==="function")proto.terminateMessage=function(){hideLate(this);this._iaSourceMessage=null;return terminate.apply(this,arguments);};
+    if(typeof terminate==="function")proto.terminateMessage=function(){hideLate(this);this._iaFirstGate=null;this._iaSourceMessage=null;return terminate.apply(this,arguments);};
     if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.add==="function"){
         var add=Game_Message.prototype.add;
         Game_Message.prototype.add=function(text){
@@ -2332,7 +2459,7 @@ function hookChoices(){
        typeof Game_Message.prototype.setChoices!=="function")return;
     var original=Game_Message.prototype.setChoices;
     Game_Message.prototype.setChoices=function(choices){
-        if(!Array.isArray(choices)||!choices.length||choices.length>12)
+        if(inputFormActive()||!Array.isArray(choices)||!choices.length||choices.length>24)
             return original.apply(this,arguments);
         var translated=choices.slice(),changed=false;
         try{
@@ -2840,14 +2967,14 @@ function tsvTicketCurrent(win,t){
 }
 function tsvEarlyPaint(win,t){
     var ts=win._textState;
-    if(!ts||!t.result||ts.index!==0||ts.rtl||ts.buffer||ts.text!==t.visualOriginal||!tsvTicketCurrent(win,t))return false;
+    if(inputFormActive()||t.formEpoch!==formEpoch||!ts||!t.result||ts.index!==0||ts.rtl||ts.buffer||ts.text!==t.visualOriginal||!tsvTicketCurrent(win,t))return false;
     var result=tsvAdaptNative(ts.text,t.result);
     if(result===null||!nativeRenderParts(result))return false;
     ts.text=result;state.shown++;tsv.shown++;hideLate(win);
     return true;
 }
 function tsvRefreshTicket(win,t){
-    if(!tsvTicketCurrent(win,t))return;
+    if(inputFormActive()||t.formEpoch!==formEpoch||!tsvTicketCurrent(win,t))return;
     var entry=t.entry||tsvMessageEntry(t.rawKeys||t.displayed,t.visualOriginal);
     if(!entry)return;
     t.entry=entry;t.original=entry.text;t.source=entry.source;
@@ -2871,7 +2998,7 @@ function tsvLateTicket(win){
     if(!scene)return;
     var ticket={message:$gameMessage,displayed:raw,rawKeys:keys,visualOriginal:text,
         original:entry?entry.text:text,source:entry?entry.source:null,entry:entry,
-        tsv:true,scene:scene,result:null,drawn:false,pages:1,geometry:null};
+        tsv:true,scene:scene,result:null,drawn:false,pages:1,geometry:null,formEpoch:formEpoch};
     win._iaLateTicket=ticket;lateStats.requested++;
     tsvRefreshTicket(win,ticket);
 }
@@ -3414,8 +3541,8 @@ function hookCsvChoiceLabels(){
     var p=Window_ChoiceList.prototype,update=p.update;
     function display(win,index,fn,args){
         var item=win._list&&win._list[index],raw=item&&item.name,translated=null;
-        if(csvWindowEligible(win)&&typeof raw==="string"){
-            try{translated=csvProjectDisplay(raw,true,true);}catch(_){state.errors++;}
+        if(!inputFormActive()&&(csvWindowEligible(win)||csvWindowChoice(win))&&typeof raw==="string"){
+            try{translated=choiceDisplay(win,raw,true);}catch(_){state.errors++;}
         }
         if(translated===null||translated===raw)return fn.apply(win,args);
         // Only the duration of the original paint/measure call. A script
@@ -3436,8 +3563,8 @@ function hookCsvChoiceLabels(){
         var measure=p[measureMethod];
         p[measureMethod]=function(text){
             var args=Array.prototype.slice.call(arguments);
-            if(csvWindowEligible(this))try{
-                var out=csvProjectDisplay(text,true,true);if(out!==null)args[0]=out;
+            if(!inputFormActive()&&(csvWindowEligible(this)||csvWindowChoice(this)))try{
+                var out=choiceDisplay(this,text,true);if(out!==null)args[0]=out;
             }catch(_){state.errors++;}
             return measure.apply(this,args);
         };
@@ -3447,15 +3574,15 @@ function hookCsvChoiceLabels(){
     if(typeof update!=="function")return;
     p.update=function(){
         var out=update.apply(this,arguments);
-        if(!csvWindowEligible(this)||!this.active||this.openness===0||this._closing||
+        if(inputFormActive()||!(csvWindowEligible(this)||csvWindowChoice(this))||!this.active||this.openness===0||this._closing||
            !Array.isArray(this._list)||this._list.length>24||typeof this.redrawItem!=="function")return out;
-        if((this._iaCsvChoiceTick=(this._iaCsvChoiceTick||0)+1)%12!==0)return out;
+        if((this._iaCsvChoiceTick=(this._iaCsvChoiceTick||0)+1)%4!==0)return out;
         var win=this,needsLayout=false,changes=[];
         try{
             this._list.forEach(function(item,i){
                 var original=item&&item.name;
                 if(typeof original!=="string")return;
-                var translated=csvProjectDisplay(original,true,true);
+                var translated=choiceDisplay(win,original,true);
                 if(translated===null||translated===original)return;
                 var last=win._iaCsvPaint&&win._iaCsvPaint[i];
                 if(last&&last.item===item&&last.raw===original&&last.shown===translated)return;
@@ -3983,13 +4110,14 @@ function setupHud(){
     };
     var updateScene=Scene_Map.prototype.update;
     Scene_Map.prototype.update=function(){
+        try{protectInputForm();}catch(_){state.errors++;}
         updateScene.apply(this,arguments);
         if(!runtimeActivated){
             runtimeActivated=true;
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
         }
         try{collectMapText();if(externalTables())nextPrefetch();}catch(_){state.errors++;}
-        if(Input.isTriggered("ia-traductora")&&this._iaPanel){
+        if(!inputFormActive()&&Input.isTriggered("ia-traductora")&&this._iaPanel){
             this._iaPanel.visible=!this._iaPanel.visible;
             this._iaMini.visible=!this._iaPanel.visible;
         }
@@ -4008,7 +4136,7 @@ try{
     if(engineAt(content)!==ENGINE_ID)throw Error("IA_NUCLEO_RPG_NO_ENCONTRADO");
     state.phase="MENSAJES";hookMessages();
     state.phase="OPCIONES";hookChoices();hookCsvChoiceLabels();
-    state.phase="INTERFAZ";hookNativeSurface();hookTitleStart();
+    state.phase="INTERFAZ";hookInputForm();hookNativeSurface();hookTitleStart();
     state.phase="CONEXION";startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.

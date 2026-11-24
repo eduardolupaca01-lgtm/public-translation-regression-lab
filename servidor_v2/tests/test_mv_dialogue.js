@@ -1819,7 +1819,91 @@ async function testR5DynamicNamesAndAuthoredRepetition(mz){
     assert.ok(!f.posts.some(v=>/\\tl\{|\\v\[|Taylor|小林/.test(v.text)));
 }
 
+
+async function testR6FirstViewNativeGate(mz){
+    const text="Where are you going?",choice="Please open the door.";
+    const f=fixture(110,{mz,nativePaint:true,responses:{[text]:"¿Adónde vas?",[choice]:"Abre la puerta, por favor."},configure(c){
+        const p=c.Window_Message.prototype;
+        p.updateWait=function(){return false;};
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        p.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.canStart())this.startMessage();
+            else if(!this._textState&&c.$gameMessage._choices.length&&!this._choice)
+                this._choice=new c.Window_ChoiceList(c.$gameMessage._choices);
+        };
+        function Choice(items){
+            this._list=items.map((name,index)=>({name,symbol:"choice",ext:index,enabled:true}));
+            this.painted=[];this._list.forEach((_,i)=>this.drawItem(i));
+        }
+        Choice.prototype.drawItem=function(i){this.painted.push(this._list[i].name);};
+        Choice.prototype.update=function(){};
+        c.Window_ChoiceList=Choice;
+        c.Game_Message.prototype.clear=function(){this._texts=[];this._choices=[];};
+    }});
+    await wait(25);
+    const m=f.$gameMessage,w=new f.context.Window_Message();
+    m._texts=[text];m.setChoices([choice]);
+    w.update();assert.equal(w.originalStarts,0,"cold text must not paint in original language");
+    assert.equal(w.updates,1,"native update loop keeps running");
+    assert.equal(m.allText(),text,"waiting cannot mutate native message");
+    const limit=Date.now()+4000;
+    while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
+    assert.equal(w.originalStarts,1,"native start occurs exactly once");
+    assert.equal(w._textState.text,"¿Adónde vas?");
+    const actual=new f.context.Window_ChoiceList(m._choices);
+    assert.equal(actual.painted[0],"Abre la puerta, por favor.");
+    assert.equal(actual._list[0].ext,0);
+    // Choices without a preceding dialogue must also wait.
+    m.clear();m.setChoices(["Where are you going?"]);
+    const only=new f.context.Window_Message();only.update();
+    assert.ok(only._choice);assert.equal(only._choice.painted[0],"¿Adónde vas?");
+}
+async function testR6OfflineDeadlineAndForm(){
+    const f=fixture(0,{mz:true,disconnected:true,configure(c){
+        const p=c.Window_Message.prototype;p.updateWait=function(){return false;};
+        p.canStart=function(){return c.$gameMessage.hasText();};
+        const nodes={},events={};let accepted=0,debug=0;
+        function node(id,type,value){
+            return nodes[id]={type,value,style:{left:"12px",top:"24px"},listeners:{},
+                addEventListener(k,fn){(this.listeners[k]||(this.listeners[k]=[])).push(fn);},
+                fire(k,key){
+                    let stopped=false;const e={key,stopPropagation(){stopped=true;}};
+                    (this.listeners[k]||[]).forEach(fn=>fn(e));if(!stopped&&key==="c")debug++;
+                }};
+        }
+        c.document={getElementById:id=>nodes[id]||null};
+        function Interpreter(){}
+        Interpreter.prototype._inputForm=function(){
+            const input=node("_111_input","text","mc");node("_111_submit","submit","決定");
+            input.addEventListener("keydown",e=>{if(e.key==="Enter")accepted++;});
+            c.Input.form_mode=true;
+        };
+        c.Game_Interpreter=Interpreter;
+        c.__form={nodes,accepted:()=>accepted,debug:()=>debug,close(){delete nodes._111_input;delete nodes._111_submit;c.Input.form_mode=false;}};
+    }});
+    await wait(25);const c=f.context,m=f.$gameMessage,w=new c.Window_Message();
+    m._texts=["Where are you going?"];
+    assert.equal(w.updateWait(),true);
+    w._iaFirstGate.started-=9000;assert.equal(w.updateWait(),false,"offline timeout must release native UI");
+    new c.Game_Interpreter()._inputForm();
+    const input=c.__form.nodes._111_input,submit=c.__form.nodes._111_submit;
+    input.fire("keydown","c");input.fire("keyup","c");input.fire("keypress","c");
+    input.fire("keydown","Enter");
+    assert.equal(c.__form.debug(),0);assert.equal(c.__form.accepted(),1);
+    assert.equal(input.value,"mc");assert.equal(submit.value,"Aceptar");
+    assert.equal(input.style.left,"12px");assert.equal(input.style.top,"24px");
+    assert.equal(w.updateWait(),false,"name entry must not acquire a translation wait");
+    c.__form.close();
+    // Key isolation is local to the form; no global game hotkey is changed.
+    assert.equal(c.Input.form_mode,false);
+}
+
 (async()=>{
+    await testR6FirstViewNativeGate(false);
+    await testR6FirstViewNativeGate(true);
+    await testR6OfflineDeadlineAndForm();
     await testR5DynamicNamesAndAuthoredRepetition(false);
     await testR5DynamicNamesAndAuthoredRepetition(true);
     await testR4NativeTsvMixedControlsAndCoverage(false);
