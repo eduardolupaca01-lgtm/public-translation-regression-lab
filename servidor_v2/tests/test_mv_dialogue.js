@@ -1630,7 +1630,61 @@ async function testExternalTsvLookupAndLatePresentation(mz){
     console.log("SERVIDOR_EXTERNAL_TSV_NATIVE_"+(mz?"MZ":"MV")+"_PASS");
 }
 
+
+async function testR3TsvStartWithoutWaitingAndWrappedComposite(mz){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const key="\\tl{T1001}\n\\tl{T1002}",line1="Please open the wooden gate.",line2="We can leave now.";
+    const rows=[["Key","English","Chinese(Simplified)","Chinese(Traditional)","Japanese"],
+        ["T1001",line1,"开门","開門","門を開けてください。"],
+        ["T1002",line2,"离开","離開","出発できる。"],
+        ["T1003","Please check the lantern.","灯","燈","ランタンを確認して。"],
+        ["T1004","Please check the window.","窗","窗","窓を確認して。"]];
+    // An isolated malformed row must not suppress all valid translations.
+    const raw=rows.map(r=>r.join("\t")).join("\n")+"\nmalformed\trow\n";
+    state.files[path.join(data,"Languages.tsv")]=raw;
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    const mapData={events:[null,{pages:[{list:[{code:401,parameters:["\\tl{T1001}"]},{code:401,parameters:["\\tl{T1002}"]}]}]}]};
+    state.files[path.join(data,"Map001.json")]=JSON.stringify(mapData);
+    const f=fixture(100,{mz,fsState:state,cacheReadDelay:160,nativePaint:true,batch:true,
+        responses:{[line1]:"Abre la puerta de madera.",[line2]:"Ya podemos salir.","Please check the lantern.":"Revisa la linterna.","Please check the window.":"Revisa la ventana."},
+        configure(c){
+            c.$dataMap=mapData;
+            const start=c.Window_Message.prototype.startMessage;
+            // Deliberately bypass convertEscapeCharacters wrappers and
+            // insert a wrap after the author's native localization.
+            c.Window_Message.prototype.startMessage=function(){
+                start.apply(this,arguments);
+                this._textState.text=c.$gameMessage.allText().replace(/\\tl\{([^}]+)\}/g,(token,id)=>{
+                    const row=rows.find(r=>r[0]===id);return row?row[1]:token;
+                }).replace("wooden gate","wooden\n gate");
+            };
+        }});
+    const c=f.context,title=new c.Scene_Title();c.SceneManager._scene=title;title.start();title.commandNewGame();
+    assert.equal(title.launches,1,"TSV starts on first click, while cache/index are loading");
+    const map=new c.Scene_Map();c.SceneManager._scene=map;map.createAllWindows();map.update();
+    if(mz)assert.equal(map._iaMini.height,38,"one line plus two six-pixel paddings");
+    f.$gameMessage._texts=key.split("\n");
+    const msg=new c.Window_Message();msg.startMessage();msg.finishPage();
+    const deadline=Date.now()+6500;
+    while(Date.now()<deadline&&!msg.contents.ops.some(x=>x.text==="Abre")){await wait(40);msg.update();}
+    assert.ok(msg.contents.ops.some(x=>x.text==="Abre"),"wrapped multi-key message recovers without revisiting");
+    assert.ok(msg.contents.ops.some(x=>x.text==="salir."),"second localized key is included");
+    assert.equal(f.$gameMessage.allText(),key);assert.equal(msg.originalStarts,1);assert.equal(msg.pages,1);
+    assert.ok(msg.contents.ops.some(x=>x.text==="FACE"));assert.equal(map.windows.length,2);
+    while(Date.now()<deadline&&!f.posts.some(x=>x.text==="Please check the window."))await wait(30);
+    assert.ok(f.posts.some(x=>x.text==="Please check the window."),"unvisited text continues processing while playing");
+    const replay=new c.Window_Message();replay.startMessage();
+    assert.equal(replay._textState.text,"Abre la puerta de madera.\nYa podemos salir.","cached composite used before first glyph");
+    assert.equal(f.$gameMessage.allText(),key);
+    const again=new c.Scene_Title();c.SceneManager._scene=again;again.start();again.commandNewGame();assert.equal(again.launches,1);
+    assert.equal(state.files[path.join(data,"Languages.tsv")],raw);
+    assert.ok(!f.posts.some(x=>/\\tl\{|T100[1-4]|malformed/.test(x.text)));
+}
+
 (async()=>{
+    await testR3TsvStartWithoutWaitingAndWrappedComposite(false);
+    await testR3TsvStartWithoutWaitingAndWrappedComposite(true);
     await testExternalTsvLookupAndLatePresentation(false);
     await testExternalTsvLookupAndLatePresentation(true);
     await testMZNativeContractsAndControls();
