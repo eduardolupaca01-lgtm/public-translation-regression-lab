@@ -1487,7 +1487,85 @@ async function testBoundedMapPrefetchAndPressure(){
     for(let i=0;i<300;i++)msg.startMessage();
     assert.equal(msg.originalStarts,300,"native hook cannot recurse under pressure");
 }
+
+async function testExternalTsvLookupAndLatePresentation(mz){
+    const content=path.join("/tmp","servidor-qa-juego-日本語",mz?"":"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const line="Please wait here...\\. Can we leave?",spanish="Espera aquí...\\. ¿Podemos salir?";
+    const key="\\tl{A0001}",choiceKey="\\tl{A0002}",chineseKey="\\tl{请开门}";
+    const rows=[
+        ["Key","English","Chinese(Simplified)","Chinese(Traditional)","Japanese"],
+        ["A0001",line,"等一下...\\. 可以离开吗？","等一下...\\. 可以離開嗎？","待って...\\. 出られますか？"],
+        ["A0002","Open the gate","开门","開門","門を開ける"],
+        ["请开门","Take the lantern","请开门","請開門","ランタンを取る"],
+        ["A0003","Please read this note.","请阅读","請閱讀","このメモを読んでください。"],
+        ["A0004","Please check the door.","查门","查門","ドアを確認してください。"],
+        ["A0004","Please check the window.","查窗","查窗","窓を確認してください。"]
+    ];
+    const raw="\uFEFF"+rows.map(r=>r.join("\t")).join("\r\n")+"\r\n";
+    state.files[path.join(data,"Languages.tsv")]=raw;
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"zh_CN",startMapId:1});
+    const originalMap=JSON.stringify({events:[null,{pages:[{list:[
+        {code:401,parameters:[key]},{code:102,parameters:[[choiceKey,chineseKey],0,0,2,0]},
+        {code:355,parameters:["Do not translate executable instructions."]}
+    ]}]}]});
+    state.files[path.join(data,"Map001.json")]=originalMap;
+    const f=fixture(110,{mz,fsState:state,nativePaint:true,batch:true,
+        responses:{"Please wait here...":"Espera aquí...","Can we leave?":"¿Podemos salir?","Open the gate":"Abre la puerta","Take the lantern":"Toma la linterna","Please read this note.":"Lee esta nota, por favor."},
+        configure(c){
+            const native=function(text){
+                return text.replace(/(?:\\|\x1b)tl\{([^{}]+)\}/gi,(token,k)=>{
+                    const row=rows.find(r=>r[0]===k);return row?row[1]:token;
+                }).replace(/\\/g,"\x1b");
+            };
+            c.Window_Base.prototype.convertEscapeCharacters=native;
+            c.Window_Message.prototype.convertEscapeCharacters=native;
+            const start=c.Window_Message.prototype.startMessage;
+            c.Window_Message.prototype.startMessage=function(){
+                start.apply(this,arguments);this._textState.text=this.convertEscapeCharacters(c.$gameMessage.allText());
+            };
+            function Window_ChoiceList(){this._list=[{name:choiceKey,symbol:"choice",enabled:true,ext:0}];this.active=true;this.openness=255;this.painted=[];}
+            Window_ChoiceList.prototype=Object.create(c.Window_Base.prototype);
+            Window_ChoiceList.prototype.constructor=Window_ChoiceList;
+            Window_ChoiceList.prototype.drawItem=function(i){this.painted[i]=this.convertEscapeCharacters(this._list[i].name);};
+            Window_ChoiceList.prototype.redrawItem=function(i){this.drawItem(i);};
+            Window_ChoiceList.prototype.textWidthEx=function(v){return v.length*8;};
+            Window_ChoiceList.prototype.textSizeEx=function(v){return {width:v.length*8,height:32};};
+            Window_ChoiceList.prototype.itemRectForText=function(){return {width:600};};
+            Window_ChoiceList.prototype.itemLineRect=function(){return {width:600};};
+            Window_ChoiceList.prototype.update=function(){};
+            c.Window_ChoiceList=Window_ChoiceList;
+        }
+    });
+    const map=new f.context.Scene_Map();f.context.SceneManager._scene=map;map.createAllWindows();map.update();
+    await wait(35);
+    f.$gameMessage._texts=[key];
+    const msg=new f.context.Window_Message();msg.startMessage();msg.finishPage();
+    const limit=Date.now()+6000;
+    while(Date.now()<limit&&!msg.contents.ops.some(x=>x.text.includes("Espera"))){await wait(40);msg.update();}
+    assert.ok(msg.contents.ops.some(x=>x.text.includes("Espera")),"TSV message must translate in the original window, even if the first paint was English");
+    assert.equal(msg.originalStarts,1);assert.equal(msg.pages,1);
+    assert.equal(f.$gameMessage.allText(),key,"the localization reference remains unchanged");
+    assert.ok(msg.contents.ops.some(x=>x.text==="FACE"),"native face preserved");
+    f.$gameMessage._texts=[key];
+    const again=new f.context.Window_Message();again.startMessage();
+    assert.equal(again._textState.text,spanish.replace(/\\/g,"\x1b"),"cache preserves native pause on replay");
+    assert.equal(f.$gameMessage.allText(),key);
+    const choice=new f.context.Window_ChoiceList(),before=JSON.stringify(choice._list);
+    while(Date.now()<limit&&choice.painted[0]!=="Abre la puerta"){choice.drawItem(0);await wait(35);}
+    assert.equal(choice.painted[0],"Abre la puerta");
+    assert.equal(JSON.stringify(choice._list),before,"branch symbol, index and key are unchanged");
+    const other=new f.context.Window_Base();other.initialize.apply(other,mz?[new f.context.Rectangle(0,0,400,100)]:[0,0,400,100]);
+    assert.notEqual(other.convertEscapeCharacters("\\tl{A0004}"),"\\tl{A0004}","native loader retains ownership of conflicting keys");
+    assert.ok(!f.posts.some(v=>/\\tl\{|A000[1-4]|请开门|開門|executable instructions/.test(v.text)),"never send keys, Chinese columns or script to inference");
+    assert.equal(state.files[path.join(data,"Languages.tsv")],raw);
+    assert.equal(state.files[path.join(data,"Map001.json")],originalMap);
+    assert.equal(map.windows.length,2,"no additional dialogue overlay");
+    console.log("SERVIDOR_EXTERNAL_TSV_NATIVE_"+(mz?"MZ":"MV")+"_PASS");
+}
+
 (async()=>{
+    await testExternalTsvLookupAndLatePresentation(false);
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testR3PatchRepairsStandardNoticeAndKeepsColor();
