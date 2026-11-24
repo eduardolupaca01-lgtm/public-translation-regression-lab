@@ -177,7 +177,7 @@ func iaDrawButton(param uintptr)bool{
     case iaCmdInstall: text="2. INSTALAR TRADUCTOR AUTOMÁTICO"
     case iaCmdClose: text="Cerrar"
     case iaCmdCopy: text="Copiar diagnóstico"
-    case iaCmdRecover: text="Recuperar inicio MV"
+    case iaCmdRecover: text="Recuperar inicio RPG"
     default: return false
     }
     if id==iaCmdInstall||id==iaCmdBrowse||id==301{

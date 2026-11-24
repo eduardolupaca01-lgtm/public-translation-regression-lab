@@ -1,5 +1,6 @@
 /*:
- * @plugindesc IA Traductora RPG Maker MV — motor local propio, sin cuentas ni nube.
+ * @target MV MZ
+ * @plugindesc IA Traductora RPG Maker MV/MZ — motor local propio, sin cuentas ni nube.
  * @author Servidor
  * @help El instalador Servidor configura el motor local. F10 muestra el estado.
  * No necesita parámetros ni acceso a Internet.
@@ -7,8 +8,10 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P9-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R1-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
+var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
+if(ENGINE_ID!=="MV"&&!isMZ)return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
 try{
@@ -30,6 +33,17 @@ var diskStats={loaded:0,saved:0,rejected:0,errors:0};
 var CACHE_SCHEMA="ia-traductora-cache-v2",CACHE_LIMIT=64*1024*1024,MAX_CACHE_ENTRIES=50000;
 // NW.js versions resolve index.html and Game.exe differently. Detect only an
 // actual MV root by checking its original files; never trust a guessed path.
+function engineAt(folder){
+    var js=path.join(folder,"js"),mv=ordinary(path.join(js,"rpg_core.js")),mz=ordinary(path.join(js,"rmmz_core.js"));
+    if(mv&&mz)return "AMBIGUOUS";
+    if(!ordinary(path.join(js,"plugins.js")))return "";
+    if(mz){
+        if(!["rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"].every(function(n){return ordinary(path.join(js,n));})||
+           !ordinary(path.join(folder,"data","System.json")))return "AMBIGUOUS";
+        return "MZ";
+    }
+    return mv?"MV":"";
+}
 function resolveMVGame(){
     var candidates=[],seen={};
     function add(value){
@@ -63,20 +77,16 @@ function resolveMVGame(){
     try{add(window.location.href);}catch(_){}
     try{add(process.cwd());}catch(_){}
     for(var i=0;i<candidates.length;i++){
-        var base=candidates[i];
-        for(var j=0;j<2;j++){
-            var folder=j===0?path.join(base,"www"):base;
-            if(!ordinary(path.join(folder,"js","rpg_core.js"))||
-               !ordinary(path.join(folder,"js","plugins.js")))continue;
-            try{
-                var root=fs.realpathSync(base);
-                // The chosen JS folder must remain associated with this game.
-                if(ordinary(path.join(root,j===0?"www":".","js","rpg_core.js")))
-                    return {root:root,content:j===0?path.join(root,"www"):root};
-            }catch(_){}
-        }
+        var base=candidates[i],layouts=[path.join(base,"www"),base],found=layouts.map(engineAt);
+        if(found.indexOf("AMBIGUOUS")>=0||found.filter(Boolean).length>1)throw Error("IA_RPG_RUTA_AMBIGUA");
+        var at=found.indexOf(ENGINE_ID);
+        if(at<0)continue;
+        try{
+            var root=fs.realpathSync(base),folder=at===0?path.join(root,"www"):root;
+            if(engineAt(folder)===ENGINE_ID)return {root:root,content:folder};
+        }catch(_){}
     }
-    throw Error("IA_RUTA_MV_NO_RECONOCIDA");
+    throw Error("IA_RUTA_RPG_NO_RECONOCIDA");
 }
 function ordinary(file){
     try{var st=fs.lstatSync(file);return st.isFile()&&!st.isSymbolicLink();}
@@ -618,7 +628,9 @@ function repairDisplayTerms(source,original,result){
 }
 function languageFor(s){
     if(typeof s!=="string"||!s||s.length>1800)return null;
-    if(typeof tableStats!=="undefined"&&tableStats.root&&csvExecutableSyntax(s))return null;
+    if(typeof tableStats!=="undefined"&&(tableStats.root||isMZ)&&csvExecutableSyntax(s))return null;
+    if(isMZ&&/(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(s))return null;
+    if(isMZ&&actorNames[s])return null;
     if(typeof csvKnown!=="undefined"&&csvKnown.has(s)&&!actorNames[s])return csvKnown.get(s);
     if(isJapanese(s))return "ja";
     if(actorNames[s])return null;
@@ -1203,7 +1215,7 @@ function translatedNativeLabel(text,identity){
         // Only the literal buttons, never the name-entry keyboard/value.
         return text==="決定"?"Aceptar":text==="キャンセル"?"Cancelar":text;
     }
-    if(identity)return nameInSpanish(text,true)||text;
+    if(identity)return isMZ?text:nameInSpanish(text,true)||text;
     var source=languageFor(text);
     if(!source)return text;
     var found=readyText(source,text);
@@ -1409,7 +1421,7 @@ function projectMessageSurface(win,text){
     }
     if(!matches(current)&&!matches(win._iaSourceMessage))return text;
     var source=languageFor(text);
-    if(source!=="en")return text; // existing Japanese path is unchanged
+    if(source!=="en"&&!(isMZ&&source==="ja"))return text;
     var ready=readyText(source,text);
     if(ready!==null&&validTranslation(source,text,ready,true)){
         hideLate(win);state.shown++;
@@ -1748,7 +1760,7 @@ function csvWindowChoice(win){
         hasNativeClass(win,/^Window_(?:ChoiceList|Choice|SelectChoice)/));
 }
 function csvWindowEligible(win){
-    return tableStats.root&&!identityDrawDepth&&(!win||!win._iaOwnSurface&&!win._iaNameSurface)&&
+    return (tableStats.root||isMZ)&&!identityDrawDepth&&(!win||!win._iaOwnSurface&&!win._iaNameSurface)&&
         !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name);
 }
 function csvActorExpansion(text){
@@ -1807,7 +1819,8 @@ function csvRequestLive(source,text){
     requestVisible(source,text).then(function(){csvLiveRequests.delete(key);},function(){csvLiveRequests.delete(key);state.errors++;});
 }
 function csvProjectDisplay(text,choice,requestMissing){
-    if(!tableStats.root||typeof text!=="string"||!text.trim()||text.length>1800||csvExecutableSyntax(text)||actorNames[text])return null;
+    if((!tableStats.root&&!isMZ)||typeof text!=="string"||!text.trim()||text.length>1800||csvExecutableSyntax(text)||actorNames[text])return null;
+    if(isMZ&&/(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
     var raw=text;
     if(choice){
         var v=/^(?:\\|\x1b)v\[(\d{1,6})\]$/i.exec(text);
@@ -1851,6 +1864,67 @@ function csvPlainLabel(text){
         return null;
     return csvProjectDisplay(text,false,true);
 }
+// Engine-specific presentation adapter. Keep the neural/cache/scheduler core shared.
+function ownWindowArgs(x,y,w,h){return isMZ?[new Rectangle(x,y,w,h)]:[x,y,w,h];}
+function nativeTextColor(win,index){
+    if(isMZ&&typeof ColorManager!=="undefined"&&typeof ColorManager.textColor==="function")
+        return ColorManager.textColor(index);
+    return typeof win.textColor==="function"?win.textColor(index):null;
+}
+function protectMZName(value){
+    if(typeof value==="string"&&value.trim()&&value.length<=100&&!/[\r\n\\\x1b<>]/.test(value))actorNames[value]=true;
+}
+function mzChoiceWidth(win,text){
+    if(isMZ&&typeof win.textSizeEx==="function"){
+        var size=win.textSizeEx(text);return size&&typeof size.width==="number"?size.width:0;
+    }
+    return typeof win.textWidthEx==="function"?win.textWidthEx(text):0;
+}
+function hookMZPresentation(){
+    if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.setSpeakerName==="function"){
+        var setSpeaker=Game_Message.prototype.setSpeakerName;
+        Game_Message.prototype.setSpeakerName=function(value){protectMZName(value);return setSpeaker.apply(this,arguments);};
+    }
+    if(typeof Window_NameBox!=="undefined"&&Window_NameBox.prototype){
+        var p=Window_NameBox.prototype;
+        ["initialize","setName","refresh","windowWidth","drawTextEx","textSizeEx"].forEach(function(method){
+            var original=p[method];if(typeof original!=="function")return;
+            p[method]=function(){
+                this._iaNameSurface=true;
+                if(method==="setName")protectMZName(arguments[0]);
+                identityDrawDepth++;
+                try{return original.apply(this,arguments);}finally{identityDrawDepth--;}
+            };
+        });
+    }
+    function protectIdentity(proto,method){
+        if(!proto||typeof proto[method]!=="function")return;
+        var original=proto[method];
+        proto[method]=function(){identityDrawDepth++;try{return original.apply(this,arguments);}finally{identityDrawDepth--;}};
+    }
+    if(typeof Window_StatusBase!=="undefined")protectIdentity(Window_StatusBase.prototype,"drawActorName");
+    if(typeof Sprite_Name!=="undefined")protectIdentity(Sprite_Name.prototype,"redraw");
+    if(typeof Window_Help!=="undefined"&&Window_Help.prototype){
+        var hp=Window_Help.prototype,update=hp.update;
+        if(typeof update==="function"&&typeof hp.refresh==="function"){
+            hp.update=function(){
+                var out=update.apply(this,arguments);
+                try{
+                    if(this.visible===false||this.openness===0||this._iaOwnSurface||
+                       typeof this._text!=="string"||!this._text.trim()||this._text.length>1800)return out;
+                    if((this._iaMZHelpTick=(this._iaMZHelpTick||0)+1)%15!==0)return out;
+                    var raw=this._text,source=languageFor(raw);if(!source)return out;
+                    var translated=readyText(source,raw);
+                    if(translated===null){csvRequestLive(source,raw);return out;}
+                    if(this._iaMZHelpRaw!==raw||this._iaMZHelpShown!==translated){
+                        this._iaMZHelpRaw=raw;this._iaMZHelpShown=translated;this.refresh();
+                    }
+                }catch(_){state.errors++;}
+                return out;
+            };
+        }
+    }
+}
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
         hookSurfaceConversion(Window_Base.prototype,false);
@@ -1887,7 +1961,8 @@ function hookNativeSurface(){
         });
     }
     hookSpecificSurfaces();
-    if(!hookGalvCaptionFactory())hookCaptionInterpreter();
+    if(!hookGalvCaptionFactory()&&!isMZ)hookCaptionInterpreter();
+    if(isMZ)hookMZPresentation();
     // The author's name window is created as a subwindow of Window_Message.
     // Mark that instance, not an arbitrary class or all Japanese short labels.
     if(typeof Window_Message!=="undefined"&&Window_Message.prototype){
@@ -2004,7 +2079,8 @@ function snapshotMessage(win,ticket){
     if(!ts||!b||typeof ts.text!=="string"||!integer(ts.index)||ts.index!==0||
        !integer(b.width)||!integer(b.height)||b.width>4096||b.height>2048||
        typeof b.clearRect!=="function"||typeof b.blt!=="function"||
-       typeof win.textColor!=="function")return;
+       (typeof win.textColor!=="function"&&!(isMZ&&typeof ColorManager!=="undefined"&&typeof ColorManager.textColor==="function"))||
+       (isMZ&&ts.rtl))return;
     var original=nativeRenderParts(ticket.displayed),native=nativeRenderParts(ts.text);
     if(!original||!native||plainCompare(original.flat)!==plainCompare(native.flat))return;
     // Native plugin conversion can change a macro or text alignment.
@@ -2052,7 +2128,7 @@ function planNativeWords(parsed,bitmap,win,geometry){
         if(y+line>height)return null;
         x+=pad;
         for(var k=0;k<w.runs.length;k++){
-            var r=w.runs[k],c=r.color===null?geometry.style.textColor:win.textColor(r.color);
+            var r=w.runs[k],c=r.color===null?geometry.style.textColor:nativeTextColor(win,r.color);
             if(typeof c!=="string")return null;
             ops.push({text:r.text,x:x,y:y,w:Math.max(1,Math.ceil(lengths[k])+4),color:c,icon:r.icon});
             x+=lengths[k];
@@ -2136,13 +2212,13 @@ function hookMessages(){
                         var partial=readyIndependentLines(source,text);
                         if(partial!==null)$gameMessage._texts=partial.split("\n");
                         var win=this,ticket=null;
-                        if((source==="en"||tableStats.root)&&nativeRenderParts(text)){
+                        if((source==="en"||tableStats.root||isMZ)&&nativeRenderParts(text)){
                             ticket={message:$gameMessage,displayed:$gameMessage.allText(),original:text,source:source,
                                 scene:typeof SceneManager!=="undefined"?SceneManager._scene:null,
                                 result:null,drawn:false,pages:0,geometry:null};
                             win._iaLateTicket=ticket;lateStats.requested++;
                         }
-                        if(tableStats.root){addPrefetch(text,true,source);nextPrefetch();}
+                        if(tableStats.root||isMZ){addPrefetch(text,true,source);nextPrefetch();}
                         if(state.connected&&(!tableStats.root||cacheReadDone))requestVisible(source,text).then(function(result){
                             if(ticket&&win._iaLateTicket===ticket&&typeof result==="string"&&result!==text&&
                                validTranslation(source,text,result,true))ticket.result=result;
@@ -2222,7 +2298,7 @@ function hookChoices(){
             }
         }catch(_){state.errors++;}
         var args=Array.prototype.slice.call(arguments);
-        if(changed){args[0]=translated;state.shown++;}
+        if(changed&&!isMZ){args[0]=translated;state.shown++;}
         return original.apply(this,args);
     };
 }
@@ -2789,9 +2865,10 @@ function hookCsvChoiceLabels(){
         var draw=p.drawItem;
         p.drawItem=function(index){return display(this,index,draw,arguments);};
     }
-    if(typeof p.textWidthEx==="function"){
-        var measure=p.textWidthEx;
-        p.textWidthEx=function(text){
+    var measureMethod=isMZ?"textSizeEx":"textWidthEx";
+    if(typeof p[measureMethod]==="function"){
+        var measure=p[measureMethod];
+        p[measureMethod]=function(text){
             var args=Array.prototype.slice.call(arguments);
             if(csvWindowEligible(this))try{
                 var out=csvProjectDisplay(text,true,true);if(out!==null)args[0]=out;
@@ -2816,8 +2893,9 @@ function hookCsvChoiceLabels(){
                 if(translated===null||translated===original)return;
                 var last=win._iaCsvPaint&&win._iaCsvPaint[i];
                 if(last&&last.item===item&&last.raw===original&&last.shown===translated)return;
-                var rect=typeof win.itemRectForText==="function"?win.itemRectForText(i):null;
-                if(rect&&typeof win.textWidthEx==="function"&&win.textWidthEx(translated)>rect.width)needsLayout=true;
+                var rect=isMZ&&typeof win.itemLineRect==="function"?win.itemLineRect(i):
+                    typeof win.itemRectForText==="function"?win.itemRectForText(i):null;
+                if(rect&&mzChoiceWidth(win,translated)>rect.width)needsLayout=true;
                 changes.push(i);
             });
             if(needsLayout){
@@ -2927,6 +3005,9 @@ function scanCommands(list,priority){
     for(var i=0;i<list.length;i++){
         var cmd=list[i];
         if(!cmd||!Array.isArray(cmd.parameters))continue;
+        if(isMZ&&cmd.code===101){protectMZName(cmd.parameters[4]);continue;}
+        // Structured plugin commands may contain executable arguments.
+        if(isMZ&&cmd.code===357)continue;
         if(cmd.code===401||cmd.code===405){
             var parts=[],code=cmd.code;
             while(cmd&&cmd.code===code&&Array.isArray(cmd.parameters)&&parts.length<4){
@@ -3176,8 +3257,8 @@ function hookTitleStart(){
         var width=Math.min(720,Graphics.boxWidth||816),x=Math.max(0,Math.floor(((Graphics.boxWidth||816)-width)/2));
         var win=scene._iaTitleProgress;
         if(!win){
-            win=new Window_Base(x,8,width,124);win._iaOwnSurface=true;
-            if(!win.contents)win.initialize(x,8,width,124);
+            win=isMZ?new Window_Base(new Rectangle(x,8,width,124)):new Window_Base(x,8,width,124);win._iaOwnSurface=true;
+            if(!win.contents)win.initialize.apply(win,ownWindowArgs(x,8,width,124));
             scene.addWindow(win);scene._iaTitleProgress=win;
         }
         win.show();win.contents.fontSize=18;return win;
@@ -3259,9 +3340,10 @@ function setupHud(){
     IAMini.prototype=Object.create(Window_Base.prototype);
     IAMini.prototype.constructor=IAMini;
     IAMini.prototype.standardPadding=function(){return 6;};
+    if(isMZ)IAMini.prototype.updatePadding=function(){this.padding=6;};
     IAMini.prototype.lineHeight=function(){return 26;};
     IAMini.prototype.initialize=function(){
-        this._iaOwnSurface=true;Window_Base.prototype.initialize.call(this,Graphics.boxWidth-218,7,208,44);
+        this._iaOwnSurface=true;Window_Base.prototype.initialize.apply(this,ownWindowArgs(Math.max(0,Graphics.boxWidth-218),7,208,isMZ?52:44));
         this.opacity=190;
         this.contents.fontSize=14;this.contents.outlineWidth=3;
         this.drawText("◆ IA Traductora · F10",0,0,this.contentsWidth(),"center");
@@ -3270,12 +3352,12 @@ function setupHud(){
     IAPanel.prototype=Object.create(Window_Base.prototype);
     IAPanel.prototype.constructor=IAPanel;
     IAPanel.prototype.standardPadding=function(){return 14;};
+    if(isMZ)IAPanel.prototype.updatePadding=function(){this.padding=14;};
     IAPanel.prototype.lineHeight=function(){return 38;};
     IAPanel.prototype.initialize=function(){
         var w=Math.min(540,Math.max(310,Graphics.boxWidth-22));
         var h=Math.min(535,Math.max(340,(Graphics.boxHeight||720)-20));
-        this._iaOwnSurface=true;Window_Base.prototype.initialize.call(this,
-            Math.max(5,Graphics.boxWidth-w-10),8,w,h);
+        this._iaOwnSurface=true;Window_Base.prototype.initialize.apply(this,ownWindowArgs(Math.max(5,Graphics.boxWidth-w-10),8,w,h));
         this.opacity=228;this.visible=false;this._tick=0;
         this.contents.fontSize=18;this.contents.outlineWidth=2;
         this.refresh();
@@ -3284,7 +3366,7 @@ function setupHud(){
         this.contents.clear();
         this.contents.fontSize=18;
         var lines=[
-            "IA Traductora · RPG Maker MV",
+            "IA Traductora · RPG Maker "+ENGINE_ID,
             "Español · "+BUILD_ID,
             "Fase: "+state.phase,
             "Motor:",
@@ -3341,8 +3423,7 @@ try{
     // hold the game's event loop waiting for a cache or neural result.
     loadDisplayMacros();startPersistentCache();
     state.phase="NUCLEO";
-    if(!ordinary(path.join(content,"js","rpg_core.js")))
-        throw Error("IA_NUCLEO_MV_NO_ENCONTRADO");
+    if(engineAt(content)!==ENGINE_ID)throw Error("IA_NUCLEO_RPG_NO_ENCONTRADO");
     state.phase="MENSAJES";hookMessages();
     state.phase="OPCIONES";hookChoices();hookCsvChoiceLabels();
     state.phase="INTERFAZ";hookNativeSurface();hookTitleStart();

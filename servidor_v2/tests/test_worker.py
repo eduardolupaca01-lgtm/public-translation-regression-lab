@@ -278,4 +278,24 @@ class EngineTests(unittest.TestCase):
             self.http("/translate",{"source":"fr","target":"es","text":"Bonjour"})
         self.assertEqual(e.exception.code,400)
 
+
+class MZLayoutTests(unittest.TestCase):
+    def test_mz_root_and_wrapped(self):
+        for wrapped in (False,True):
+            with self.subTest(wrapped=wrapped), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                content=root/"www" if wrapped else root
+                for file in ("js/rmmz_core.js","js/rmmz_managers.js","js/rmmz_objects.js","js/rmmz_scenes.js","js/rmmz_windows.js","js/plugins.js","data/System.json"):
+                    dest=content/file;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text("{}")
+                self.assertEqual(ia.game_root(root),(root.resolve(),content.resolve()))
+                engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+                engine.mkdir(parents=True)
+                service=ia.Service(root,engine,neural=FakeNeural())
+                try:
+                    self.assertEqual(service.translate("en","Good morning."),"Buen día")
+                finally:
+                    service.close()
+                (content/"js"/"rpg_core.js").write_text("{}")
+                with self.assertRaises(ValueError):ia.game_root(root)
+
 if __name__=="__main__":unittest.main()

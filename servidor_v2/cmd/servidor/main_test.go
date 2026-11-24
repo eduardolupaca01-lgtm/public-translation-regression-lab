@@ -346,3 +346,33 @@ func TestInstalledIdentityMatchesExactPackage(t *testing.T){
  if err:=os.WriteFile(worker,[]byte("old worker"),0600);err!=nil{t.Fatal(err)}
  if _,err:=installedPackageIdentity(filepath.Join(game,"Game.exe"),pkg);err==nil{t.Fatal("old worker falsely verified")}
 }
+
+func TestMZDetectionAndInstallation(t *testing.T){
+ for _,wrapped:=range []bool{false,true}{
+  game:=filepath.Join(t.TempDir(),"RPG MZ 日本語")
+  content:=game;if wrapped{content=filepath.Join(game,"www")}
+  js:=filepath.Join(content,"js")
+  if err:=os.MkdirAll(filepath.Join(js,"plugins"),0700);err!=nil{t.Fatal(err)}
+  if err:=os.MkdirAll(filepath.Join(content,"data"),0700);err!=nil{t.Fatal(err)}
+  for _,n:=range []string{"rmmz_core.js","rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"}{
+   if err:=os.WriteFile(filepath.Join(js,n),[]byte("// synthetic MZ"),0600);err!=nil{t.Fatal(err)}
+  }
+  original:=[]byte("var $plugins = [];")
+  for filename,value:=range map[string][]byte{filepath.Join(js,"plugins.js"):original,filepath.Join(content,"data","System.json"):[]byte("{}"),filepath.Join(game,"Game.exe"):[]byte("fixture")}{
+   if err:=os.WriteFile(filename,value,0600);err!=nil{t.Fatal(err)}
+  }
+  exe:=filepath.Join(game,"Game.exe")
+  root,detected,err:=detectGame(exe)
+  if err!=nil||root!=game||detected!=content||engineAt(content)!="MZ"{t.Fatalf("MZ detection: %v",err)}
+  pkg,err:=readPackage(fakePackage(t));if err!=nil{t.Fatal(err)}
+  if err=Install(exe,pkg);err!=nil{t.Fatal(err)}
+  if !ordinary(filepath.Join(js,"plugins","IATraductora.js")){t.Fatal("missing MZ plugin")}
+  if _,err=installedPackageIdentity(exe,pkg);err!=nil{t.Fatal(err)}
+  if err=RecoverGame(exe);err!=nil{t.Fatal(err)}
+  recovered,_:=os.ReadFile(filepath.Join(js,"plugins.js"))
+  if !bytes.Equal(recovered,original){t.Fatal("MZ registry recovery changed bytes")}
+  pkg.Close()
+  if err=os.WriteFile(filepath.Join(js,"rpg_core.js"),[]byte("{}"),0600);err!=nil{t.Fatal(err)}
+  if _,_,err=detectGame(exe);err==nil{t.Fatal("mixed engines must be rejected")}
+ }
+}
