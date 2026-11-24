@@ -9,3 +9,5 @@ Diagnóstico privado del usuario, sólo cifras agregadas: 218 mapas, 700 eventos
 - Las pruebas usan contenido sintético propio; no se incorpora código, diálogos ni archivos originales del usuario al repositorio público.
 - Referencia del contrato nativo: https://rpgmakerofficial.com/product/mz/plugin/make/koushiki.html
 - Límites: no se traducen expresiones arbitrarias de JavaScript, imágenes/vídeos con texto incrustado o rutas sin contrato demostrado; la compatibilidad de plugins comerciales y el ajuste visual deben verificarse en el juego real.
+
+Segunda revisión: se cubren variables de preguntas y respuestas, descripciones y nombres de objetos con procedencia de la base de datos, y roles genéricos de NPC. Los identificadores se validan con los nombres declarados en System.json; se preservan los valores numéricos y los nombres propios. Se añaden pruebas de proyección nativa con cuatro rutas y de no modificación de variables/índices.

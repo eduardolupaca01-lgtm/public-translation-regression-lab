@@ -2231,6 +2231,8 @@ function firstViewRequest(source,text){
 }
 function choiceDisplay(win,raw,requestMissing){
     if(inputFormActive()||identityDrawDepth||typeof raw!=="string"||actorNames[raw])return null;
+    var entries=scriptVariableEntries(raw);
+    if(entries.length)return scriptVariableRender(raw,entries,requestMissing);
     if(tsvRef(raw)&&tsv.valid){
         var locale=tsvProbeLocale(win);
         if(locale)return tsvTranslatedKeys(raw,locale,requestMissing);
@@ -2265,6 +2267,8 @@ function firstViewMissing(win,raw,choice){
             return rejectedKeys.get(scripted.source+"\u0000"+scripted.body)!==Infinity;
         }
     }
+    var entries=scriptVariableEntries(raw);
+    if(entries.length)return scriptVariableRender(raw,entries,true)===null;
     if(choice&&choiceDisplay(win,raw,true)!==null)return false;
     if(choice&&(externalTables()||isMZ)){
         var variable=/^(?:\\|\x1b)v\[(\d{1,6})\]$/i.exec(raw);
@@ -2289,7 +2293,7 @@ function firstViewWait(win){
     choices=Array.isArray(choices)&&choices.length<=24?choices.slice():[];
     if(!raw&&!choices.length){win._iaFirstGate=null;return false;}
     var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null,
-        key=JSON.stringify([raw,choices,m._iaFirstGeneration||0,(scriptMessagePlan(raw)||{}).body||""]),now=Date.now(),g=win._iaFirstGate;
+        key=JSON.stringify([raw,choices,m._iaFirstGeneration||0,(scriptMessagePlan(raw)||{}).body||"",scriptVariableKey(raw),choices.map(scriptVariableKey)]),now=Date.now(),g=win._iaFirstGate;
     if(!g||g.message!==m||g.scene!==scene||g.key!==key)
         g=win._iaFirstGate={message:m,scene:scene,key:key,started:now,checked:0,waiting:true};
     if(g.done)return false;
@@ -2361,6 +2365,112 @@ var scriptStats={dialogues:0,pictures:0,shown:0};
 function enabledTextPicture(){
     return isMZ&&typeof $plugins!=="undefined"&&Array.isArray($plugins)&&$plugins.some(function(p){return p&&p.status&&p.name==="TextPicture";});
 }
+// Additional display-variable contracts, enabled only after the primary
+// script dialect has been proven. Never change the actual variable values.
+var displayVariableNames=null;
+var displayFieldNames={19:"ITEM Name Text",64:"Description TEXT",140:"NPC Name",241:"Quiz Question Line 1",
+    242:"Answer1",243:"Answer2",244:"Answer3",245:"Answer4",247:"Quiz Question Line 2",
+    248:"Quiz Question Line 3",249:"Quiz Question Line 4",266:"Blueprint Description",271:"Blueprint Name 1",
+    272:"Blueprint Name 2",273:"Blueprint Name 3",274:"Blueprint Name 4",275:"Blueprint Title"};
+var genericNpcRoles={"Stranger":"Desconocido","Employee":"Empleado","Receptionist":"Recepcionista",
+    "Executive":"Ejecutivo","Patron":"Cliente","Patient":"Paciente","Resident":"Residente","Customer":"Cliente",
+    "Technician":"Técnico","Volunteer":"Voluntario","Fisherman":"Pescador","Bartender":"Camarero",
+    "Lab Worker":"Trabajador de laboratorio","Dock Worker":"Estibador","Shop Manager":"Encargado de tienda",
+    "Mysterious Man":"Hombre misterioso","Lost Man":"Hombre perdido","Director":"Director",
+    "Clerk":"Dependiente","Shopper":"Comprador","Housekeeper":"Encargado de limpieza",
+    "Protestor":"Manifestante","Parishioner":"Feligrés","Influencer":"Influencer"};
+var displayLiteralProof=new Map(),itemDataRef=null,itemDisplayProof=new Set();
+function profileField(id){
+    var names=typeof $dataSystem!=="undefined"&&$dataSystem&&Array.isArray($dataSystem.variables)?
+        $dataSystem.variables:displayVariableNames;
+    return scriptProfileActive()&&names&&Object.prototype.hasOwnProperty.call(displayFieldNames,id)&&names[id]===displayFieldNames[id];
+}
+function profileItemField(id){return id===19||id===64||id===266||(id>=271&&id<=275);}
+function plainDisplayValue(value){
+    return typeof value==="string"&&!!value.trim()&&value.length<=1800&&!/[\\\x1b<>{}\u0000\uFFFD]/.test(value)&&!csvExecutableSyntax(value);
+}
+function displayVariableSource(id,value){
+    if(!plainDisplayValue(value)||actorNames[value])return null;
+    // Quiz answer names and proper nouns are not blindly translated.
+    if(id>=242&&id<=245&&/^[A-Z][a-z]+(?:[ -][A-Z][a-z]+){0,3}$/.test(value)&&!languageFor(value))return null;
+    var source=authoredSource(value,true);
+    if(source)return source;
+    // A proven item label may be a single word. Identity variables never
+    // enter this route. It still passes the existing model/cache validator.
+    return profileItemField(id)&&/^[A-Za-z][A-Za-z' -]{1,60}$/.test(value)?"en":null;
+}
+function rememberDisplayLiteral(cmd,priority){
+    var a=cmd.parameters;
+    if(a.length!==5||a[0]!==a[1]||a[2]!==0||a[3]!==4||!profileField(a[0])||
+       typeof a[4]!=="string"||a[4].length>4000)return;
+    var value;
+    try{value=JSON.parse(a[4]);}catch(_){return;}
+    if(!plainDisplayValue(value))return;
+    var id=a[0],key=id+"\u0000"+value;
+    if(displayLiteralProof.size<10000)displayLiteralProof.set(key,true);
+    if(id!==140){
+        var source=displayVariableSource(id,value);
+        if(source)authoredRemember(source,value,priority);
+    }
+}
+function knownItemDisplay(value){
+    if(typeof $dataItems==="undefined"||!Array.isArray($dataItems))return false;
+    if(itemDataRef!==$dataItems){
+        itemDataRef=$dataItems;itemDisplayProof.clear();
+        $dataItems.forEach(function(row){
+            if(!row)return;
+            ["name","description"].forEach(function(k){if(plainDisplayValue(row[k])&&itemDisplayProof.size<30000)itemDisplayProof.add(row[k]);});
+        });
+    }
+    return itemDisplayProof.has(value);
+}
+function scriptVariableEntry(id){
+    if(!profileField(id)||typeof $gameVariables==="undefined"||!$gameVariables||typeof $gameVariables.value!=="function")return null;
+    var value=$gameVariables.value(id);
+    if(!plainDisplayValue(value)||actorNames[value])return null;
+    if(id===140){
+        if(!Object.prototype.hasOwnProperty.call(genericNpcRoles,value)||genericNpcRoles[value]===value)return null;
+        return {body:value,source:"en",prefix:"",suffix:"",fixed:genericNpcRoles[value]};
+    }
+    if(profileItemField(id)&&!knownItemDisplay(value)&&!displayLiteralProof.has(id+"\u0000"+value))return null;
+    var source=displayVariableSource(id,value);
+    return source?{source:source,body:value,prefix:"",suffix:""}:null;
+}
+function scriptVariableEntries(raw){
+    if(!isMZ||typeof raw!=="string"||raw.length>1800||!/\\v\[/i.test(raw)||!scriptProfileActive())return [];
+    var entries=[],seen=Object.create(null);
+    raw.replace(/\\v\[(\d{1,6})\]/gi,function(token,n){
+        var id=Number(n);if(seen[id])return token;seen[id]=true;
+        var entry=scriptVariableEntry(id);
+        if(entry){entry.id=id;entries.push(entry);}
+        return token;
+    });
+    return entries;
+}
+function scriptVariableRender(raw,entries,requestMissing){
+    if(!entries.length)return null;
+    var translated=Object.create(null),missing=false;
+    entries.forEach(function(entry){
+        var value=authoredRead(entry,requestMissing);
+        // Inserting a variable into the native raw message must not
+        // introduce new controls (unlike a variable expanded after escape parsing).
+        if(value===null||!plainDisplayValue(value))missing=true;
+        else translated[entry.id]=value;
+    });
+    var base=raw,source=languageFor(raw);
+    if(source&&hasProse(source,raw)){
+        base=readyText(source,raw);
+        if(base===null){missing=true;if(requestMissing)firstViewRequest(source,raw);}
+    }
+    if(missing)return null;
+    return base.replace(/\\v\[(\d{1,6})\]/gi,function(token,n){
+        return Object.prototype.hasOwnProperty.call(translated,Number(n))?translated[Number(n)]:token;
+    });
+}
+function scriptVariableKey(raw){
+    return scriptVariableEntries(raw).map(function(e){return [e.id,e.body];});
+}
+
 function scriptSystemContract(data){
     var v=data&&data.variables;
     return isMZ&&Array.isArray(v)&&v[21]==="MESSAGE HOLDER"&&v[25]==="MESSAGE HOLDER"&&v[26]==="SYNTAX HOLDER";
@@ -2383,7 +2493,7 @@ function scriptProfileActive(){
     if(scriptProfile)return true;
     if(typeof $dataSystem!=="undefined"&&scriptSystemContract($dataSystem)&&
        typeof $dataCommonEvents!=="undefined"&&$dataCommonEvents){
-        if(scriptEventContract($dataCommonEvents)){scriptProfile=true;scriptLocale=$dataSystem.locale||"";}
+        if(scriptEventContract($dataCommonEvents)){scriptProfile=true;scriptLocale=$dataSystem.locale||"";displayVariableNames=$dataSystem.variables;}
     }
     return scriptProfile;
 }
@@ -2406,6 +2516,7 @@ function authoredRemember(source,text,priority){
 }
 function authoredRead(plan,requestMissing){
     if(!plan)return null;
+    if(typeof plan.fixed==="string")return plan.prefix+plan.fixed+plan.suffix;
     if(!authoredDisplay.has(plan.body)&&authoredDisplay.size<MAX_DISCOVERED)authoredDisplay.set(plan.body,plan.source);
     var translated=readyText(plan.source,plan.body);
     if(translated!==null&&validTranslation(plan.source,plan.body,translated,true))
@@ -2453,10 +2564,11 @@ function picturePlan(raw){
     var prefix="",body=raw;
     // Only explicitly defined display variables for the verified dialect;
     // names, money, counters and generic game variables are NOT translated.
-    var dynamic=/^((?:\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{1,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[{}]))*)\\v\[(64|266|275)\]$/i.exec(raw);
-    if(dynamic&&scriptProfileActive()&&typeof $gameVariables!=="undefined"&&$gameVariables&&typeof $gameVariables.value==="function"){
-        body=$gameVariables.value(Number(dynamic[2]));prefix=dynamic[1];
-        if(typeof body!=="string"||actorNames[body])return null;
+    var dynamic=/^((?:\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{1,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[{}]))*)\\v\[(\d{1,6})\]$/i.exec(raw);
+    if(dynamic){
+        var entry=scriptVariableEntry(Number(dynamic[2]));
+        if(!entry)return null;
+        entry.prefix=dynamic[1];return entry;
     }else if(/(?:\\|\x1b)[VP]\[\d+\]/i.test(raw))return null;
     // An explicit speaker label belongs to the picture, not the model.
     var speaker=/^((?:\\N\[\d+\]|[A-Z][A-Za-z0-9'’ -]{0,35}):[ \t]+)([\s\S]+)$/.exec(body);
@@ -2467,6 +2579,7 @@ function picturePlan(raw){
 function scriptScanCommand(cmd,next,priority){
     if(!isMZ||!cmd||!Array.isArray(cmd.parameters))return;
     var a=cmd.parameters,plan=null;
+    if(cmd.code===122){rememberDisplayLiteral(cmd,priority);return;}
     if(cmd.code===357&&enabledTextPicture()&&a[0]==="TextPicture"&&a[1]==="set"&&a[3]&&typeof a[3].text==="string"){
         // Dynamic pictures are handled at presentation, not against
         // arbitrary variable values during the static inventory.
@@ -2502,7 +2615,7 @@ function hookAuthoredMZ(){
                 raw=pic.mzkp_text;
                 var plan=picturePlan(raw);
                 if(plan){
-                    var key=JSON.stringify([raw,plan.prefix,plan.body]),ticket=this._iaPictureProjection,now=Date.now();
+                    var key=JSON.stringify([raw,plan.prefix,plan.body,plan.fixed||""]),ticket=this._iaPictureProjection,now=Date.now();
                     if(!ticket||ticket.pic!==pic||ticket.key!==key)
                         ticket=this._iaPictureProjection={pic:pic,key:key,checked:0,out:null};
                     if(!ticket.checked||now-ticket.checked>=100){
@@ -2559,7 +2672,13 @@ function hookMessages(){
                     if(projected!==null)projection={message:$gameMessage,raw:text,text:projected,used:false,scripted:true};
                     source=null;
                 }
-                if(!scripted&&tsv.detected&&tsvRef(keys)){
+                var entries=!scripted?scriptVariableEntries(keys):[];
+                if(entries.length){
+                    var fieldText=scriptVariableRender(keys,entries,true);
+                    if(fieldText!==null)projection={message:$gameMessage,raw:text,text:fieldText,used:false,scripted:true};
+                    source=null;
+                }
+                if(!scripted&&!entries.length&&tsv.detected&&tsvRef(keys)){
                     var resolved=tsvMessageEntry(keys,text);
                     var locale=resolved?resolved.source:tsvProbeLocale(this);
                     if(locale)tsv.language=locale;
@@ -3905,7 +4024,7 @@ function scanCommands(list,priority){
         if(!cmd||!Array.isArray(cmd.parameters))continue;
         if(isMZ&&cmd.code===101){protectMZName(cmd.parameters[4]);continue;}
         // Only registered display fields and verified literal dialects.
-        if(isMZ&&(cmd.code===357||cmd.code===355)){
+        if(isMZ&&(cmd.code===357||cmd.code===355||cmd.code===122)){
             scriptScanCommand(cmd,list[i+1],priority);continue;
         }
         if(cmd.code===401||cmd.code===405){
@@ -3956,7 +4075,7 @@ function scanDatabase(name,data){
     }
     if(name==="System.json"){
         if(!data||typeof data!=="object")return;
-        if(isMZ){scriptLocale=data.locale||"";scriptSystem=scriptSystemContract(data);}
+        if(isMZ){scriptLocale=data.locale||"";scriptSystem=scriptSystemContract(data);if(scriptSystem)displayVariableNames=data.variables;}
         addPrefetch(data.gameTitle,true);addPrefetch(data.currencyUnit,true);
         var terms=data.terms||{};
         ["basic","commands","params"].forEach(function(k){
@@ -4296,6 +4415,7 @@ function setupHud(){
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
+            (scriptProfile||enabledTextPicture())?"Textos especiales: "+scriptStats.shown+" · Inventario: "+authoredDisplay.size:
             "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · C:"+String(ambientStats.factory||0)
         ];
         for(var i=0;i<lines.length;i++){

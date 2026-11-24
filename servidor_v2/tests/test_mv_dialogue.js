@@ -2000,8 +2000,73 @@ async function testR7AuthoredScriptAndPicture(){
     assert.ok(f.posts.some(x=>x.text===caption));
 }
 
+
+async function testR7VerifiedVariableSurfaces(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),dir=path.join(root,"data");
+    const variables=[];Object.entries({21:"MESSAGE HOLDER",25:"MESSAGE HOLDER",26:"SYNTAX HOLDER",
+        140:"NPC Name",241:"Quiz Question Line 1",242:"Answer1",243:"Answer2",266:"Blueprint Description",275:"Blueprint Title"}).forEach(([id,label])=>variables[id]=label);
+    const command=(code,...parameters)=>({code,parameters});
+    const parser=[command(355,'var slice = $gameVariables.value(21).indexOf(".");'),
+        command(655,"var message = $gameVariables.value(21).slice(slice + 1);"),
+        command(655,"var syntax = $gameVariables.value(21).slice(0,slice);"),
+        command(655,"$gameVariables.setValue(25, message);"),command(655,"$gameVariables.setValue(26, syntax);"),
+        command(401,"\\v[25]")];
+    const question="Where is the library?",answer="Behind the old castle.",item="Open the wooden box.";
+    const values={140:"Stranger",241:question,242:answer,243:"Peter",266:item,73:12345,275:"UnverifiedPlayerLabel"};
+    const fsState={files:{[path.join(dir,"System.json")]:JSON.stringify({locale:"en_US",variables}),
+        [path.join(dir,"CommonEvents.json")]:JSON.stringify([null,{id:1,list:parser}]),
+        [path.join(dir,"Map001.json")]:JSON.stringify({events:[null,{pages:[{list:[
+            command(122,241,241,0,4,JSON.stringify(question)),command(122,242,242,0,4,JSON.stringify(answer)),
+            command(122,243,243,0,4,JSON.stringify("Peter")),command(122,73,73,0,4,"doNotExecute()")
+        ]}]}]})},dirs:{[dir]:true}};
+    let writes=0;
+    const f=fixture(65,{mz:true,nativePaint:true,fsState,batch:true,plugins:[{name:"TextPicture",status:true,parameters:{}}],
+        responses:{[question]:"¿Dónde está la biblioteca?",[answer]:"Detrás del castillo antiguo.",[item]:"Abre la caja de madera."},
+        configure(c){
+            c.$dataSystem={locale:"en_US",variables};c.$dataCommonEvents=[null,{list:parser}];
+            c.$dataItems=[null,{name:"Chest",description:item}];
+            c.$gameVariables={value:i=>values[i],setValue(){writes++;throw Error("unexpected write")}};
+            const p=c.Window_Message.prototype,base=p.startMessage;
+            p.updateWait=function(){return false;};p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+            p.update=function(){if(!this.updateWait()&&this.canStart())this.startMessage();};
+            p.startMessage=function(){this.nativeInput=c.$gameMessage.allText();base.apply(this,arguments);};
+            function Choice(items){this._list=items.map((name,ext)=>({name,ext,symbol:"choice",enabled:true}));this.painted=[];}
+            Choice.prototype.drawItem=function(i){this.painted[i]=this._list[i].name;};
+            Choice.prototype.update=function(){};
+            c.Window_ChoiceList=Choice;
+            function Sprite(pic){this.pic=pic;this.mzkp_text="";this.bitmap=null;}
+            Sprite.prototype.picture=function(){return this.pic;};
+            Sprite.prototype.updateBitmap=function(){if(this.mzkp_text!==this.pic.mzkp_text||this.pic.mzkp_textChanged){this.mzkp_text=this.pic.mzkp_text;this.bitmap={text:this.mzkp_text};this.pic.mzkp_textChanged=false;}};
+            c.Sprite_Picture=Sprite;
+        }});
+    const c=f.context;await wait(15);
+    c.$gameMessage._texts=["<center>\\c[4]\\v[241]"];
+    c.$gameMessage.setChoices(["<center>\\v[242]","<center>\\v[243]"]);
+    const w=new c.Window_Message();w.update();
+    assert.equal(w.originalStarts,0);
+    const until=async pred=>{const end=Date.now()+5000;while(!pred()&&Date.now()<end)await wait(50);assert.ok(pred());};
+    await until(()=>{w.update();return w.originalStarts===1;});
+    assert.equal(w.nativeInput,"<center>\\c[4]¿Dónde está la biblioteca?");
+    assert.equal(c.$gameMessage.allText(),"<center>\\c[4]\\v[241]");
+    const choice=new c.Window_ChoiceList(c.$gameMessage._choices);choice.drawItem(0);choice.drawItem(1);
+    assert.equal(choice.painted[0],"<center>Detrás del castillo antiguo.");
+    assert.equal(choice.painted[1],"<center>\\v[243]");
+    assert.equal(choice._list[0].name,"<center>\\v[242]");assert.equal(choice._list[0].ext,0);
+    const npc={_name:"",mzkp_text:"\\c[4]\\v[140]",mzkp_textChanged:true};
+    const sp=new c.Sprite_Picture(npc);sp.updateBitmap();
+    assert.equal(sp.bitmap.text,"\\c[4]Desconocido");assert.equal(npc.mzkp_text,"\\c[4]\\v[140]");
+    values[140]="Peter";sp.updateBitmap();assert.equal(sp.bitmap.text,"\\c[4]\\v[140]");
+    const description={_name:"",mzkp_text:"\\c[4]\\v[266]",mzkp_textChanged:true};
+    sp.pic=description;await until(()=>{sp.updateBitmap();return sp.bitmap.text==="\\c[4]Abre la caja de madera.";});
+    const counters={_name:"",mzkp_text:"\\v[73]",mzkp_textChanged:true};sp.pic=counters;sp.updateBitmap();assert.equal(sp.bitmap.text,"\\v[73]");
+    const unknown={_name:"",mzkp_text:"\\v[275]",mzkp_textChanged:true};sp.pic=unknown;sp.updateBitmap();assert.equal(sp.bitmap.text,"\\v[275]");
+    assert.equal(writes,0);assert.equal(values[241],question);assert.equal(values[242],answer);
+    assert.ok(!f.posts.some(v=>/Peter|12345|doNotExecute|UnverifiedPlayerLabel|\\v\[/.test(v.text)));
+}
+
 (async()=>{
     await testR7AuthoredScriptAndPicture();
+    await testR7VerifiedVariableSurfaces();
     await testR6FirstViewNativeGate(false);
     await testR6FirstViewNativeGate(true);
     await testR6OfflineDeadlineAndForm();
