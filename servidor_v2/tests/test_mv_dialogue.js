@@ -516,7 +516,7 @@ async function testUnconnectedGameIsPlayableAndF10Safe(){
     const content=scene.windows[1].drawn.map(v=>v.text).join("\n");
     assert.match(content,/IA_INICIO_RUTA_FALLIDO/);
 }
-async function testSlowModelNeverPausesText(){
+async function testDirectStartFallbackDoesNotOverwriteNextScene(){
     const f=fixture(80);await wait(12);
     f.$gameMessage._texts=["おはようございます。"];
     const msg=new f.context.Window_Message();msg.startMessage();
@@ -1753,7 +1753,7 @@ async function testR4NativeTsvMixedControlsAndCoverage(mz){
 }
 
 
-async function testR5DynamicNamesAndAuthoredRepetition(mz){
+async function testR5DynamicNamesAndAuthoredRepetition(mz,firstView=false){
     const root=path.join("/tmp","servidor-qa-juego-日本語"),content=mz?root:path.join(root,"www"),data=path.join(content,"data");
     const state={files:{},dirs:{[data]:true}};
     const one="\\c[1](Please wait here. \\v[21], I'm sorry...)";
@@ -1782,6 +1782,12 @@ async function testR5DynamicNamesAndAuthoredRepetition(mz){
             const expand=t=>t.replace(/(?:\\|\x1b)tl\{([^}]+)\}/gi,(token,k)=>{const r=rows.find(r=>r[0]===k);return r?r[1]:token})
                 .replace(/(?:\\|\x1b)v\[(\d+)\]/gi,(_,i)=>values[i]).replace(/\\c\[/gi,"\x1bC[").replace(/\\\./g,"\x1b.");
             c.Window_Base.prototype.convertEscapeCharacters=expand;c.Window_Message.prototype.convertEscapeCharacters=expand;
+            if(firstView){
+                const p=c.Window_Message.prototype;
+                p.updateWait=function(){return false;};
+                p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+                p.update=function(){this.updates++;if(!this.updateWait()&&this.canStart())this.startMessage();};
+            }
             const base=c.Window_Message.prototype.startMessage;
             c.Window_Message.prototype.startMessage=function(){
                 this.nativeInput=c.$gameMessage.allText();base.apply(this,arguments);
@@ -1792,7 +1798,20 @@ async function testR5DynamicNamesAndAuthoredRepetition(mz){
     assert.equal(title.launches,1);
     const map=new c.Scene_Map();c.SceneManager._scene=map;map.createAllWindows();map.update();
     const key=id=>"\\tl{R500"+id+"}";
-    f.$gameMessage._texts=[key(2)];const first=new c.Window_Message();first.startMessage();first.finishPage();
+    f.$gameMessage._texts=[key(2)];const first=new c.Window_Message();
+    if(firstView){
+        first.update();assert.equal(first.originalStarts,0,"cold TSV lookup waits for table and cache");
+        const deadline=Date.now()+6000;
+        while(!first.originalStarts&&Date.now()<deadline){await wait(45);first.update();}
+        assert.equal(first.originalStarts,1);
+        assert.equal(first.nativeInput,"\\c[1](Espera aquí. \\v[21], Lo siento...)");
+        assert.ok(first._textState.text.includes("Alex"));
+        assert.equal(f.$gameMessage.allText(),key(2),"raw lookup references remain unchanged");
+        assert.equal(writes,0);
+        assert.ok(!f.posts.some(v=>/\\tl\{|\\v\[|Alex|小林/.test(v.text)));
+        return;
+    }
+    first.startMessage();first.finishPage();
     const limit=Date.now()+6000;
     while(Date.now()<limit&&!first.contents.ops.some(x=>x.text.includes("Espera"))){await wait(35);first.update();}
     assert.ok(first.contents.ops.some(x=>x.text.includes("Espera")),"late colored template must match expanded variable");
@@ -1821,8 +1840,8 @@ async function testR5DynamicNamesAndAuthoredRepetition(mz){
 
 
 async function testR6FirstViewNativeGate(mz){
-    const text="Where are you going?",choice="Please open the door.";
-    const f=fixture(110,{mz,nativePaint:true,responses:{[text]:"¿Adónde vas?",[choice]:"Abre la puerta, por favor."},configure(c){
+    const text="Where are you going?",choice="Please open the door.",cold="Please close the window.";
+    const f=fixture(110,{mz,nativePaint:true,responses:{[text]:"¿Adónde vas?",[choice]:"Abre la puerta, por favor.",[cold]:"Cierra la ventana, por favor."},configure(c){
         const p=c.Window_Message.prototype;
         p.updateWait=function(){return false;};
         p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
@@ -1856,9 +1875,12 @@ async function testR6FirstViewNativeGate(mz){
     assert.equal(actual.painted[0],"Abre la puerta, por favor.");
     assert.equal(actual._list[0].ext,0);
     // Choices without a preceding dialogue must also wait.
-    m.clear();m.setChoices(["Where are you going?"]);
+    m.clear();m.setChoices([cold]);
     const only=new f.context.Window_Message();only.update();
-    assert.ok(only._choice);assert.equal(only._choice.painted[0],"¿Adónde vas?");
+    assert.equal(only._choice,undefined,"cold standalone choice must not become selectable");
+    const choiceLimit=Date.now()+4000;
+    while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
+    assert.ok(only._choice);assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
 }
 async function testR6OfflineDeadlineAndForm(){
     const f=fixture(0,{mz:true,disconnected:true,configure(c){
@@ -1906,6 +1928,8 @@ async function testR6OfflineDeadlineAndForm(){
     await testR6OfflineDeadlineAndForm();
     await testR5DynamicNamesAndAuthoredRepetition(false);
     await testR5DynamicNamesAndAuthoredRepetition(true);
+    await testR5DynamicNamesAndAuthoredRepetition(false,true);
+    await testR5DynamicNamesAndAuthoredRepetition(true,true);
     await testR4NativeTsvMixedControlsAndCoverage(false);
     await testR4NativeTsvMixedControlsAndCoverage(true);
     await testR3TsvStartWithoutWaitingAndWrappedComposite(false);
@@ -1948,7 +1972,7 @@ async function testR6OfflineDeadlineAndForm(){
     await testPersistentCacheAfterRestartWithoutWorker();
     await testRejectDamagedOutputBeforeDiskOrRender();
     await testUnconnectedGameIsPlayableAndF10Safe();
-    await testSlowModelNeverPausesText();
+    await testDirectStartFallbackDoesNotOverwriteNextScene();
     await testOriginalNWJSWithoutBufferFromOrNumberIsInteger();
     await testOldNWJSAndPathFallback();
     await testJapaneseDialogAndF10();

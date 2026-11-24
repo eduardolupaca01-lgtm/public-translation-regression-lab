@@ -1610,13 +1610,13 @@ function attachNativeCaption(scene,win,inputs,displayed){
     win.setWindowDimensions=function(){
         return nativeCaptionScope(this,layout,arguments);
     };
-    var update=win.update,shown=displayed.slice(),tick=0,tries=0,finished=false;
+    var update=win.update,shown=displayed.slice(),tick=0,tries=0,finished=false,epoch=formEpoch;
     var remaining=inputs.some(function(input,i){return input.source&&shown[i]===input.raw;});
     if(!remaining)return;
     win.update=function(){
         var output=update.apply(this,arguments);
         if(finished||this!==win)return output;
-        if(inputFormActive()){finished=true;return output;}
+        if(inputFormActive()||epoch!==formEpoch){finished=true;return output;}
         try{
             if(typeof SceneManager==="undefined"||SceneManager._scene!==scene||
                !Array.isArray(scene._captionWindows)||scene._captionWindows.indexOf(win)<0||
@@ -2226,9 +2226,7 @@ function displayLate(win){
 var FIRST_VIEW_LIMIT=30000,FIRST_VIEW_OFFLINE=8000;
 function firstViewRequest(source,text){
     if(!source)return;
-    addPrefetch(text,true,source);
-    if(state.connected&&cacheReadDone&&pending.size<90)
-        requestVisible(source,text).catch(function(){state.errors++;});
+    csvRequestLive(source,text);
     nextPrefetch();
 }
 function choiceDisplay(win,raw,requestMissing){
@@ -2256,10 +2254,19 @@ function firstViewMissing(win,raw,choice){
             if(tsvResolveKeys(raw,locale)===null)return false;
             return tsvTranslatedKeys(raw,locale,true)===null;
         }
-        if(tsvProject(raw,true)!==null)return false;
-        return tsvResolveKeys(raw,"en")!==null||tsvResolveKeys(raw,"ja")!==null;
+        // No confirmed locale: preserve the native localization path.
+        // Never substitute an unrelated language column to satisfy the wait.
+        return false;
     }
     if(choice&&choiceDisplay(win,raw,true)!==null)return false;
+    if(choice&&(externalTables()||isMZ)){
+        var variable=/^(?:\\|\x1b)v\[(\d{1,6})\]$/i.exec(raw);
+        if(variable&&typeof $gameVariables!=="undefined"&&$gameVariables&&typeof $gameVariables.value==="function"){
+            var value=$gameVariables.value(Number(variable[1]));
+            if(typeof value!=="string"||actorNames[value]||!languageFor(value)||csvExecutableSyntax(value))return false;
+            raw=value;
+        }
+    }
     var source=languageFor(raw);if(!source)return false;
     if(readyText(source,raw)!==null||(tableStats.root&&csvKnownReady(raw)!==null))return false;
     if(rejectedKeys.get(source+"\u0000"+raw)===Infinity)return false;
@@ -2368,7 +2375,7 @@ function hookMessages(){
                     var locale=resolved?resolved.source:tsvProbeLocale(this);
                     if(locale)tsv.language=locale;
                     tsvPrioritize(keys,true);
-                    var localized=locale?tsvTranslatedKeys(keys,locale,true):tsvProject(keys,true);
+                    var localized=locale?tsvTranslatedKeys(keys,locale,true):null;
                     if(localized!==null)projection={message:$gameMessage,raw:text,text:localized,used:false};
                     // Never replace the game's reference array.
                     source=null;

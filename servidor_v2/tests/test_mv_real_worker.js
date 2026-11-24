@@ -33,7 +33,17 @@ Window_NameBox.prototype.setName=function(v){this._name=v;this.refresh();};
 Window_NameBox.prototype.refresh=function(){this.drawText(this._name);};
 function Window_Message(){this.starts=0;}
 Window_Message.prototype.startMessage=function(){this.starts++;};
-Window_Message.prototype.update=function(){};
+Window_Message.prototype.updateWait=function(){return false;};
+Window_Message.prototype.canStart=function(){return this.starts===0&&gameMessage.hasText();};
+Window_Message.prototype.update=function(){
+    if(this.updateWait())return;
+    if(this.canStart())this.startMessage();
+    else if(!gameMessage.hasText()&&gameMessage._choices.length&&!this.choiceWindow){
+        const w=new Window_ChoiceList();
+        w._list=gameMessage._choices.map((name,ext)=>({name,symbol:"choice",enabled:true,ext}));
+        w._list.forEach((_,i)=>w.drawItem(i));this.choiceWindow=w;
+    }
+};
 function Game_Message(){this._texts=[];this._choices=[];}
 Game_Message.prototype.setSpeakerName=function(v){this._speakerName=v;};
 Game_Message.prototype.hasText=function(){return this._texts.length>0;};
@@ -186,16 +196,10 @@ async function run(){
     const sourceText="\\N[2] おはようございます。";
     gameMessage._texts=[sourceText];
     const first=new Window_Message();
-    first.startMessage();
-    assert.equal(first.starts,1,"IA_NATIVE_FIRST_DIALOG_MUST_NOT_STALL");
-    assert.equal(gameMessage.allText(),sourceText,
-        "IA_PENDING_DIALOG_MUST_REMAIN_ORIGINAL");
-    await until(()=>{
-        gameMessage._texts=[sourceText];
-        const repeated=new Window_Message();
-        repeated.startMessage();
-        return !japanese(gameMessage.allText());
-    },120000,"IA_NATIVE_DIALOG_CACHE_TIMEOUT");
+    first.update();
+    assert.equal(first.starts,0,"IA_R6_COLD_DIALOG_PAINTED_BEFORE_TRANSLATION");
+    assert.equal(gameMessage.allText(),sourceText,"IA_R6_WAIT_MUTATED_NATIVE_MESSAGE");
+    await until(()=>{first.update();return first.starts===1;},35000,"IA_R6_FIRST_DIALOG_TIMEOUT");
     const displayed=gameMessage.allText();
     assert.ok(displayed.startsWith("\\N[2] "),
         "IA_GAME_CONTROL_CODE_CHANGED");
@@ -203,17 +207,17 @@ async function run(){
         "IA_DIALOG_NOT_TRANSLATED");
 
     const sourceChoices=["はい、お願いします。","いいえ、けっこうです。"];
+    gameMessage._texts=[];
     gameMessage.setChoices(sourceChoices,0,1);
     assert.ok(gameMessage._choices.every(japanese),"IA_UNCACHED_CHOICES_CHANGED");
-    await until(()=>{
-        gameMessage.setChoices(sourceChoices,0,1);
-        if(!isMZ)return gameMessage._choices.every(v=>!japanese(v));
-        const w=new Window_ChoiceList();
-        w._list=sourceChoices.map((name,ext)=>({name,symbol:"choice",enabled:true,ext}));
-        w.drawItem(0);w.drawItem(1);
-        assert.deepEqual(w._list.map(v=>v.name),sourceChoices);
-        return w.painted.length===2&&w.painted.every(v=>!japanese(v));
-    },120000,"IA_NATIVE_CHOICES_CACHE_TIMEOUT");
+    const prompt=new Window_Message();
+    prompt.update();
+    assert.equal(prompt.choiceWindow,undefined,"IA_R6_COLD_CHOICE_OPENED_TOO_EARLY");
+    await until(()=>{prompt.update();return !!prompt.choiceWindow;},35000,"IA_R6_FIRST_CHOICE_TIMEOUT");
+    assert.ok(prompt.choiceWindow.painted.length===2&&prompt.choiceWindow.painted.every(v=>!japanese(v)),"IA_R6_FIRST_CHOICE_NOT_SPANISH");
+    assert.deepEqual(prompt.choiceWindow._list.map(v=>v.name),sourceChoices);
+    assert.deepEqual(prompt.choiceWindow._list.map(v=>v.ext),[0,1]);
+    console.log("SERVIDOR_V2_R6_REAL_OPUS_FIRST_DIALOG_AND_CHOICES_NO_REPLAY_PASS");
     assert.equal(gameMessage._choices.length,2,"IA_CHOICE_COUNT_CHANGED");
     assert.ok(gameMessage._choices.every(v=>typeof v==="string"&&v.trim()),"IA_NATIVE_CHOICES_EMPTY");
     if(isMZ){
