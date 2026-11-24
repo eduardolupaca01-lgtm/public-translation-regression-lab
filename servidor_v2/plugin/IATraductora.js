@@ -3673,8 +3673,10 @@ function csvForms(value){
     return csvNormalize(value).split(/\/\n/).filter(function(v){return v.trim();});
 }
 function csvExecutableSyntax(value){
+    // Do not misclassify visible English such as "Let me out" as a JS
+    // declaration. Require a declaration operator/terminator after the name.
     return typeof value==="string"&&(/\b(?:if|en)\s*\(|\$(?:v|s|game\w*|data\w*)\s*[\[(]|\\(?:eval|script)\b/i.test(value)||
-        /(?:^|\n)\s*(?:[\w.]+\s*=\s*[^=]|(?:function|var|let|const)\s+[A-Za-z_$])/i.test(value));
+        /(?:^|\n)\s*(?:[\w.]+\s*=\s*[^=]|function\s+[A-Za-z_$][\w$]*\s*\(|(?:var|let|const)\s+[A-Za-z_$][\w$]*\s*(?:=|;|,))/i.test(value));
 }
 function csvCandidate(value,declared,allowNote){
     if(typeof value!=="string"||!value.trim()||value.length>1800||actorNames[value]||csvExecutableSyntax(value))return null;
