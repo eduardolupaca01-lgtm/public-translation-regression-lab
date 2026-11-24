@@ -2147,11 +2147,18 @@ async function testR8GeneralDisplaySurfaces(){
         "Idea de exhibicionismo <Si el exhibicionismo está al máximo> \\b[2]",
         "Dar un cumplido","¿Qué piensas de mí?"
     ];
-    await until(()=>{
+    const choiceDeadline=Date.now()+15000;
+    let choiceReady=false;
+    while(Date.now()<choiceDeadline){
         choices.forEach((_,i)=>choice.drawItem(i));
-        return choice.painted.length===expectedChoices.length&&
-            choice.painted.every((value,index)=>value===expectedChoices[index]);
-    });
+        if(choice.painted.length===expectedChoices.length&&
+           choice.painted.every((value,index)=>value===expectedChoices[index])){
+            choiceReady=true;break;
+        }
+        await wait(25);
+    }
+    assert.ok(choiceReady,"R8 display translation did not become ready: "+
+        JSON.stringify({painted:choice.painted,requests:f.posts.map(p=>p.text)}));
     assert.deepEqual(choice._list.map(item=>item.name),choices,
         "all original choice labels must remain untouched");
     assert.deepEqual(choice._list.map(item=>item.ext),choices.map((_,index)=>index),
