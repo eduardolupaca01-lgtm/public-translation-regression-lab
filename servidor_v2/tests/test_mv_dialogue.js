@@ -9,7 +9,7 @@ const EventEmitter=require("node:events");
 const crypto=require("node:crypto");
 
 function fixture(translationDelay=0,options={}){
-    const posts=[],batches=[],state=options.fsState||{files:{},dirs:{}};
+    const posts=[],batches=[],jsonParseSizes=options.jsonParseSizes||[],state=options.fsState||{files:{},dirs:{}};
     const read=state.files,dirs=state.dirs;
     const source=fs.readFileSync(
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
@@ -233,6 +233,10 @@ function fixture(translationDelay=0,options={}){
         Buffer:options.legacyBuffer?LegacyBuffer:Buffer,
         Promise:options.legacyPromise?LegacyPromise:Promise,process,Date,Map,
         Number:options.legacyBuffer?LegacyNumber:Number,Error,
+        JSON:{
+            parse(value,reviver){jsonParseSizes.push(String(value).length);return JSON.parse(value,reviver);},
+            stringify(value,replacer,space){return JSON.stringify(value,replacer,space);}
+        },
         setTimeout(fn,delay){const timer=setTimeout(fn,delay);timer.unref();return timer;},
         clearTimeout,setInterval(){return 1},
         Window_Base,Window_Message,Scene_Map,Game_Message,Bitmap,Scene_Name,Scene_Title,
@@ -243,7 +247,7 @@ function fixture(translationDelay=0,options={}){
     };
     if(options.configure)options.configure(context);
     vm.runInNewContext(source,context,{filename:"IATraductora.js"});
-    return {context,posts,batches,$gameMessage,spawnCount:()=>spawnCount};
+    return {context,posts,batches,$gameMessage,jsonParseSizes,spawnCount:()=>spawnCount};
 }
 const wait=t=>new Promise(resolve=>setTimeout(resolve,t));
 
@@ -1851,7 +1855,11 @@ async function testLargeGamePausesBackgroundPrefetch(){
     }
     state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
     state.files[path.join(data,"Map001.json")]=JSON.stringify({events});
-    const f=fixture(1,{fsState:state,batch:true});
+    const f=fixture(1,{fsState:state,batch:true,configure(c){
+        const p=c.Window_Message.prototype;
+        p.updateWait=function(){return false;};
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+    }});
     const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();
     // The scanner and cache reader run asynchronously. Put the game in its
     // active map before the large inventory reaches the prefetch scheduler.
@@ -1862,7 +1870,7 @@ async function testLargeGamePausesBackgroundPrefetch(){
     f.$gameMessage._texts=["Please open the gate now."];
     const firstView=new f.context.Window_Message();
     assert.equal(firstView.updateWait(),false,
-        "large MV inventories must fail open instead of waiting for cold neural text");
+        "English MV dialogue must fail open instead of waiting for neural inference");
     f.$gameMessage._texts=[];
     f.$gameMessage.add("Please translate this visible sentence.");
     await wait(80);
@@ -1870,6 +1878,41 @@ async function testLargeGamePausesBackgroundPrefetch(){
         "foreground visible text still reaches the worker while bulk prefetch is paused");
 }
 
+async function testLargeCommonEventsJsonIsParsedIncrementally(){
+    const data=path.join("/tmp","servidor-qa-common-events-日本語","www","data");
+    const state={files:{},dirs:{[data]:true}};
+    const events=[null],longText=("Please open the extraordinarily complicated wooden gate while the guards carefully watch the northern courtyard and wait for our signal. ").repeat(6);
+    for(let i=0;i<1978;i++){
+        const list=[];
+        for(let j=0;j<10;j++)list.push({code:401,parameters:[longText]});
+        events.push({id:i+1,name:"Common event "+i,trigger:0,list});
+    }
+    const finalText="Please open the hidden gate now.";
+    events[events.length-1].list=[{code:401,parameters:[finalText]}];
+    const raw=JSON.stringify(events);
+    assert.ok(Buffer.byteLength(raw,"utf8")>10*1024*1024,
+        "regression fixture must exercise a genuinely large CommonEvents.json");
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null]});
+    state.files[path.join(data,"CommonEvents.json")]=raw;
+    const f=fixture(1,{fsState:state,batch:true,jsonParseSizes:[]});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();
+    f.context.SceneManager._scene=new f.context.Scene_Map();
+    let heartbeats=0;
+    const heartbeat=setInterval(()=>heartbeats++,1);
+    const deadline=Date.now()+15000;
+    try{
+        while(!f.posts.some(p=>p.text===finalText)&&Date.now()<deadline)await wait(10);
+    }finally{clearInterval(heartbeat);}
+    assert.ok(f.posts.some(p=>p.text===finalText),
+        "last CommonEvents entry must be parsed and inventoried");
+    assert.ok(f.jsonParseSizes.length>=events.length,
+        "CommonEvents entries must be parsed individually, not as one giant array");
+    assert.ok(Math.max.apply(null,f.jsonParseSizes)<100000,
+        "no synchronous JSON.parse may receive the whole 10+ MB common-event file");
+    assert.ok(heartbeats>2,
+        "incremental CommonEvents parsing must yield to the render/event loop");
+}
 async function testR6FirstViewNativeGate(mz){
     const text="Where are you going?",choice="Please open the door.",cold="Please close the window.";
     const f=fixture(110,{mz,nativePaint:true,responses:{[text]:"¿Adónde vas?",[choice]:"Abre la puerta, por favor.",[cold]:"Cierra la ventana, por favor."},configure(c){
@@ -2234,6 +2277,7 @@ async function testR8GeneralDisplaySurfaces(){
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testLargeGamePausesBackgroundPrefetch();
+    await testLargeCommonEventsJsonIsParsedIncrementally();
     await testR3PatchRepairsStandardNoticeAndKeepsColor();
     await testR3P2NoticeVariantsOnFirstNativeDraw();
     await testR4EnglishFormatContextAndStaleCache();
