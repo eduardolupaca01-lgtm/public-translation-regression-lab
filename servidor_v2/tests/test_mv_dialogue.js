@@ -43,10 +43,13 @@ function fixture(translationDelay=0,options={}){
                     callback(e);return;
                 }
                 callback(null,read[p]);
-            },0);
+            },p.endsWith(".jsonl")?(options.cacheReadDelay||0):0);
         },
-        appendFile(p,value,options,callback){
-            setTimeout(()=>{read[p]=(read[p]||"")+String(value);callback(null);},1);
+        appendFile(p,value,opts,callback){
+            setTimeout(()=>{
+                if(options.appendFailures>0){options.appendFailures--;callback(Error("temporary disk error"));return;}
+                read[p]=(read[p]||"")+String(value);callback(null);
+            },1);
         },
         mkdir(p,mode,callback){
             setTimeout(()=>{dirs[p]=true;callback(null);},0);
@@ -1366,6 +1369,85 @@ async function testR4P8CsvVariablesAndPresentation(){
     for(const k of Object.keys(originalFiles))assert.equal(state.files[k],originalFiles[k]);
 }
 
+
+function r4p9Progress(f){
+    const m=new f.context.Scene_Map();m.createAllWindows();m._iaPanel.refresh();
+    const line=m._iaPanel.drawn.filter(x=>/^Textos listos: /.test(x.text)).pop();
+    const match=/Textos listos: (\d+)\/(\d+)\s+Fallos: (\d+)/.exec(line.text);
+    return {ready:Number(match[1]),total:Number(match[2]),failed:Number(match[3])};
+}
+async function testR4P9ContinueInventoryAndRestore(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const cache=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const state={files:{},dirs:{[data]:true,[csv]:true,[folder]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"en_US"});
+    const rows=[["","Script","日本語","英語","スペイン語","",""],["$map1","","","","","",""],["$event1","","","","","",""],["$page1","","","","","",""]];
+    const responses={},texts=[];
+    for(let i=0;i<16;i++){
+        const text="Please open the door "+i+".";
+        texts.push(text);responses[text]="Por favor, abre la puerta "+i+".";
+        rows.push(["$text"+(i+1),"","",text,"","",""]);
+    }
+    state.files[path.join(csv,"sheet.csv")]=csvFixtureRows(rows);
+    // A valid last record without its terminal newline is recoverable.
+    state.files[cache]=JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:texts[0],translated:responses[texts[0]],composed:false});
+    const originalCsv=state.files[path.join(csv,"sheet.csv")];
+    const f=fixture(80,{fsState:state,batch:true,responses,cacheReadDelay:100,appendFailures:1,plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}]});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();title.commandNewGame();title.commandNewGame();
+    assert.equal(title.launches,1,"skip gate never blocks gameplay");
+    const map=new f.context.Scene_Map();f.context.SceneManager._scene=map;map.createAllWindows();
+    await wait(190);
+    const early=r4p9Progress(f);
+    assert.ok(early.total>=16&&early.ready>=1&&early.ready<early.total,"restored cache is counted before inference completes");
+    // An unvisited end-of-table message should not wait for the whole queue.
+    f.$gameMessage._texts=[texts[15]];new f.context.Window_Message().startMessage();
+    const end=Date.now()+6000;
+    while(Date.now()<end&&r4p9Progress(f).ready<early.total)await wait(40);
+    const done=r4p9Progress(f);
+    assert.equal(done.ready,done.total,"background queue drains while in gameplay without title updates");
+    assert.equal(done.failed,0);
+    assert.ok(f.posts.some(p=>p.text===texts[15]));
+    assert.ok(!f.posts.some(p=>p.text===texts[0]),"cached item never needs neural inference");
+    const secondTitle=new f.context.Scene_Title();f.context.SceneManager._scene=secondTitle;secondTitle.start();
+    assert.ok(r4p9Progress(f).ready>=done.ready,"returning to title cannot reset completed progress");
+    secondTitle.commandNewGame();assert.equal(secondTitle.launches,1);
+    await wait(1300);
+    const journal=state.files[cache].split("\n").filter(Boolean).map(JSON.parse);
+    assert.ok(texts.every(v=>journal.some(r=>r.original===v)),"temporary disk failure must not lose translations");
+    const reboot=fixture(1,{fsState:state,disconnected:true,cacheReadDelay:100,plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}]});
+    const restoredTitle=new reboot.context.Scene_Title();reboot.context.SceneManager._scene=restoredTitle;restoredTitle.start();
+    const deadline=Date.now()+2500;
+    while(Date.now()<deadline&&r4p9Progress(reboot).ready<done.ready)await wait(30);
+    assert.equal(r4p9Progress(reboot).ready,done.ready,"offline restart restores full completed count");
+    reboot.$gameMessage._texts=[texts[15]];new reboot.context.Window_Message().startMessage();
+    assert.equal(reboot.$gameMessage.allText(),responses[texts[15]]);
+    assert.equal(reboot.posts.length,0);
+    assert.equal(state.files[path.join(csv,"sheet.csv")],originalCsv);
+}
+async function testR4P9LateCsvNamedMessage(){
+    const content=path.join("/tmp","servidor-qa-juego-日本語","www"),data=path.join(content,"data"),csv=path.join(content,"csv");
+    const state={files:{},dirs:{[data]:true,[csv]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"en_US"});
+    const head="\\c[6][\\n[2]]\\c[0]\n",body="Please wait by the gate.",text=head+body;
+    const f=fixture(120,{fsState:state,nativePaint:true,responses:{[body]:"Espera junto a la puerta."},plugins:[{name:"KNS_CsvReader",status:true,parameters:{}}],configure(c){
+        c.$gameActors={actor(id){assert.equal(id,2);return {name(){return "Alice";}};}};
+        const original=c.Window_Message.prototype.startMessage;
+        c.Window_Message.prototype.startMessage=function(){original.apply(this,arguments);this._textState.text=this._textState.text.replace(/\\n\[2\]/gi,"Alice");};
+    }});
+    await wait(35);
+    const map=new f.context.Scene_Map();f.context.SceneManager._scene=map;
+    f.$gameMessage._texts=text.split("\n");const msg=new f.context.Window_Message();msg.startMessage();msg.finishPage();
+    const deadline=Date.now()+3000;
+    while(Date.now()<deadline&&!msg.contents.ops.some(x=>x.text==="Espera")){await wait(30);msg.update();}
+    assert.ok(msg.contents.ops.some(x=>x.text==="Espera"),"late Spanish paints on the current native message");
+    assert.equal(msg.originalStarts,1);assert.equal(msg.pages,1);
+    assert.equal(f.$gameMessage.allText(),text,"active game message and actor name remain untouched");
+    assert.ok(msg.contents.ops.some(x=>x.text==="[Alice]"));
+    assert.ok(msg.contents.ops.some(x=>x.text==="FACE"));
+    assert.equal(map.windows.length,0,"no extra dialogue window");
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -1428,6 +1510,8 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P7ExternalSheetPreparesBeforeFirstGame();
     await testR4P7JapanesePrimaryAndLiveChoice();
     await testR4P8CsvVariablesAndPresentation();
+    await testR4P9ContinueInventoryAndRestore();
+    await testR4P9LateCsvNamedMessage();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();

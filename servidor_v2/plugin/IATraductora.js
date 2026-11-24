@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P8-20261124"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P9-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -23,7 +23,7 @@ var runtimeActivated=false,connectionProbe=false,lastStatusProbe=0;
 var cache=new Map(),approvedKeys=new Map(),pending=new Map(),rejectedKeys=new Map(),maxWait=45000;
 var cacheReadDone=false,identityDrawDepth=0;
 var displayMacros=Object.create(null),personColors=Object.create(null);
-var cacheDir="",cacheFile="",diskReady=false,diskBusy=false,diskQueue=[];
+var cacheDir="",cacheFile="",diskReady=false,diskBusy=false,diskQueue=[],diskRetryAt=0,diskNeedsSeparator=false;
 var diskStats={loaded:0,saved:0,rejected:0,errors:0};
 // A cache never includes game assets or saves. The schema is versioned to
 // quarantine old, unverified outputs from previous releases.
@@ -405,18 +405,12 @@ function acceptCache(source,original,result,composed,persist){
     }
     var key=source+"\u0000"+original;
     rejectedKeys.delete(key);
+    if(typeof discovered!=="undefined"&&discovered.has(key))markPrefetchReady(discovered.get(key));
     if(approvedKeys.has(key)){
         cache.set(key,approvedKeys.get(key));return true;
     }
     if(cache.has(key)&&cache.get(key)===result)return true;
     cache.set(key,result);indexDisplayAlias(source,original,result);
-    if(typeof discovered!=="undefined"&&discovered.has(key)){
-        var item=discovered.get(key);
-        if(item.status!=="ready"){
-            if(item.status==="rejected")scanStats.rejected--;
-            item.status="ready";scanStats.ready++;
-        }
-    }
     if(cache.size>MAX_CACHE_ENTRIES){cache.delete(cache.keys().next().value);}
     if(persist)enqueuePersistentCache({
         schema:CACHE_SCHEMA,source:source,original:original,
@@ -435,31 +429,54 @@ function safeCachePath(){
         return f.isFile()&&!f.isSymbolicLink()&&f.size<=CACHE_LIMIT;
     }catch(_){return false;}
 }
+// Keep unwritten records on temporary disk errors. Batch small journal
+// appends to avoid unnecessary file opens competing with gameplay.
 function queueFlush(){
-    if(!diskReady||diskBusy||!diskQueue.length)return;
-    if(!safeCachePath()){diskStats.errors++;diskQueue=[];return;}
-    var item=diskQueue.shift(),line=JSON.stringify(item)+"\n";
-    if(line.length>6000){diskStats.rejected++;queueFlush();return;}
+    if(!diskReady||diskBusy||!diskQueue.length||Date.now()<diskRetryAt)return;
+    if(!safeCachePath()){diskStats.errors++;diskRetryAt=Date.now()+2000;return;}
+    var items=[],lines=[],count=tableStats.root?16:1;
+    while(diskQueue.length&&items.length<count){
+        var item=diskQueue.shift(),line=JSON.stringify(item)+"\n";
+        if(line.length>6000){diskStats.rejected++;continue;}
+        items.push(item);lines.push(line);
+    }
+    if(!items.length)return;
+    var prefix=diskNeedsSeparator?"\n":"";
     diskBusy=true;
-    fs.appendFile(cacheFile,line,{encoding:"utf8",mode:0o600},function(err){
+    function completed(err){
         diskBusy=false;
-        if(err)diskStats.errors++;
-        else diskStats.saved++;
-        queueFlush();
-    });
+        if(err){
+            // A failed append might have written a partial last record.
+            // Separate it from the next batch; repeated keys are harmless.
+            diskNeedsSeparator=true;
+            diskQueue=items.concat(diskQueue);diskStats.errors++;
+            diskRetryAt=Date.now()+1000;setTimeout(queueFlush,1050);return;
+        }
+        diskNeedsSeparator=false;diskStats.saved+=items.length;
+        queueFlush();nextPrefetch();
+    }
+    try{fs.appendFile(cacheFile,prefix+lines.join(""),{encoding:"utf8",mode:0o600},completed);}
+    catch(error){completed(error);}
 }
 function enqueuePersistentCache(record){
-    if(diskQueue.length>=400){
-        diskStats.errors++;return;
-    }
-    diskQueue.push(record);
-    queueFlush();
+    if(diskQueue.length>=(tableStats.root?4096:400)){diskStats.errors++;return;}
+    diskQueue.push(record);queueFlush();
 }
 function startPersistentCache(){
     cacheDir=path.join(sidecar,".local","Rpg","cache");
     cacheFile=path.join(cacheDir,"translations-ja-en-es-v2.jsonl");
     function finish(ok){
-        cacheReadDone=true;diskReady=ok;queueFlush();nextPrefetch();
+        cacheReadDone=true;diskReady=ok;
+        if(tableStats.root){
+            // Early visible requests can precede the disk read. Reconcile
+            // restored exact keys, then inventory against the full cache.
+            discovered.forEach(function(item){
+                if(item.status!=="ready"&&(cache.has(item.source+"\u0000"+item.text)||approvedKeys.has(item.source+"\u0000"+item.text)))
+                    markPrefetchReady(item);
+            });
+            startFullScan();
+        }
+        queueFlush();nextPrefetch();
     }
     function onReady(){
         if(!safeCachePath()){diskStats.errors++;finish(false);return;}
@@ -470,7 +487,8 @@ function startPersistentCache(){
             if(Buffer.byteLength(data,"utf8")>CACHE_LIMIT){
                 diskStats.errors++;finish(false);return;
             }
-            var lines=data.split("\n"),limit=Math.min(lines.length-1,tableStats.root?300000:100000);
+            diskNeedsSeparator=!!data&&data.charAt(data.length-1)!=="\n";
+            var lines=data.split("\n"),limit=Math.min(lines.length,tableStats.root?300000:100000);
             var at=0,loadedKeys=new Map();
             // Recover only explicit author-provided kana readings, then audit
             // prior results. Do not delete or rewrite the existing journal.
@@ -1780,7 +1798,9 @@ function csvKnownReady(text){
     return null;
 }
 function csvRequestLive(source,text){
-    if(!source||!state.connected||pending.size>=90||csvLiveRequests.size>=32)return;
+    if(!source)return;
+    if(!cacheReadDone||!state.connected){addPrefetch(text,true,source);return;}
+    if(pending.size>=90||csvLiveRequests.size>=32)return;
     var key=source+"\u0000"+text;
     if(csvLiveRequests.has(key)||rejectedKeys.get(key)>Date.now())return;
     csvLiveRequests.set(key,true);addPrefetch(text,true,source);
@@ -1945,6 +1965,17 @@ var lateStats={shown:0,requested:0,unsupported:0};
 function hideLate(win){win._iaLateTicket=null;}
 function nativeRenderParts(text){
     if(typeof text!=="string"||text.length>1800)return null;
+    // Resolve only the CSV dialect's leading, color-delimited actor name.
+    // No event variable, script or actual actor record is modified.
+    if(tableStats.root){
+        var head=/^((?:\\|\x1b)c\[\d{1,3}\]\[)(?:\\|\x1b)n\[(\d{1,5})\](\](?:\\|\x1b)c\[\d{1,3}\]\r?\n)/i.exec(text);
+        if(head){
+            if(typeof $gameActors==="undefined"||!$gameActors||typeof $gameActors.actor!=="function")return null;
+            var actor=$gameActors.actor(Number(head[2])),name=actor&&typeof actor.name==="function"?actor.name():null;
+            if(typeof name!=="string"||!name.trim()||name.length>100||/[\r\n\\\x1b<>\[\]]/.test(name))return null;
+            text=head[1]+name+head[3]+text.slice(head[0].length);
+        }
+    }
     var re=/<\/?wordwrap>|\\n[cr]?<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\]|i\[\d{1,4}\])|\r?\n|<br>/gi;
     var parts=[],flat="",at=0,m,color=null,seen=false;
     function prose(value){
@@ -2098,19 +2129,21 @@ function hookMessages(){
                 this._iaSourceMessage=text;
                 if(source){
                     var old=readyText(source,text);
+                    if(old===null&&tableStats.root)old=csvKnownReady(text);
                     if(typeof old==="string"&&old!==text){
                         $gameMessage._texts=old.split("\n");state.shown++;
                     }else{
                         var partial=readyIndependentLines(source,text);
                         if(partial!==null)$gameMessage._texts=partial.split("\n");
                         var win=this,ticket=null;
-                        if(source==="en"&&nativeRenderParts(text)){
-                            ticket={message:$gameMessage,displayed:$gameMessage.allText(),
+                        if((source==="en"||tableStats.root)&&nativeRenderParts(text)){
+                            ticket={message:$gameMessage,displayed:$gameMessage.allText(),original:text,source:source,
                                 scene:typeof SceneManager!=="undefined"?SceneManager._scene:null,
                                 result:null,drawn:false,pages:0,geometry:null};
                             win._iaLateTicket=ticket;lateStats.requested++;
                         }
-                        if(state.connected)requestVisible(source,text).then(function(result){
+                        if(tableStats.root){addPrefetch(text,true,source);nextPrefetch();}
+                        if(state.connected&&(!tableStats.root||cacheReadDone))requestVisible(source,text).then(function(result){
                             if(ticket&&win._iaLateTicket===ticket&&typeof result==="string"&&result!==text&&
                                validTranslation(source,text,result,true))ticket.result=result;
                         },function(){state.errors++;});
@@ -2132,11 +2165,14 @@ function hookMessages(){
     if(typeof update==="function")proto.update=function(){
         // Apply before native input consumes a final pause. No new window.
         var ticket=this._iaLateTicket;
-        if(ticket&&!ticket.result&&state.connected&&ticket.scene&&
+        if(ticket&&!ticket.result&&ticket.scene&&
            typeof SceneManager!=="undefined"&&SceneManager._scene===ticket.scene&&
            this.pause&&!this._textState){
-            try{var candidate=readyText("en",ticket.displayed);
-                if(typeof candidate==="string"&&candidate!==ticket.displayed&&validTranslation("en",ticket.displayed,candidate,true))ticket.result=candidate;
+            try{
+                var source=ticket.source||"en",original=ticket.original||ticket.displayed;
+                var candidate=readyText(source,original);
+                if(candidate===null&&tableStats.root)candidate=csvKnownReady(original);
+                if(typeof candidate==="string"&&candidate!==ticket.displayed&&validTranslation(source,original,candidate,true))ticket.result=candidate;
             }catch(_){}
         }
         try{displayLate(this);}catch(_){hideLate(this);state.errors++;}
@@ -2154,7 +2190,7 @@ function hookMessages(){
                 var source=typeof text==="string"?languageFor(text):null;
                 if(source){
                     addPrefetch(text,true);
-                    if(state.connected&&pending.size<90)requestVisible(source,text).catch(function(){state.errors++;});
+                    if(state.connected&&(!tableStats.root||cacheReadDone)&&pending.size<90)requestVisible(source,text).catch(function(){state.errors++;});
                 }
                 nextPrefetch();
             }catch(_){state.errors++;}
@@ -2867,6 +2903,7 @@ function addPrefetch(text,priority,trustedLang){
     var key=source+"\u0000"+text,item=discovered.get(key);
     if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
     if(item){
+        if(tableStats.root&&item.status!=="ready"&&cacheReadDone&&readyText(source,text)!==null){markPrefetchReady(item);return;}
         if(priority&&item.status==="queued"&&!item.priority){
             item.priority=true;priorityQueue.push(item);
         }
@@ -2875,7 +2912,7 @@ function addPrefetch(text,priority,trustedLang){
     if(discovered.size>=MAX_DISCOVERED){scanStats.limited=true;return;}
     item={source:source,text:text,status:"queued",priority:!!priority};
     discovered.set(key,item);
-    if(readyText(source,text)!==null){if(item.status!=="ready"){item.status="ready";scanStats.ready++;}return;}
+    if((!tableStats.root||cacheReadDone)&&readyText(source,text)!==null){markPrefetchReady(item);return;}
     (priority?priorityQueue:prefetchQueue).push(item);
 }
 function ambientPayload(text){
@@ -2970,7 +3007,7 @@ function scanDatabase(name,data){
     });
 }
 function startFullScan(){
-    if(scanStarted||!content)return;scanStarted=true;
+    if(scanStarted||!content||(tableStats.root&&!cacheReadDone))return;scanStarted=true;
     var dataDir=path.join(content,"data");
     if(typeof fs.readdir!=="function"){scanStats.done=true;return;}
     try{
@@ -3030,39 +3067,68 @@ function collectMapText(){
     if(typeof $dataMap==="undefined"||!$dataMap||prefetchedMap===$dataMap)return;
     prefetchedMap=$dataMap;scanMap($dataMap,true);nextPrefetch();
 }
+function markPrefetchReady(item){
+    if(!item||item.status==="ready")return;
+    if(item.status==="rejected")scanStats.rejected=Math.max(0,scanStats.rejected-1);
+    item.status="ready";scanStats.ready++;
+}
+function markPrefetchRejected(item){
+    if(item.status==="ready"||item.status==="rejected")return;
+    item.status="rejected";scanStats.rejected++;
+}
+function deferPrefetch(item,retryAt){
+    if(item.status==="ready")return;
+    item.status="deferred";
+    setTimeout(function(){
+        if(item.status!=="deferred")return;
+        item.status="queued";(item.priority?priorityQueue:prefetchQueue).push(item);nextPrefetch();
+    },Math.min(60000,Math.max(1500,(retryAt||Date.now()+1500)-Date.now()+30)));
+}
+// A single scheduler survives all native scene transitions.
 function nextPrefetch(){
     if(prefetchBusy||!state.connected||!cacheReadDone)return;
+    if(tableStats.root&&diskReady&&diskQueue.length>=3000)return;
     if(!priorityQueue.length&&!prefetchQueue.length)return;
     prefetchBusy=true;
     setTimeout(function(){
-        if(!state.connected){prefetchBusy=false;return;}
-        var jobs=[],cap=state.batch?4:1;
-        while(jobs.length<cap&&(priorityQueue.length||prefetchQueue.length)){
-            var item=priorityQueue.length?priorityQueue.shift():prefetchQueue.shift();
-            if(item.status!=="queued")continue;
-            item.status="working";jobs.push(item);
+        var jobs=[];
+        function release(){
+            prefetchBusy=false;setTimeout(nextPrefetch,state.batch?15:45);
         }
-        if(!jobs.length){prefetchBusy=false;return;}
-        Promise.all(jobs.map(function(item){
-            return translatePreservingControls(item.source,item.text,false,item.priority).then(function(out){
-                if(out!==null){if(item.status!=="ready"){item.status="ready";scanStats.ready++;}}
-                else if(item.status!=="ready"){
-                    // A transport failure is not a permanent linguistic rejection.
-                    var retry=rejectedKeys.get(item.source+"\u0000"+item.text);
-                    if(!state.connected||(retry&&retry!==Infinity)){
-                        item.status="deferred";
-                        setTimeout(function(){if(item.status==="deferred"){
-                            item.status="queued";(item.priority?priorityQueue:prefetchQueue).push(item);nextPrefetch();
-                        }},Math.min(60000,Math.max(1500,(retry||Date.now()+1500)-Date.now()+30)));
-                    }else{item.status="rejected";scanStats.rejected++;}
-                }
-            },function(){
-                item.status="rejected";scanStats.rejected++;state.errors++;
-            });
-        })).then(function(){
-            prefetchBusy=false;
-            setTimeout(nextPrefetch,state.batch?15:45);
-        },function(){prefetchBusy=false;state.errors++;});
+        function failed(item){
+            if(item.status==="ready")return;
+            state.errors++;item.failures=(item.failures||0)+1;
+            if(item.failures<=3)deferPrefetch(item,Date.now()+1500*item.failures);
+            else markPrefetchRejected(item);
+        }
+        try{
+            if(!state.connected){release();return;}
+            var cap=state.batch?4:1,budget=256;
+            while(jobs.length<cap&&budget--&&(priorityQueue.length||prefetchQueue.length)){
+                var item=priorityQueue.length?priorityQueue.shift():prefetchQueue.shift();
+                if(item.status!=="queued")continue;
+                item.status="working";jobs.push(item);
+            }
+            if(!jobs.length){release();return;}
+            Promise.all(jobs.map(function(item){
+                // A formatting exception must not leave the queue locked.
+                // Only live messages get wire priority over CSV inventory.
+                return Promise.resolve().then(function(){
+                    var existing=readyText(item.source,item.text);
+                    if(existing!==null)return existing;
+                    return translatePreservingControls(item.source,item.text,false,tableStats.root?false:item.priority);
+                }).then(function(out){
+                    if(out!==null)markPrefetchReady(item);
+                    else if(item.status!=="ready"){
+                        var retry=rejectedKeys.get(item.source+"\u0000"+item.text);
+                        if(!state.connected||(retry&&retry!==Infinity))deferPrefetch(item,retry);
+                        else markPrefetchRejected(item);
+                    }
+                },function(){failed(item);});
+            })).then(release,function(){jobs.forEach(function(item){if(item.status==="working")failed(item);});release();});
+        }catch(_){
+            jobs.forEach(function(item){if(item.status==="working")failed(item);});release();
+        }
     },30);
 }
 // First-pass preparation is a bounded, optional title-screen wait, never
@@ -3088,6 +3154,7 @@ function hookTitleStart(){
     var proto=Scene_Title.prototype,start=proto.start;
     proto.start=function(){
         var out=start.apply(this,arguments);
+        if(tableStats.root){queueFlush();nextPrefetch();}
         if(!runtimeActivated){
             runtimeActivated=true;
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
@@ -3100,6 +3167,7 @@ function hookTitleStart(){
         var gate=scene._iaStartGate;
         if(!gate)return;
         scene._iaStartGate=null;
+        if(tableStats.root){queueFlush();nextPrefetch();}
         if(scene._iaTitleProgress&&typeof scene._iaTitleProgress.hide==="function")scene._iaTitleProgress.hide();
         // invoke the original title handler exactly once, with its own arguments
         return launch.apply(scene,gate.args);
@@ -3179,7 +3247,7 @@ function hookTitleStart(){
             if(win&&gate.last!==label){
                 gate.last=label;win.contents.clear();
                 win.drawText(label,0,0,win.contentsWidth(),"center");
-                win.drawText("Nueva partida otra vez: continuar sin esperar",0,36,win.contentsWidth(),"center");
+                win.drawText(tableStats.root?"Nueva partida: jugar mientras sigue traduciendo":"Nueva partida otra vez: continuar sin esperar",0,36,win.contentsWidth(),"center");
             }
         }catch(_){state.errors++;if(this._iaStartGate)finish(this);}
         return out;
@@ -3256,7 +3324,7 @@ function setupHud(){
             runtimeActivated=true;
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
         }
-        try{collectMapText();}catch(_){state.errors++;}
+        try{collectMapText();if(tableStats.root)nextPrefetch();}catch(_){state.errors++;}
         if(Input.isTriggered("ia-traductora")&&this._iaPanel){
             this._iaPanel.visible=!this._iaPanel.visible;
             this._iaMini.visible=!this._iaPanel.visible;
@@ -3280,6 +3348,8 @@ try{
     state.phase="INTERFAZ";hookNativeSurface();hookTitleStart();
     state.phase="CONEXION";startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
+        // Independent of title, menu, map or a closed F10 panel.
+        queueFlush();nextPrefetch();
     },750);
     state.phase="ACTIVO";
 }catch(_){
