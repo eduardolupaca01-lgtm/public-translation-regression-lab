@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P4-20261123"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P5-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -615,7 +615,7 @@ function languageFor(s){
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
-var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[A-Za-z]+\[[0-9]{1,8}\]|[{}!])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<\/?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
+var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<\/?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
 // Brackets at a segment's edges are presentation, not instructions for OPUS.
 // Preserve them byte-for-byte, including an opening/closing bracket on separate
 // native lines. Internal punctuation stays in the sentence for grammar.
@@ -945,7 +945,23 @@ function stableDisplay(text,identity){
 }
 // Only aliases with exactly equivalent presentation codes. Never infer
 // an alias for executable or dynamic controls.
-var formatAliases=new Map();
+var formatAliases=new Map(),captionAliases=new Map();
+function captionEnvelope(text){
+    if(typeof text!=="string"||text.length>1800)return null;
+    var m=/^(<c:-?\d{1,6},\d{1,6},\d{1,6}(?:,[A-Za-z0-9_ -]{1,64})?(?:,-?\d{1,6})?>)([\s\S]+)$/i.exec(text);
+    return m&&m[2].trim()?{tag:m[1],body:m[2]}:null;
+}
+// A caption's native parser removes its positioning/timing tag before drawing.
+// Recover that exact body from verified historical entries; conflicting
+// translations for the same body must not be selected arbitrarily.
+function indexCaptionAlias(source,text,result){
+    var a=captionEnvelope(text),b=captionEnvelope(result);
+    if(!a||!b||a.tag!==b.tag||!validTranslation(source,a.body,b.body,true))return;
+    var key=source+"\u0000"+a.body;
+    if(captionAliases.has(key)){
+        if(captionAliases.get(key)!==b.body)captionAliases.set(key,null);
+    }else if(captionAliases.size<MAX_CACHE_ENTRIES)captionAliases.set(key,b.body);
+}
 function canonicalDisplay(text){
     if(typeof text!=="string"||text.length>1800||!/(?:\\|\x1b)[cmi]\[/i.test(text))return null;
     var raw=protectedParts(text),keys=[],codes=[];
@@ -962,6 +978,7 @@ function canonicalDisplay(text){
     return {key:keys.join(""),codes:codes};
 }
 function indexDisplayAlias(source,text,result){
+    indexCaptionAlias(source,text,result);
     if(source!=="en")return;
     var alias=canonicalDisplay(text);
     if(!alias)return;
@@ -987,6 +1004,8 @@ function cachedPart(source,text){
         if(validTranslation(source,text,old,true))return old;
         cache.delete(key);diskStats.rejected++;
     }
+    var caption=captionAliases.get(key);
+    if(typeof caption==="string"&&validTranslation(source,text,caption,true))return caption;
     var alias=aliasDisplay(source,text);
     if(alias!==null&&acceptCache(source,text,alias,true,true))return cache.get(key);
     return null;
@@ -1127,8 +1146,33 @@ function translatedNativeLabel(text,identity){
     }
     return text;
 }
+function pluginEnabled(pattern){
+    return typeof $plugins!=="undefined"&&Array.isArray($plugins)&&$plugins.some(function(p){
+        return p&&p.status&&pattern.test(p.name||"");
+    });
+}
+function hasNativeClass(win,pattern){
+    for(var p=win,i=0;p&&i<8;i++,p=Object.getPrototypeOf(p)){
+        if(p.constructor&&pattern.test(p.constructor.name||""))return true;
+    }
+    return false;
+}
 function isQuestWindow(win){
-    return !!(win&&win.constructor&&/^Window_Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)/.test(win.constructor.name||""));
+    if(!win)return false;
+    if(hasNativeClass(win,/^Window_Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)/))return true;
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    return !!(scene&&hasNativeClass(scene,/^Scene_Quest/)&&
+        (scene._questDataWindow===win||scene._dataWindow===win||scene._descriptionWindow===win));
+}
+function isQuestTemplate(win,text){
+    if(typeof text!=="string"||text.length>16000||!pluginEnabled(/^YEP_QuestJournal$/)||
+       (typeof Window_Message!=="undefined"&&win instanceof Window_Message))return false;
+    // Some journal plugins implement their own drawTextEx, then call the
+    // native escape conversion on the complete assembled data template.
+    return /\bDescription\s*:/i.test(text)&&/\b(?:From|Location|Objectives|Rewards)\s*:/i.test(text);
+}
+function questSurface(win,text){
+    return isQuestWindow(win)||isQuestTemplate(win,text);
 }
 // Match only known quest labels/titles on nonstandard bitmap-based journals.
 // Decoration and numeric counters remain the author's original characters.
@@ -1163,11 +1207,13 @@ function queueQuest(win,source,text){
         win._iaQuestRefreshTimer=setTimeout(function(){
             win._iaQuestRefreshTimer=null;
             if(SceneManager._scene!==scene||!win.parent||win.visible===false||win.openness===0||
-               typeof win.refresh!=="function"||win.refresh.length!==0)return;
+               typeof win.refresh!=="function")return;
+            var refreshArgs=win._iaQuestRefreshArgs;
+            if(win.refresh.length!==0&&!refreshArgs)return;
             try{
                 var index=typeof win.index==="function"?win.index():null;
                 var row=typeof win.topRow==="function"?win.topRow():null;
-                win.refresh();
+                win.refresh.apply(win,refreshArgs||[]);
                 if(index!==null&&win.index()!==index&&typeof win.select==="function")win.select(index);
                 if(row!==null&&win.topRow()!==row&&typeof win.setTopRow==="function")win.setTopRow(row);
             }catch(_){state.errors++;}
@@ -1185,7 +1231,11 @@ function questLine(win,text){
         var fixed=k==="Difficulty"?"Dificultad":questLabels[k];
         if(!fixed)return text;
         var value=header[3];
-        if(value&&k!=="From"){
+        if(value&&k==="From"){
+            // Translate generic ranks, never a person's identity.
+            var rank={"Baroness":"Baronesa","Baron":"Barón","King":"Rey","Queen":"Reina","Guard":"Guardia","Captain":"Capitán"};
+            if(Object.prototype.hasOwnProperty.call(rank,value))value=rank[value];
+        }else if(value&&k!=="From"){
             var v=questCachedLabel(value,true),source=questSource(value);
             if(v!==null)value=v;
             else if(source){
@@ -1216,26 +1266,172 @@ function questDraw(win,text){
     return questLine(win,text);
 }
 function isAmbientWindow(win){
-    var name=win&&win.constructor&&win.constructor.name;
-    if(!name||! /^(?:Window_GalvCaption|Window_Gab(?:Window)?)$/.test(name)||typeof $plugins==="undefined"||!Array.isArray($plugins))return false;
-    return $plugins.some(function(p){
-        return p&&p.status&&((p.name==="GALV_TimedMessagePopups"&&name==="Window_GalvCaption")||
-            (p.name==="YEP_GabWindow"&&/^Window_Gab(?:Window)?$/.test(name)));
+    if(!win)return false;
+    return (pluginEnabled(/^GALV_TimedMessagePopups$/)&&hasNativeClass(win,
+        /^Window_(?:Galv(?:Caption|Message|Popup)|(?:Map)?Caption|TimedMessage(?:Popup)?|Popup)$/))||
+        (pluginEnabled(/^YEP_GabWindow$/)&&hasNativeClass(win,/^Window_Gab(?:Window)?$/));
+}
+function isAmbientSurface(win,text){
+    if(!win||win._iaOwnSurface||win._iaNameSurface||
+       (typeof Window_Message!=="undefined"&&win instanceof Window_Message))return false;
+    if(isAmbientWindow(win))return true;
+    if(!pluginEnabled(/^GALV_TimedMessagePopups$/))return false;
+    if(captionEnvelope(text))return true;
+    // Narrow, native presentation fallback for author-specific map captions:
+    // only whole, clearly English text with a recognized color run, not
+    // glyphs, names, dialogue windows, or arbitrary executable arguments.
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    if(!scene||typeof Scene_Map==="undefined"||!(scene instanceof Scene_Map)||
+       typeof text!=="string"||text.length>1800||text.length<8||actorNames[text])return false;
+    return languageFor(text)==="en"&&/(?:\\|\x1b)(?:c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\])/i.test(text)&&
+        /[A-Za-z]{2,}\s+[A-Za-z]{2,}/.test(visibleProse(text));
+}
+function captionSource(text){
+    var env=captionEnvelope(text),body=env?env.body:text,source=languageFor(body);
+    if(source)return source;
+    // In a confirmed caption a short punctuated English utterance is valid
+    // prose even if it lacks a common English stopword.
+    return typeof body==="string"&&!actorNames[body]&&
+        /^[A-Za-z][A-Za-z '\-]{1,69}[.!?]$/.test(body)&&!/[áéíóúüñ]/i.test(body)? "en":null;
+}
+function captionReady(source,text){
+    var env=captionEnvelope(text);
+    if(!env)return readyText(source,text);
+    var body=readyText(source,env.body);
+    if(body!==null&&validTranslation(source,text,env.tag+body,true))return env.tag+body;
+    return readyText(source,text);
+}
+function captionRequest(source,text){
+    var env=captionEnvelope(text);
+    if(!env)return requestVisible(source,text);
+    return requestVisible(source,env.body).then(function(body){
+        var out=typeof body==="string"?env.tag+body:null;
+        return out&&validTranslation(source,text,out,true)?out:null;
     });
+}
+var surfaceRequests=new Map(),surfaceDepth=0;
+function projectCaption(text){
+    var source=captionSource(text);
+    if(!source)return text;
+    var ready=captionReady(source,text);
+    if(ready!==null){ambientStats.shown++;return ready;}
+    var env=captionEnvelope(text),body=env?env.body:text;
+    addPrefetch(body,true,source);
+    var key=source+"\u0000"+body;
+    if(state.connected&&pending.size<32&&surfaceRequests.size<24&&!surfaceRequests.has(key)){
+        surfaceRequests.set(key,true);ambientStats.requested++;
+        captionRequest(source,text).then(function(){surfaceRequests.delete(key);},function(){surfaceRequests.delete(key);state.errors++;});
+    }
+    nextPrefetch();
+    return text;
+}
+function projectSurface(win,text){
+    if(questSurface(win,text))return questDraw(win,text);
+    if(isAmbientSurface(win,text))return projectCaption(text);
+    return text;
+}
+// Intercept the author's final conversion before word-wrap, even when a
+// subclass bypasses the inherited drawing methods. No synthetic window.
+function hookSurfaceConversion(proto,ownOnly){
+    if(!proto||typeof proto.convertEscapeCharacters!=="function"||
+       (ownOnly&&!Object.prototype.hasOwnProperty.call(proto,"convertEscapeCharacters")))return;
+    var original=proto.convertEscapeCharacters;
+    proto.convertEscapeCharacters=function(){
+        if(surfaceDepth||identityDrawDepth||this._iaNameSurface||this._iaOwnSurface||typeof arguments[0]!=="string")
+            return original.apply(this,arguments);
+        var args=Array.prototype.slice.call(arguments);
+        try{args[0]=projectSurface(this,args[0]);}catch(_){state.errors++;}
+        surfaceDepth++;
+        try{return original.apply(this,args);}finally{surfaceDepth--;}
+    };
+}
+function hookSpecificSurfaces(){
+    if(typeof window==="undefined")return;
+    // Do not wrap arbitrary third-party prototypes. Only opt in classes
+    // from the two supported surface families; preserve inherited hooks.
+    var names=Object.getOwnPropertyNames(window).filter(function(k){
+        return /^Window_(?:Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)\w*|Galv(?:Caption|Message|Popup)|(?:Map)?Caption|TimedMessage(?:Popup)?|Popup|Gab(?:Window)?)$/.test(k);
+    }),seen=[];
+    names.forEach(function(k){
+        var descriptor=Object.getOwnPropertyDescriptor(window,k),ctor=descriptor&&descriptor.value;
+        var p=typeof ctor==="function"?ctor.prototype:null;
+        if(!p||seen.indexOf(p)>=0)return;seen.push(p);
+        hookSurfaceConversion(p,true);
+        ["drawText","drawTextEx"].forEach(function(method){
+            if(!Object.prototype.hasOwnProperty.call(p,method)||typeof p[method]!=="function")return;
+            var original=p[method];
+            p[method]=function(){
+                if(surfaceDepth||identityDrawDepth||this._iaOwnSurface||this._iaNameSurface||typeof arguments[0]!=="string")
+                    return original.apply(this,arguments);
+                var args=Array.prototype.slice.call(arguments);
+                surfaceDepth++;
+                try{
+                    if(isAmbientWindow(this))return ambientDraw(this,method,args,original);
+                    try{args[0]=projectSurface(this,args[0]);}catch(_){state.errors++;}
+                    return original.apply(this,args);
+                }finally{surfaceDepth--;}
+            };
+        });
+        // A data window may refresh with a quest ID instead of zero args.
+        // Record only primitive arguments of its actual native invocation.
+        if(/^Window_Quest/.test(k)&&Object.prototype.hasOwnProperty.call(p,"refresh")&&typeof p.refresh==="function"){
+            var refresh=p.refresh;
+            p.refresh=function(){
+                var args=Array.prototype.slice.call(arguments);
+                this._iaQuestRefreshArgs=args.every(function(v){return v===null||typeof v==="string"||typeof v==="number"||typeof v==="boolean";})?args:null;
+                return refresh.apply(this,arguments);
+            };
+        }
+    });
+}
+// Static timed messages are Show Text event commands, but Galv can consume
+// them before Game_Message.add. Supply a transient copy to its original
+// interpreter; restore the original array and never change event indices,
+// speaker, timing, position, switches, choices or saved map data.
+function hookCaptionInterpreter(){
+    if(!pluginEnabled(/^GALV_TimedMessagePopups$/)||typeof Game_Interpreter==="undefined"||
+       !Game_Interpreter.prototype||typeof Game_Interpreter.prototype.command101!=="function")return;
+    var original=Game_Interpreter.prototype.command101;
+    Game_Interpreter.prototype.command101=function(){
+        var list=this._list,index=this._index,copy=null;
+        try{
+            if(Array.isArray(list)&&integer(index)&&list[index]&&list[index].code===101&&
+               list[index+1]&&list[index+1].code===401&&Array.isArray(list[index+1].parameters)&&captionEnvelope(list[index+1].parameters[0])){
+                var changes=[],end=index+1;
+                while(end<list.length&&end<index+5&&list[end]&&list[end].code===401){
+                    var row=list[end],raw=row.parameters&&row.parameters[0];
+                    if(typeof raw!=="string")break;
+                    var out=projectCaption(raw);
+                    if(out!==raw)changes.push({index:end,command:row,text:out});
+                    end++;
+                }
+                if(changes.length){
+                    copy=list.slice();
+                    changes.forEach(function(c){
+                        var item={},key;
+                        for(key in c.command)if(Object.prototype.hasOwnProperty.call(c.command,key))item[key]=c.command[key];
+                        item.parameters=c.command.parameters.slice();item.parameters[0]=c.text;copy[c.index]=item;
+                    });
+                    this._list=copy;
+                }
+            }
+        }catch(_){state.errors++;copy=null;this._list=list;}
+        try{return original.apply(this,arguments);}finally{if(copy&&this._list===copy)this._list=list;}
+    };
 }
 function ambientDraw(win,method,args,original){
     var text=args[0],source=null,found=null,epoch=(win._iaCaptionEpoch||0)+1;
     win._iaCaptionEpoch=epoch;
     try{
-        source=languageFor(text);
-        if(source)found=readyText(source,text);
+        source=captionSource(text);
+        if(source)found=captionReady(source,text);
     }catch(_){state.errors++;}
     if(found!==null){args[0]=found;ambientStats.shown++;}
     // Invoke the author's native draw exactly once, even if IA fails.
     var out=original.apply(win,args);
     if(!source||found!==null)return out;
     try{
-    if(!state.connected){addPrefetch(text,true);return out;}
+    if(!state.connected){var env=captionEnvelope(text);addPrefetch(env?env.body:text,true,source);return out;}
     var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null,b=win.contents;
     var x=Number(args[1]),y=Number(args[2]),h=typeof win.lineHeight==="function"?win.lineHeight():(b&&b.fontSize||24)+8;
     var ticket=null;
@@ -1251,7 +1447,7 @@ function ambientDraw(win,method,args,original){
             width:b.width,height:b.height,style:style},result:null};
     }
     ambientStats.requested++;
-    requestVisible(source,text).then(function(result){
+    captionRequest(source,text).then(function(result){
         if(!ticket||typeof result!=="string"||!validTranslation(source,text,result,true)||
            win._iaCaptionEpoch!==epoch||SceneManager._scene!==scene||
            win.contents!==b||!win.parent||win.visible===false||win.openness===0)return;
@@ -1273,17 +1469,21 @@ function withQuestGlyphs(bitmap,text,draw){
 }
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
+        hookSurfaceConversion(Window_Base.prototype,false);
         ["drawText","drawTextEx"].forEach(function(method){
             var original=Window_Base.prototype[method];
             if(typeof original!=="function")return;
             Window_Base.prototype[method]=function(){
+                if(surfaceDepth)return original.apply(this,arguments);
                 var args=Array.prototype.slice.call(arguments),identity=!!this._iaNameSurface;
                 if(!identity&&!identityDrawDepth&&!this._iaOwnSurface&&typeof args[0]==="string"&&isAmbientWindow(this)){
-                    return ambientDraw(this,method,args,original);
+                    surfaceDepth++;
+                    try{return ambientDraw(this,method,args,original);}finally{surfaceDepth--;}
                 }
                 try{
                     if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
-                        if(!identity&&isQuestWindow(this))args[0]=questDraw(this,args[0]);
+                        if(!identity&&questSurface(this,args[0]))args[0]=questDraw(this,args[0]);
+                        else if(!identity&&isAmbientSurface(this,args[0]))args[0]=projectCaption(args[0]);
                         else {var bookLabel=!identity?questCachedLabel(args[0]):null;
                             args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
                         if(!identity&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
@@ -1295,11 +1495,13 @@ function hookNativeSurface(){
                     }
                 }catch(_){state.errors++;}
                 if(identity)identityDrawDepth++;
+                surfaceDepth++;
                 try{return original.apply(this,args);}
-                finally{if(identity)identityDrawDepth--;}
+                finally{surfaceDepth--;if(identity)identityDrawDepth--;}
             };
         });
     }
+    hookSpecificSurfaces();hookCaptionInterpreter();
     // The author's name window is created as a subwindow of Window_Message.
     // Mark that instance, not an arbitrary class or all Japanese short labels.
     if(typeof Window_Message!=="undefined"&&Window_Message.prototype){
@@ -1574,6 +1776,8 @@ function hookMessages(){
         Game_Message.prototype.add=function(text){
             var out=add.apply(this,arguments);
             try{
+                var env=captionEnvelope(text);
+                if(env)addPrefetch(env.body,true,captionSource(env.body));
                 var source=typeof text==="string"?languageFor(text):null;
                 if(source){
                     addPrefetch(text,true);
@@ -1945,7 +2149,11 @@ function scanCommands(list,priority){
             }
             // Same exact group and component fragments used by native rendering.
             if(parts.length)addPrefetch(parts.join("\n"),priority);
-            for(var j=0;j<parts.length;j++)addPrefetch(parts[j],priority);
+            for(var j=0;j<parts.length;j++){
+                addPrefetch(parts[j],priority);
+                var caption=captionEnvelope(parts[j]);
+                if(caption)addPrefetch(caption.body,priority,captionSource(caption.body));
+            }
         }else if(cmd.code===102&&Array.isArray(cmd.parameters[0])){
             cmd.parameters[0].forEach(function(t){addPrefetch(t,priority);});
         }else if(cmd.code===356){
@@ -2259,7 +2467,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
-            "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+" · F10"
+            "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · F10"
         ];
         for(var i=0;i<lines.length;i++){
             if(i===4&&lines[i].length>32)this.contents.fontSize=16;

@@ -232,6 +232,7 @@ function fixture(translationDelay=0,options={}){
         SceneManager:{_scene:null},
         $gameMessage,$plugins:options.plugins||[]
     };
+    if(options.configure)options.configure(context);
     vm.runInNewContext(source,context,{filename:"IATraductora.js"});
     return {context,posts,batches,$gameMessage,spawnCount:()=>spawnCount};
 }
@@ -990,6 +991,108 @@ async function testR4P4AmbientNativeCaption(){
     assert.ok(!stale.contents.clears,"expired caption never reappears");
 }
 
+
+async function testR4P5QuestOverrideAndCaptionAlias(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const questTitle="Find the missing letter",desc="The letter is hidden in the garden.";
+    const tag="<c:3,160,0,WindowSpeech,-40>",body="Keep walking, friend.";
+    const colored="Keep walking, \\c[5]friend\\c[0].";
+    const cache=[
+        [questTitle,"Encuentra la carta perdida",false],
+        [desc,"La carta está escondida en el jardín.",false],
+        ["Castle Westbridge","Castillo Westbridge",false],
+        [tag+body,tag+"Sigue caminando, amigo.",true],
+        [colored,"Sigue caminando, \\c[5]amigo\\c[0].",true]
+    ];
+    const state={files:{},dirs:{[folder]:true,[data]:true}};
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=cache.map(v=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:v[0],translated:v[1],composed:v[2]})).join("\n")+"\n";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    const plugins=[
+        {name:"YEP_QuestJournal",status:true,parameters:{"Quest 1":JSON.stringify({
+            Title:questTitle,Description:JSON.stringify([JSON.stringify(desc)]),From:"Baroness",
+            Location:"Castle Westbridge"})}},
+        {name:"GALV_TimedMessagePopups",status:true,parameters:{}}
+    ];
+    const before=JSON.stringify(plugins);
+    const f=fixture(2,{fsState:state,plugins,disconnected:true,configure(c){
+        c.Window_Base.prototype.convertEscapeCharacters=function(v){return v;};
+        function Window_QuestData(){this.initialize(0,0,600,500);}
+        Window_QuestData.prototype=Object.create(c.Window_Base.prototype);
+        Window_QuestData.prototype.constructor=Window_QuestData;
+        // The author has captured a base conversion before the IA loads,
+        // and its own drawing method does not invoke Window_Base.drawTextEx.
+        Window_QuestData.prototype.convertEscapeCharacters=function(text){return text;};
+        Window_QuestData.prototype.drawTextEx=function(text){
+            this.lastTextEx=this.convertEscapeCharacters(text);return 17;
+        };
+        c.window.Window_QuestData=Window_QuestData;
+        function Window_Caption(){this.initialize(0,0,500,80);this.duration=90;}
+        Window_Caption.prototype=Object.create(c.Window_Base.prototype);
+        Window_Caption.prototype.constructor=Window_Caption;
+        Window_Caption.prototype.drawTextEx=function(text){
+            this.lastTextEx=this.convertEscapeCharacters(text);return 9;
+        };
+        c.window.Window_Caption=Window_Caption;
+        function Game_Interpreter(){}
+        Game_Interpreter.prototype.command101=function(){
+            this.captured=this._list[this._index+1].parameters[0];this._index++;return true;
+        };
+        c.Game_Interpreter=Game_Interpreter;
+    }});
+    await wait(100);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    const w=new c.window.Window_QuestData();
+    const original="\\c[15]<WordWrap>\\{"+questTitle+"\\}\\n<br>From: Baroness\\n<br>Location: Castle Westbridge\\n<br>Description:\\n<br>"+desc+"\\c[0]";
+    // Match actual newlines, not a literal backslash-n.
+    const template=original.replace(/\\n(?=<br>)/g,"\n");
+    assert.equal(w.drawTextEx(template,0,0),17);
+    assert.ok(w.lastTextEx.includes("Descripción:"),w.lastTextEx);
+    assert.ok(w.lastTextEx.includes("La carta está escondida en el jardín."),w.lastTextEx);
+    assert.ok(w.lastTextEx.includes("De: Baronesa"),w.lastTextEx);
+    assert.ok(w.lastTextEx.includes("Ubicación: Castillo Westbridge"),w.lastTextEx);
+    assert.equal(JSON.stringify(plugins),before);
+    // A custom-named data window reaches the lower conversion path directly.
+    const generic=new c.Window_Base();
+    const projected=generic.convertEscapeCharacters(template);
+    assert.ok(projected.includes("La carta está escondida en el jardín."));
+    assert.equal(generic.convertEscapeCharacters("Unrelated internal token"),"Unrelated internal token");
+    const caption=new c.window.Window_Caption();
+    assert.equal(caption.drawTextEx(body,0,0),9);
+    assert.equal(caption.lastTextEx,"Sigue caminando, amigo.");
+    caption.drawTextEx(colored,0,0);
+    assert.equal(caption.lastTextEx,"Sigue caminando, \\c[5]amigo\\c[0].");
+    assert.equal(caption.duration,90);
+    const commands=[{code:101,parameters:["",0,0,2]},{code:401,parameters:[tag+body]},{code:0,parameters:[]}];
+    const saved=JSON.stringify(commands),interp=new c.Game_Interpreter();
+    interp._list=commands;interp._index=0;
+    assert.equal(interp.command101(),true);
+    assert.equal(interp.captured,tag+"Sigue caminando, amigo.");
+    assert.equal(interp._list,commands);assert.equal(interp._index,1);
+    assert.equal(JSON.stringify(commands),saved);
+    assert.equal(scene.windows.length,0);assert.equal(f.posts.length,0);
+}
+async function testR4P5DynamicNativeCaptionConversion(){
+    const original="Keep walking, friend.",translated="Sigue caminando, amigo.";
+    const plugins=[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}];
+    const f=fixture(2,{plugins,responses:{[original]:translated},configure(c){
+        c.Window_Base.prototype.convertEscapeCharacters=function(v){return v;};
+        function Window_Caption(){this.duration=120;}
+        Window_Caption.prototype=Object.create(c.Window_Base.prototype);
+        Window_Caption.prototype.constructor=Window_Caption;
+        c.window.Window_Caption=Window_Caption;
+    }});
+    await wait(35);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    const win=new c.window.Window_Caption();
+    assert.equal(win.convertEscapeCharacters(original),original);
+    await wait(150);
+    assert.equal(win.convertEscapeCharacters(original),translated);
+    assert.ok(f.posts.some(p=>p.text===original),"dynamic caption enters real request pipeline");
+    assert.equal(win.duration,120);assert.equal(scene.windows.length,0);
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -1045,6 +1148,8 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P4LateIconAndAmount();
     await testR4P4FullQuestTemplateAndAccents();
     await testR4P4AmbientNativeCaption();
+    await testR4P5QuestOverrideAndCaptionAlias();
+    await testR4P5DynamicNativeCaptionConversion();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();

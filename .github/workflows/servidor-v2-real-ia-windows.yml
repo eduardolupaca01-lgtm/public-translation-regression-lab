@@ -28,6 +28,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Exigir regresiones de presentacion MV antes de preparar el EXE
+        shell: pwsh
+        run: |
+          node --check servidor_v2/plugin/IATraductora.js
+          if ($LASTEXITCODE -ne 0) { throw "IA_PLUGIN_SYNTAX_FAIL" }
+          node servidor_v2/tests/test_mv_dialogue.js
+          if ($LASTEXITCODE -ne 0) { throw "IA_PLUGIN_REGRESSION_FAIL" }
       - name: Bloqueo si no se dispone de origen privado cifrado
         shell: pwsh
         run: |
