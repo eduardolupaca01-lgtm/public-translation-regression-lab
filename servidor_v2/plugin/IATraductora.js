@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P3-20261123"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P4-20261123"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -409,7 +409,7 @@ function acceptCache(source,original,result,composed,persist){
         cache.set(key,approvedKeys.get(key));return true;
     }
     if(cache.has(key)&&cache.get(key)===result)return true;
-    cache.set(key,result);
+    cache.set(key,result);indexDisplayAlias(source,original,result);
     if(typeof discovered!=="undefined"&&discovered.has(key)){
         var item=discovered.get(key);
         if(item.status!=="ready"){
@@ -499,7 +499,7 @@ function startPersistentCache(){
                         if(approvedKeys.has(key))continue;
                         if(!cache.has(key)||loadedKeys.has(key)){
                             if(!loadedKeys.has(key))diskStats.loaded++;
-                            cache.set(key,r.translated);loadedKeys.set(key,true);
+                            cache.set(key,r.translated);indexDisplayAlias(r.source,r.original,r.translated);loadedKeys.set(key,true);
                             if(cache.size>MAX_CACHE_ENTRIES)cache.delete(cache.keys().next().value);
                         }
                     }catch(_){diskStats.rejected++;}
@@ -611,7 +611,7 @@ function languageFor(s){
     if(/[áéíóúñ¿¡]/i.test(prose)||/[^\x09\x0a\x0d\x20-\x7e]/.test(prose))return null;
     var words=prose.match(/[A-Za-z']+/g)||[];
     if(words.length<2||prose.trim().length<5)return null;
-    if(/\b(?:the|you|your|are|have|this|that|with|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning|and|of|from|into|there|here|was|were|will|must|he|she|they|their|his|her|my|our|is)\b/i.test(prose))return "en";
+    if(/\b(?:the|you|your|are|have|this|that|with|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning|and|of|from|into|there|here|was|were|will|must|he|she|they|their|his|her|my|our|is|i|it|him|himself|herself|ourselves|themselves|says|said|keep|moving|writing|looking|always|typical|absurd|enough|stop|listen|leave|wait|come|get|go|back|ready|look|find|help|give|take|bring|open|close|follow)\b/i.test(prose))return "en";
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
@@ -716,7 +716,7 @@ function englishFormatPlan(text){
         var p=parts[i],v=p.value;
         if(!p.locked){plain+=v;if(v.trim())seen=true;if(active)active.text+=v;continue;}
         if(!seen&&!active&&(/^<[A-Za-z][A-Za-z .'\-]{0,48}>$/i.test(v)||
-            /^\\n<[^\\<>\r\n]{1,75}>$/i.test(v))){prefix+=v;continue;}
+            /^\\n[cr]?<[^\\<>\r\n]{1,75}>$/i.test(v))){prefix+=v;continue;}
         if(!active&&/^<\/wordwrap>$/i.test(v)&&i===parts.length-1){suffix+=v;continue;}
         if(!active&&/^(?:\\|\x1b)(?:c\[\d+\]|m\[[A-Za-z][A-Za-z0-9 _\-]{0,60}\])$/i.test(v)&&!/^(?:\\|\x1b)c\[0\]$/i.test(v)){active={open:v,text:"",close:""};continue;}
         if(active&&/^(?:\\|\x1b)c\[0\]$/i.test(v)&&active.text.trim()){active.close=v;active.person=protectedPerson(active.open,active.text);spans.push(active);active=null;continue;}
@@ -943,6 +943,40 @@ function stableDisplay(text,identity){
     if(text==="このキャラクターの名前を決めて下さい。")return "Elige el nombre de este personaje.";
     return localizeDate(text);
 }
+// Only aliases with exactly equivalent presentation codes. Never infer
+// an alias for executable or dynamic controls.
+var formatAliases=new Map();
+function canonicalDisplay(text){
+    if(typeof text!=="string"||text.length>1800||!/(?:\\|\x1b)[cmi]\[/i.test(text))return null;
+    var raw=protectedParts(text),keys=[],codes=[];
+    for(var i=0;i<raw.length;i++){
+        var p=raw[i],v=p.value;
+        if(!p.locked){keys.push(v);continue;}
+        var color=formatColor(v),token;
+        if(color!==null)token="C:"+color;
+        else if(/^(?:\\|\x1b)i\[\d{1,4}\]$/i.test(v))token="I:"+Number(v.match(/\d+/)[0]);
+        else if(/^<\/?wordwrap>$/i.test(v)||/^\\n[cr]?<[^\\<>\r\n]{1,75}>$/i.test(v)||p.literal||/^\r?\n$/.test(v))token=v;
+        else return null;
+        keys.push("\u0001"+token+"\u0001");codes.push(v);
+    }
+    return {key:keys.join(""),codes:codes};
+}
+function indexDisplayAlias(source,text,result){
+    if(source!=="en")return;
+    var alias=canonicalDisplay(text);
+    if(!alias)return;
+    if(formatAliases.size>=MAX_CACHE_ENTRIES&&!formatAliases.has(alias.key))return;
+    formatAliases.set(alias.key,{original:text,result:result});
+}
+function aliasDisplay(source,text){
+    if(source!=="en")return null;
+    var alias=canonicalDisplay(text);if(!alias)return null;
+    var old=formatAliases.get(alias.key);if(!old||old.original===text)return null;
+    var at=0,out=protectedParts(old.result).map(function(p){return p.locked?alias.codes[at++]:p.value;}).join("");
+    if(at!==alias.codes.length)return null;
+    out=repairDisplayTerms(source,text,out);
+    return validTranslation(source,text,out,true)?out:null;
+}
 function cachedPart(source,text){
     var key=source+"\u0000"+text;
     if(approvedKeys.has(key))return approvedKeys.get(key);
@@ -953,6 +987,8 @@ function cachedPart(source,text){
         if(validTranslation(source,text,old,true))return old;
         cache.delete(key);diskStats.rejected++;
     }
+    var alias=aliasDisplay(source,text);
+    if(alias!==null&&acceptCache(source,text,alias,true,true))return cache.get(key);
     return null;
 }
 function hasJapaneseProse(text){
@@ -1096,26 +1132,29 @@ function isQuestWindow(win){
 }
 // Match only known quest labels/titles on nonstandard bitmap-based journals.
 // Decoration and numeric counters remain the author's original characters.
-function questCachedLabel(text){
-    if(typeof text!=="string"||text.length>220||actorNames[text])return null;
-    var m=/^([ \t\-–—]*)(.*?)([ \t]*(?:\(\d{1,6}\)|\[\d{1,6}\])?[ \t]*)$/.exec(text);
-    if(!m||!m[2])return null;
-    var value=m[2],translated=Object.prototype.hasOwnProperty.call(questLabels,value)?questLabels[value]:null;
-    if(translated===null&&questTexts.has(value))translated=readyText(questTexts.get(value),value);
-    return translated!==null&&translated!==value?m[1]+translated+m[3]:null;
+// The author's category format can include a color prefix, count and
+// expansion marker. Keep them, even when the caption itself is short.
+function questEnvelope(text){
+    var lead=(text.match(/^(?:(?:\\|\x1b)(?:[ci]\[\d{1,4}\]|[{}])|<\/?wordwrap>|[ \t])*/i)||[""])[0];
+    var rest=text.slice(lead.length);
+    var tail=(rest.match(/(?:(?:\\|\x1b)(?:c\[\d{1,3}\]|[{}])|<\/wordwrap>|[ \t])*$/i)||[""])[0];
+    return {lead:lead,body:rest.slice(0,rest.length-tail.length),tail:tail};
 }
-function questDraw(win,text){
-    var label=questCachedLabel(text);if(label!==null)return label;
-    if(Object.prototype.hasOwnProperty.call(questLabels,text))return questLabels[text];
-    var source=questSource(text);
-    if(!source)return text;
-    var found=readyText(source,text);
-    if(found!==null)return found;
-    if(!state.connected){addPrefetch(text,true,source);return text;}
-    // Repaint only a live quest window whose no-argument refresh contract
-    // is available. Don't touch the quest object or selection identifiers.
+function questCachedLabel(text,scoped){
+    if(typeof text!=="string"||text.length>1800||actorNames[text])return null;
+    var e=questEnvelope(text);
+    var m=/^([ \t+\-–—]*)(.*?)([ \t]*(?:\(\d{1,6}\)|\[\d{1,6}\])?[ \t]*)$/.exec(e.body);
+    if(!m||!m[2])return null;
+    var value=m[2];
+    if(!scoped&&/^(?:From|Location|Level|Castle|Forest|Village|Town|Close)$/.test(value))return null;
+    var translated=Object.prototype.hasOwnProperty.call(questLabels,value)?questLabels[value]:null;
+    if(translated===null&&questTexts.has(value))translated=readyText(questTexts.get(value),value);
+    return translated!==null&&translated!==value?e.lead+m[1]+translated+m[3]+e.tail:null;
+}
+function queueQuest(win,source,text){
+    if(!state.connected){addPrefetch(text,true,source);return;}
     var requests=win._iaQuestRequests||(win._iaQuestRequests=new Map());
-    if(requests.has(text)||requests.size>=24)return text;
+    if(requests.has(text)||requests.size>=24)return;
     var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
     requests.set(text,true);
     requestVisible(source,text).then(function(result){
@@ -1134,7 +1173,103 @@ function questDraw(win,text){
             }catch(_){state.errors++;}
         },100);
     },function(){requests.delete(text);});
+}
+function questLine(win,text){
+    if(!text.trim()||text.length>1800)return text;
+    var label=questCachedLabel(text,true);if(label!==null)return label;
+    var e=questEnvelope(text),body=e.body;
+    // Do not ask a language model to translate the quest giver's identity.
+    var header=/^(From|Location|Level|Description|Objectives|Rewards|Difficulty):([ \t]*)(.*)$/i.exec(body);
+    if(header){
+        var k=header[1].charAt(0).toUpperCase()+header[1].slice(1).toLowerCase();
+        var fixed=k==="Difficulty"?"Dificultad":questLabels[k];
+        if(!fixed)return text;
+        var value=header[3];
+        if(value&&k!=="From"){
+            var v=questCachedLabel(value,true),source=questSource(value);
+            if(v!==null)value=v;
+            else if(source){
+                var found=readyText(source,value);
+                if(found!==null)value=found;else queueQuest(win,source,value);
+            }
+        }
+        return e.lead+fixed+":"+header[2]+value+e.tail;
+    }
+    var source=questSource(body);
+    if(!source||!body)return text;
+    var found=readyText(source,body);
+    if(found!==null)return e.lead+found+e.tail;
+    queueQuest(win,source,body);
     return text;
+}
+function questDraw(win,text){
+    // QuestDataFormat joins many fields with <br>, native newlines and
+    // font size controls. Translate the visible fields separately; never
+    // hand the assembled layout or the name of a giver to the model.
+    if(text.length<=16000&&/\r?\n|<br\s*\/?>/i.test(text)){
+        var pieces=text.split(/(\r?\n|<br\s*\/?>)/i);
+        if(pieces.length<=240)return pieces.map(function(piece,i){
+            return i%2?piece:questLine(win,piece);
+        }).join("");
+        return text;
+    }
+    return questLine(win,text);
+}
+function isAmbientWindow(win){
+    var name=win&&win.constructor&&win.constructor.name;
+    if(!name||! /^(?:Window_GalvCaption|Window_Gab(?:Window)?)$/.test(name)||typeof $plugins==="undefined"||!Array.isArray($plugins))return false;
+    return $plugins.some(function(p){
+        return p&&p.status&&((p.name==="GALV_TimedMessagePopups"&&name==="Window_GalvCaption")||
+            (p.name==="YEP_GabWindow"&&/^Window_Gab(?:Window)?$/.test(name)));
+    });
+}
+function ambientDraw(win,method,args,original){
+    var text=args[0],source=null,found=null,epoch=(win._iaCaptionEpoch||0)+1;
+    win._iaCaptionEpoch=epoch;
+    try{
+        source=languageFor(text);
+        if(source)found=readyText(source,text);
+    }catch(_){state.errors++;}
+    if(found!==null){args[0]=found;ambientStats.shown++;}
+    // Invoke the author's native draw exactly once, even if IA fails.
+    var out=original.apply(win,args);
+    if(!source||found!==null)return out;
+    try{
+    if(!state.connected){addPrefetch(text,true);return out;}
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null,b=win.contents;
+    var x=Number(args[1]),y=Number(args[2]),h=typeof win.lineHeight==="function"?win.lineHeight():(b&&b.fontSize||24)+8;
+    var ticket=null;
+    // Only an existing caption's one text region; ignore unknown layout,
+    // measurement-only calls, and anything containing executable controls.
+    if(method==="drawTextEx"&&scene&&win.parent&&b&&nativeRenderParts(text)&&
+       integer(b.width)&&integer(b.height)&&b.width<=4096&&b.height<=512&&
+       isFinite(x)&&isFinite(y)&&x>=0&&y>=0&&x<b.width&&y<b.height&&h>=8&&h<=128&&
+       typeof b.clearRect==="function"&&typeof b.blt==="function"&&typeof win.textColor==="function"){
+        var style={};nativeStyleKeys.forEach(function(k){if(b[k]!==undefined)style[k]=b[k];});
+        if(typeof win.normalColor==="function")style.textColor=win.normalColor();
+        ticket={geometry:{bitmap:b,x:Math.floor(x),y:Math.floor(y),line:Math.ceil(h),
+            width:b.width,height:b.height,style:style},result:null};
+    }
+    ambientStats.requested++;
+    requestVisible(source,text).then(function(result){
+        if(!ticket||typeof result!=="string"||!validTranslation(source,text,result,true)||
+           win._iaCaptionEpoch!==epoch||SceneManager._scene!==scene||
+           win.contents!==b||!win.parent||win.visible===false||win.openness===0)return;
+        ticket.result=result;
+        if(replaceNativeMessage(win,ticket)){ambientStats.shown++;state.shown++;}
+    },function(){state.errors++;});
+    }catch(_){state.errors++;}
+    return out;
+}
+function withQuestGlyphs(bitmap,text,draw){
+    var font=bitmap&&bitmap.fontFace;
+    // Some handwritten fonts map accented glyphs to blank spaces. Use a
+    // local legible face for Spanish accented text in configured journal
+    // fonts only; never change strings, save data, or the global font.
+    if(typeof font!=="string"||!questFontFaces[font.toLowerCase()]||
+       typeof text!=="string"||!/[áéíóúüñÁÉÍÓÚÜÑ¿¡]/.test(text))return draw();
+    bitmap.fontFace="Georgia, serif";
+    try{return draw();}finally{bitmap.fontFace=font;}
 }
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
@@ -1143,6 +1278,9 @@ function hookNativeSurface(){
             if(typeof original!=="function")return;
             Window_Base.prototype[method]=function(){
                 var args=Array.prototype.slice.call(arguments),identity=!!this._iaNameSurface;
+                if(!identity&&!identityDrawDepth&&!this._iaOwnSurface&&typeof args[0]==="string"&&isAmbientWindow(this)){
+                    return ambientDraw(this,method,args,original);
+                }
                 try{
                     if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
                         if(!identity&&isQuestWindow(this))args[0]=questDraw(this,args[0]);
@@ -1193,7 +1331,11 @@ function hookNativeSurface(){
                 if(!identityDrawDepth&&typeof args[0]==="string"&&args[0].length>=2)
                     {var label=questCachedLabel(args[0]);args[0]=label!==null?label:translatedNativeLabel(args[0],false);}
             }catch(_){state.errors++;}
-            return bitmapDraw.apply(this,args);
+            var bitmap=this;return withQuestGlyphs(bitmap,args[0],function(){return bitmapDraw.apply(bitmap,args);});
+        };
+        var measure=Bitmap.prototype.measureTextWidth;
+        if(typeof measure==="function")Bitmap.prototype.measureTextWidth=function(text){
+            var bitmap=this,args=arguments;return withQuestGlyphs(bitmap,text,function(){return measure.apply(bitmap,args);});
         };
     }
 }
@@ -1229,7 +1371,7 @@ var lateStats={shown:0,requested:0,unsupported:0};
 function hideLate(win){win._iaLateTicket=null;}
 function nativeRenderParts(text){
     if(typeof text!=="string"||text.length>1800)return null;
-    var re=/<\/?wordwrap>|\\n<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\])|\r?\n|<br>/gi;
+    var re=/<\/?wordwrap>|\\n[cr]?<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\]|i\[\d{1,4}\])|\r?\n|<br>/gi;
     var parts=[],flat="",at=0,m,color=null,seen=false;
     function prose(value){
         if(/[\\\x1b<>|\f]/.test(value))return false;
@@ -1239,9 +1381,12 @@ function nativeRenderParts(text){
     while((m=re.exec(text))!==null){
         if(!prose(text.slice(at,m.index)))return null;
         var code=m[0];at=re.lastIndex;
-        if(/^\\n</i.test(code)){if(seen)return null;continue;}
+        if(/^\\n[cr]?</i.test(code)){if(seen)return null;continue;}
         if(/^<\/?wordwrap>$/i.test(code))continue;
         if(/^(?:\r?\n|<br>)$/i.test(code)){parts.push({text:"\n",color:color});flat+="\n";continue;}
+        var icon=/^(?:\\|\x1b)i\[(\d{1,4})\]$/i.exec(code);
+        if(icon){var id=Number(icon[1]);if(id>4095)return null;
+            parts.push({text:"\uFFFC",color:color,icon:id});flat+="\uFFFC";seen=true;continue;}
         color=formatColor(code);if(color===null)return null;
     }
     if(!prose(text.slice(at))||!flat.trim())return null;
@@ -1261,7 +1406,7 @@ function snapshotMessage(win,ticket){
     // Require the same visible color runs, not merely the same words.
     function signature(parsed){
         return parsed.parts.filter(function(x){return x.text.trim();})
-            .map(function(x){return String(x.color)+":"+plainCompare(x.text);}).join("\u0002");
+            .map(function(x){return String(x.color)+":"+plainCompare(x.text)+(x.icon!==undefined?":"+x.icon:"");}).join("\u0002");
     }
     if(signature(original)!==signature(native))return;
     var x=typeof ts.x==="number"?ts.x:ts.left,y=ts.y,h=ts.height;
@@ -1278,7 +1423,9 @@ function planNativeWords(parsed,bitmap,win,geometry){
         if(word.length){words.push({runs:word,space:space});word=[];space=false;}
     }
     for(var i=0;i<parsed.parts.length;i++){
-        var part=parsed.parts[i],pieces=part.text.match(/\n|[ \t]+|[^\n \t]+/g)||[];
+        var part=parsed.parts[i];
+        if(part.icon!==undefined){word.push(part);continue;}
+        var pieces=part.text.match(/\n|[ \t]+|[^\n \t]+/g)||[];
         pieces.forEach(function(t){
             if(t==="\n"){flush();words.push({line:true});space=false;}
             else if(/^[ \t]+$/.test(t)){flush();space=true;}
@@ -1292,7 +1439,7 @@ function planNativeWords(parsed,bitmap,win,geometry){
     var gap=bitmap.measureTextWidth(" ");
     for(var j=0;j<words.length;j++){
         var w=words[j];if(w.line){x=0;y+=line;continue;}
-        var lengths=w.runs.map(function(r){return bitmap.measureTextWidth(r.text);});
+        var lengths=w.runs.map(function(r){return r.icon!==undefined?36:bitmap.measureTextWidth(r.text);});
         if(lengths.some(function(v){return !isFinite(v)||v<0;}))return null;
         var total=lengths.reduce(function(a,b){return a+b;},0),pad=x&&w.space?gap:0;
         if(total>width)return null;
@@ -1302,7 +1449,7 @@ function planNativeWords(parsed,bitmap,win,geometry){
         for(var k=0;k<w.runs.length;k++){
             var r=w.runs[k],c=r.color===null?geometry.style.textColor:win.textColor(r.color);
             if(typeof c!=="string")return null;
-            ops.push({text:r.text,x:x,y:y,w:Math.max(1,Math.ceil(lengths[k])+4),color:c});
+            ops.push({text:r.text,x:x,y:y,w:Math.max(1,Math.ceil(lengths[k])+4),color:c,icon:r.icon});
             x+=lengths[k];
         }
     }
@@ -1324,11 +1471,19 @@ function replaceNativeMessage(win,ticket){
         nativeStyleKeys.forEach(function(k){if(g.style[k]!==undefined)stage[k]=g.style[k];});
         var ops=planNativeWords(parsed,stage,win,g);
         if(!ops)return false; // no clipping; leave native original untouched
+        var icons=null;
+        if(ops.some(function(op){return op.icon!==undefined;})){
+            if(typeof ImageManager==="undefined"||typeof ImageManager.loadSystem!=="function"||g.line<32)return false;
+            icons=ImageManager.loadSystem("IconSet");
+            if(!icons||typeof icons.isReady!=="function"||!icons.isReady()||icons.width<512||
+                ops.some(function(op){return op.icon!==undefined&&(Math.floor(op.icon/16)+1)*32>icons.height;}))return false;
+        }
         identityDrawDepth++;
         try{
             ops.forEach(function(op){
                 stage.textColor=op.color;
-                stage.drawText(op.text,op.x+g.x-x,op.y,op.w,g.line,"left");
+                if(op.icon!==undefined)stage.blt(icons,(op.icon%16)*32,Math.floor(op.icon/16)*32,32,32,op.x+g.x-x+2,op.y+Math.floor((g.line-32)/2));
+                else stage.drawText(op.text,op.x+g.x-x,op.y,op.w,g.line,"left");
             });
         }finally{identityDrawDepth--;}
         backup.blt(b,x,y,w,h,0,0);
@@ -1467,10 +1622,16 @@ var scanStarted=false,prefetchBusy=false,MAX_DISCOVERED=40000;
 var inkStats={detected:false,files:0,candidates:0,excluded:0};
 var tableStats={files:0,candidates:0};
 var questTexts=new Map(),questStats={records:0,fields:0,ready:0};
+var questFontFaces=Object.create(null),ambientStats={requested:0,shown:0};
 var commonEventLists=null,commonPrioritySeen=new Map(),commonInitialSeen=new Map(),commonDeferred=new Map();
 var questLabels={"Quest":"Misión","Quests":"Misiones","Objectives":"Objetivos","Rewards":"Recompensas",
     "Description":"Descripción","Completed":"Completadas","Failed":"Fallidas","Active":"Activas","All":"Todas",
-    "Main Quests":"Misiones principales","Side Quests":"Misiones secundarias","Quest Journal":"Diario de misiones","Available":"Disponibles","Journal":"Diario"};
+    "Main Quests":"Misiones principales","Side Quests":"Misiones secundarias","Quest Journal":"Diario de misiones",
+    "Available":"Disponibles","All Quests":"Todas las misiones","Tutorial Quests":"Misiones de tutorial",
+    "NPC Quests":"Misiones de PNJ","Job Quests":"Misiones de trabajo","Skill Quests":"Misiones de habilidad",
+    "Training Quests":"Misiones de entrenamiento","Wizard Quests":"Misiones de mago","Shaman Quests":"Misiones de chamán",
+    "Weakness Quests":"Misiones de debilidades","From":"De","Location":"Ubicación","Level":"Nivel",
+    "Castle":"Castillo","Forest":"Bosque","Village":"Aldea","Town":"Pueblo","Close":"Cerrar","Journal":"Diario"};
 function questSource(text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text])return null;
     return questTexts.get(text)||languageFor(text)||null;
@@ -1479,7 +1640,7 @@ function registerQuestText(text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
        /^\s*(?:[=+@]|\d+\s*$|[\[{])/.test(text)||/\\(?:eval|script)\b/i.test(text))return;
     var source=languageFor(text);
-    if(!source&&/^[A-Za-z][A-Za-z0-9 .,'!?\-]{0,79}$/.test(text))source="en";
+    if(!source&&/^[A-Za-z][A-Za-z0-9 .,'!?:\-]{0,79}$/.test(text))source="en";
     if(!source||questTexts.has(text)||questTexts.size>=6000)return;
     questTexts.set(text,source);questStats.fields++;
     addPrefetch(text,false,source);
@@ -1511,9 +1672,10 @@ function scanQuestParameters(done){
         });
         if(plugin.name==="YEP_QuestJournal"){
             questValues(plugin.parameters["Quest Command"],0);
-            ["Quest Category Window","Quest List Window","Quest Title Window","Quest Data Window"].forEach(function(key){
+            ["---Main Menu---","Quest Category Window","Quest List Window","Quest Title Window","Quest Data Window"].forEach(function(key){
                 try{
                     var field=JSON.parse(plugin.parameters[key]||"{}");
+                    if(typeof field["Font Face"]==="string"&&/^[A-Za-z0-9_ -]{1,80}$/.test(field["Font Face"]))questFontFaces[field["Font Face"].toLowerCase()]=true;
                     ["Available Text","Completed Text","Failed Text","All Text","Cancel Text","Type Order","No Quest Title","No Data Text"].forEach(function(k){
                         if(Object.prototype.hasOwnProperty.call(field,k))questValues(field[k],0);
                     });
@@ -1529,7 +1691,7 @@ function scanQuestParameters(done){
                 var entry=typeof value==="string"&&value.length<=65536?JSON.parse(value):value;
                 if(!entry||typeof entry!=="object"||Array.isArray(entry))continue;
                 questStats.records++;
-                ["Title","Type","Difficulty","Description","Objectives List","Rewards List","Subtext"].forEach(function(k){
+                ["Title","Type","Difficulty","Location","Description","Objectives List","Rewards List","Subtext"].forEach(function(k){
                     if(Object.prototype.hasOwnProperty.call(entry,k))questValues(entry[k],0);
                 });
             }catch(_){}
@@ -1560,6 +1722,9 @@ function inkDisplayText(value,choice){
     // Known shaped display macros: keep the payload as a candidate word.
     // We do NOT execute the macro, change Ink values, or rewrite JSON.
     var spans=[];
+    // A numeric currency macro is not executable and its value must survive.
+    // Its displayed icon is reconstructed by the native game.
+    raw=raw.replace(/\(gp:(\d{1,9})\)/gi,"$1");
     var plain=raw.replace(/\((m[a-z]|gp|ob|ic|wp|stat):([A-Za-z][A-Za-z0-9 '\-]{0,55})\)/gi,function(_,kind,label){
         spans.push(label);return label;
     });
@@ -1750,6 +1915,13 @@ function addPrefetch(text,priority,trustedLang){
     if(readyText(source,text)!==null){if(item.status!=="ready"){item.status="ready";scanStats.ready++;}return;}
     (priority?priorityQueue:prefetchQueue).push(item);
 }
+function ambientPayload(text){
+    if(typeof text!=="string"||text.length>1800)return null;
+    var m=/^GabText\s+(.+)$/i.exec(text);
+    if(m)return m[1];
+    m=/^CreatePopup\s+\d{1,4}\s+(?:(?:left|right|center)\s+)?(.+)$/i.exec(text);
+    return m?m[1]:null;
+}
 function scanCommands(list,priority){
     if(!Array.isArray(list))return;
     for(var i=0;i<list.length;i++){
@@ -1768,6 +1940,8 @@ function scanCommands(list,priority){
             for(var j=0;j<parts.length;j++)addPrefetch(parts[j],priority);
         }else if(cmd.code===102&&Array.isArray(cmd.parameters[0])){
             cmd.parameters[0].forEach(function(t){addPrefetch(t,priority);});
+        }else if(cmd.code===356){
+            var caption=ambientPayload(cmd.parameters[0]);if(caption)addPrefetch(caption,priority,"en");
         }else if(cmd.code===117&&priority){
             priorityCommon(cmd.parameters[0],collectInitial);
         }else if(cmd.code===320||cmd.code===324){
@@ -1854,7 +2028,7 @@ function startFullScan(){
         if(files.length>5000){files=files.slice(0,5000);scanStats.limited=true;}
         function step(){
             if(!files.length||discovered.size>=MAX_DISCOVERED){
-                scanExtraSources(dataDir,function(){scanQuestParameters(function(){scanStats.done=true;nextPrefetch();});});return;
+                scanQuestParameters(function(){scanExtraSources(dataDir,function(){scanStats.done=true;nextPrefetch();});});return;
             }
             var name=files.shift(),file=path.join(dataDir,name);
             try{
@@ -2077,7 +2251,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
-            "Misiones: "+questStats.records+" · Redibujos: "+lateStats.shown+" · F10"
+            "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+" · F10"
         ];
         for(var i=0;i<lines.length;i++){
             if(i===4&&lines[i].length>32)this.contents.fontSize=16;

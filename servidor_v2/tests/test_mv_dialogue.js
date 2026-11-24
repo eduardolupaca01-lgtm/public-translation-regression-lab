@@ -103,8 +103,10 @@ function fixture(translationDelay=0,options={}){
     Window_Base.prototype.contentsWidth=function(){return this.width-20};
     Window_Base.prototype.hide=function(){this.visible=false;};
     Window_Base.prototype.show=function(){this.visible=true;};
-    Window_Base.prototype.drawTextEx=function(t){
-        this.lastTextEx=t;return String(t).length;
+    Window_Base.prototype.drawTextEx=function(t,x,y){
+        this.lastTextEx=t;
+        if(this._testAmbientPaint&&this.contents)this.contents.drawText(t,x,y,this.contents.width-x,32);
+        return String(t).length;
     };
     Window_Base.prototype.drawText=function(t,x,y){
         this.lastText=t;
@@ -115,9 +117,9 @@ function fixture(translationDelay=0,options={}){
         this.width=w||0;this.height=h||0;this.fontFace="GameFont";this.fontSize=24;
         this.textColor="#ffffff";this.outlineWidth=2;this.paintOpacity=255;this.ops=[];
     }
-    Bitmap.prototype.measureTextWidth=function(t){return String(t).length*12;};
+    Bitmap.prototype.measureTextWidth=function(t){this.measuredFont=this.fontFace;return String(t).length*12;};
     Bitmap.prototype.drawText=function(t,x,y,w,h){
-        this.lastText=String(t);this.ops.push({text:String(t),x:x||0,y:y||0,w:w||0,h:h||0,color:this.textColor});return t;
+        this.lastText=String(t);this.ops.push({text:String(t),x:x||0,y:y||0,w:w||0,h:h||0,color:this.textColor,font:this.fontFace});return t;
     };
     Bitmap.prototype.clearRect=function(x,y,w,h){
         this.ops=this.ops.filter(v=>v.x<x||v.y<y||v.x>=x+w||v.y>=y+h);
@@ -148,10 +150,10 @@ function fixture(translationDelay=0,options={}){
         this.originalStarts++;
         if(options.nativePaint){
             this.pause=false;this._textState={text:$gameMessage.allText()
-                .replace(/<\/?wordwrap>/gi,"").replace(/\\n<[^>]+>/gi,"")
+                .replace(/<\/?wordwrap>/gi,"").replace(/\\n[cr]?<[^>]+>/gi,"")
                 .replace(/\\m\[things\]/gi,"\x1bC[11]")
                 .replace(/\\m\[quests\]/gi,"\x1bC[23]")
-                .replace(/\\c\[/gi,"\x1bC["),index:0,x:168,left:168,y:0,height:32};
+                .replace(/\\c\[/gi,"\x1bC[").replace(/\\i\[/gi,"\x1bI["),index:0,x:168,left:168,y:0,height:32};
             this.contents=new Bitmap(options.nativeWidth||900,options.nativeHeight||128);
             this.contents.drawText("FACE",0,0,144,128);
             this.newPage(this._textState);
@@ -200,7 +202,11 @@ function fixture(translationDelay=0,options={}){
     function LegacyNumber(value){return Number(value);}
     LegacyNumber.prototype=Number.prototype;
     LegacyNumber.isInteger=undefined;
+    const iconAtlas=new Bitmap(512,512);
+    iconAtlas.ops.push({text:"ICON17",x:32,y:32,w:32,h:32,color:"icon"});
+    iconAtlas.isReady=()=>true;
     const context={
+        ImageManager:{loadSystem(name){assert.equal(name,"IconSet");return iconAtlas;}},
         window:{location:{pathname:options.pathname||path.join(root,"www","index.html")}},
         document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
         Utils:{isNwjs:()=>true},
@@ -891,6 +897,98 @@ async function testR4P3PageAndChoiceSafety(){
     assert.equal(scene.windows.length,0);
 }
 
+
+async function testR4P4ShortTextAndMacroAlias(){
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{"Macro 1 Name":"Things","Macro 1 Text":"\\c[11]"}}];
+    const raw="Ancient \\m[Things]writing\\c[0]? Absurd!";
+    const result="¿Escritura \\m[Things]antigua\\c[0]? ¡Absurdo!";
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
+    const state={files:{[journal]:JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true})+"\n"},dirs:{[folder]:true}};
+    const f=fixture(1,{plugins,fsState:state,disconnected:true});await wait(40);
+    const m=new f.context.Window_Message();
+    f.$gameMessage._texts=[raw.replace("\\m[Things]","\\c[11]")];m.startMessage();
+    assert.equal(f.$gameMessage.allText(),result.replace("\\m[Things]","\\c[11]"),
+        "same words and equivalent macro/color use existing cache while preserving original controls");
+    assert.equal(f.posts.length,0);
+    const short='"Typical. Always looking out for herself."';
+    const n=fixture(1,{responses:{[short]:'"Típico. Siempre pensando en sí misma."'}});await wait(25);
+    n.$gameMessage._texts=[short];new n.context.Window_Message().startMessage();
+    await wait(50);n.$gameMessage._texts=[short];new n.context.Window_Message().startMessage();
+    assert.equal(n.$gameMessage.allText(),'"Típico. Siempre pensando en sí misma."');
+}
+async function testR4P4LateIconAndAmount(){
+    const text="\\nc<Guide>We will pay \\i[17]5 coins.";
+    const f=fixture(5,{nativePaint:true,nativeWait:true,responses:{"We will pay":"Pagaremos","5 coins.":"5 monedas."}});await wait(35);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    const m=new f.context.Window_Message();f.$gameMessage._texts=[text];m.startMessage();
+    assert.equal(m.originalStarts,1);assert.equal(m.updateWait(),false);
+    m.finishPage();const bitmap=m.contents;
+    const deadline=Date.now()+900;
+    while(Date.now()<deadline&&!bitmap.clears){await wait(25);m.update();}
+    assert.equal(m.contents,bitmap);assert.equal(scene.windows.length,0);
+    assert.equal(bitmap.clears,1,"late icon-bearing message repaints original");
+    assert.ok(bitmap.ops.some(x=>x.text==="ICON17"),"native icon retained");
+    assert.ok(bitmap.ops.some(x=>x.text==="5"),"amount retained");
+    assert.ok(bitmap.ops.some(x=>x.text==="Pagaremos"));
+    assert.ok(!bitmap.ops.some(x=>x.text.includes("We will pay")));
+    assert.ok(f.posts.every(x=>!/[\\<>]/.test(x.text)),"speaker and icon codes never reach inference");
+}
+async function testR4P4FullQuestTemplateAndAccents(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const title="Find the missing key",desc="The key is hidden in the garden.",objective="Look in the garden.";
+    const entries=[[title,"Encuentra la llave perdida"],[desc,"La llave está escondida en el jardín."],[objective,"Busca en el jardín."]];
+    const state={files:{},dirs:{[data]:true,[folder]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=entries.map(v=>JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:v[0],translated:v[1],composed:false})).join("\n")+"\n";
+    const plugins=[{name:"YEP_QuestJournal",status:true,parameters:{
+        "Quest Data Window":JSON.stringify({"Font Face":"Handwritten","Quest Data Format":"From: %3"}),
+        "Quest 1":JSON.stringify({Title:title,From:"Aldren Fox",Location:"Castle",Description:JSON.stringify([desc]),"Objectives List":JSON.stringify([objective])})}}];
+    const before=JSON.stringify(plugins);
+    const f=fixture(1,{fsState:state,plugins,disconnected:true});await wait(80);
+    function Window_QuestData(){this.initialize(0,0,600,500);}
+    Window_QuestData.prototype=Object.create(f.context.Window_Base.prototype);Window_QuestData.prototype.constructor=Window_QuestData;
+    const win=new Window_QuestData();
+    const template="\\c[15]<WordWrap>\\{"+title+"\\}\n<br>From: Aldren Fox\n<br>Location: Castle\n<br>Description:\n<br>"+desc+"\n<br>Objectives:\n<br>"+objective+"\\c[0]";
+    win.drawTextEx(template,0,0);
+    assert.equal(win.lastTextEx,"\\c[15]<WordWrap>\\{Encuentra la llave perdida\\}\n<br>De: Aldren Fox\n<br>Ubicación: Castillo\n<br>Descripción:\n<br>La llave está escondida en el jardín.\n<br>Objetivos:\n<br>Busca en el jardín.\\c[0]");
+    win.drawTextEx("\\c[15]Available (4)",0,0);assert.equal(win.lastTextEx,"\\c[15]Disponibles (4)");
+    win.drawTextEx("\\c[15]-Tutorial Quests (1)",0,0);assert.equal(win.lastTextEx,"\\c[15]-Misiones de tutorial (1)");
+    const bitmap=new f.context.Bitmap(500,100);bitmap.fontFace="Handwritten";
+    bitmap.drawText("Barón",0,0,400,40);assert.equal(bitmap.ops[0].font,"Georgia, serif");
+    bitmap.measureTextWidth("Barón");assert.equal(bitmap.measuredFont,"Georgia, serif");
+    assert.equal(bitmap.fontFace,"Handwritten","font fallback does not permanently change font");
+    bitmap.drawText("ABC",0,0,400,40);assert.equal(bitmap.ops[1].font,"Handwritten");
+    assert.equal(JSON.stringify(plugins),before,"no quest objects, parameters or script changes");
+    assert.equal(f.posts.length,0);
+}
+async function testR4P4AmbientNativeCaption(){
+    const text="Keep moving, friend.",response="Sigue caminando, amigo.";
+    const plugins=[{name:"GALV_TimedMessagePopups",status:true,parameters:{}}];
+    const f=fixture(10,{plugins,responses:{[text]:response,"Wait here, friend.":"Espera aquí, amigo."}});await wait(30);
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;
+    function Window_GalvCaption(){
+        this.contents=new f.context.Bitmap(500,80);this.parent=scene;this.visible=true;
+        this.duration=75;this._testAmbientPaint=true;
+    }
+    Window_GalvCaption.prototype=Object.create(f.context.Window_Base.prototype);
+    Window_GalvCaption.prototype.constructor=Window_GalvCaption;
+    Window_GalvCaption.prototype.textColor=function(i){return "color-"+i;};
+    const win=new Window_GalvCaption(),bitmap=win.contents;
+    win.drawTextEx(text,4,0);assert.equal(bitmap.lastText,text);
+    const deadline=Date.now()+900;
+    while(Date.now()<deadline&&!bitmap.clears)await wait(20);
+    assert.equal(win.contents,bitmap);assert.equal(scene.windows.length,0);
+    assert.equal(win.duration,75);assert.equal(bitmap.clears,1);
+    assert.ok(bitmap.ops.some(x=>x.text==="Sigue"));
+    assert.ok(!bitmap.ops.some(x=>x.text===text));
+    const stale=new Window_GalvCaption();stale.drawTextEx("Wait here, friend.",4,0);
+    stale.visible=false;await wait(60);
+    assert.ok(!stale.contents.clears,"expired caption never reappears");
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -942,6 +1040,10 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P2PriorityCommonAndInkChoice();
     await testR4P3NativeSafetyAndNames();
     await testR4P3PageAndChoiceSafety();
+    await testR4P4ShortTextAndMacroAlias();
+    await testR4P4LateIconAndAmount();
+    await testR4P4FullQuestTemplateAndAccents();
+    await testR4P4AmbientNativeCaption();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();
