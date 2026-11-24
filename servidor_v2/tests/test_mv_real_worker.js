@@ -197,15 +197,9 @@ async function run(){
     gameMessage._texts=[sourceText];
     const first=new Window_Message();
     first.update();
-    if(isMZ){
-        assert.equal(first.starts,0,"IA_R6_MZ_COLD_DIALOG_MUST_KEEP_BOUNDED_GATE");
-        assert.equal(gameMessage.allText(),sourceText,"IA_R6_WAIT_MUTATED_NATIVE_MESSAGE");
-        await until(()=>{first.update();return first.starts===1;},35000,"IA_R6_FIRST_DIALOG_TIMEOUT");
-    }else{
-        assert.equal(first.starts,1,"IA_MV_COLD_DIALOG_MUST_FAIL_OPEN");
-        assert.equal(gameMessage.allText(),sourceText,"IA_MV_FIRST_PAINT_MUST_NOT_WAIT_FOR_NEURAL_TEXT");
-    }
-    await until(()=>{first.update();return gameMessage.allText()!==sourceText;},120000,"IA_R6_ASYNC_DIALOG_TRANSLATION_TIMEOUT");
+    assert.equal(first.starts,0,"IA_R6_COLD_DIALOG_PAINTED_BEFORE_TRANSLATION");
+    assert.equal(gameMessage.allText(),sourceText,"IA_R6_WAIT_MUTATED_NATIVE_MESSAGE");
+    await until(()=>{first.update();return first.starts===1;},35000,"IA_R6_FIRST_DIALOG_TIMEOUT");
     const displayed=gameMessage.allText();
     assert.ok(displayed.startsWith("\\N[2] "),
         "IA_GAME_CONTROL_CODE_CHANGED");
@@ -218,17 +212,9 @@ async function run(){
     assert.ok(gameMessage._choices.every(japanese),"IA_UNCACHED_CHOICES_CHANGED");
     const prompt=new Window_Message();
     prompt.update();
-    if(isMZ){
-        assert.equal(prompt.choiceWindow,undefined,"IA_R6_MZ_COLD_CHOICE_MUST_KEEP_BOUNDED_GATE");
-        await until(()=>{prompt.update();return !!prompt.choiceWindow;},35000,"IA_R6_FIRST_CHOICE_TIMEOUT");
-    }else{
-        assert.ok(prompt.choiceWindow,"IA_MV_COLD_CHOICE_MUST_OPEN_WITHOUT_NEURAL_WAIT");
-    }
-    await until(()=>{
-        if(prompt.choiceWindow)prompt.choiceWindow.update();
-        return !!prompt.choiceWindow&&prompt.choiceWindow.painted.length===2&&
-            prompt.choiceWindow.painted.every(v=>!japanese(v));
-    },120000,"IA_R6_ASYNC_FIRST_CHOICE_TRANSLATION_TIMEOUT");
+    assert.equal(prompt.choiceWindow,undefined,"IA_R6_COLD_CHOICE_OPENED_TOO_EARLY");
+    await until(()=>{prompt.update();return !!prompt.choiceWindow;},35000,"IA_R6_FIRST_CHOICE_TIMEOUT");
+    assert.ok(prompt.choiceWindow.painted.length===2&&prompt.choiceWindow.painted.every(v=>!japanese(v)),"IA_R6_FIRST_CHOICE_NOT_SPANISH");
     assert.deepEqual(prompt.choiceWindow._list.map(v=>v.name),sourceChoices);
     assert.deepEqual(prompt.choiceWindow._list.map(v=>v.ext),[0,1]);
     console.log("SERVIDOR_V2_R6_REAL_OPUS_FIRST_DIALOG_AND_CHOICES_NO_REPLAY_PASS");
