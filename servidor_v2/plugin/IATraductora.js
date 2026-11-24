@@ -7,7 +7,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="MV-R4P5-20261124"; // also checked against the installed package SHA
+var BUILD_ID="MV-R4P5B-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
@@ -945,7 +945,7 @@ function stableDisplay(text,identity){
 }
 // Only aliases with exactly equivalent presentation codes. Never infer
 // an alias for executable or dynamic controls.
-var formatAliases=new Map(),captionAliases=new Map();
+var formatAliases=new Map(),captionAliases=new Map(),displayBodyAliases=new Map();
 function captionEnvelope(text){
     if(typeof text!=="string"||text.length>1800)return null;
     var m=/^(<c:-?\d{1,6},\d{1,6},\d{1,6}(?:,[A-Za-z0-9_ -]{1,64})?(?:,-?\d{1,6})?>)([\s\S]+)$/i.exec(text);
@@ -977,8 +977,43 @@ function canonicalDisplay(text){
     }
     return {key:keys.join(""),codes:codes};
 }
+// The developer's native name box and caption parser may remove their
+// presentation prefix before asking the text renderer to draw the body.
+// Only equivalent, exact color/icon sequences and uniquely cached results
+// are eligible; preserve the caller's own prefix, never copy a speaker.
+function displayEnvelope(text){
+    var cap=captionEnvelope(text);
+    if(cap)return {prefix:cap.tag,body:cap.body};
+    var prefix=(text.match(/^(?:(?:<wordwrap>)[ \t]*|\\n[cr]?<[^\\<>\r\n]{1,75}>[ \t]*)+/i)||[""])[0];
+    return {prefix:prefix,body:text.slice(prefix.length)};
+}
+function indexDisplayBody(source,text,result){
+    if(source!=="en"||typeof text!=="string"||typeof result!=="string")return;
+    var a=displayEnvelope(text),b=displayEnvelope(result);
+    if(!a.prefix||a.prefix!==b.prefix||!validTranslation(source,a.body,b.body,true))return;
+    var k=canonicalDisplay(a.body),v=canonicalDisplay(b.body);
+    if(!k||!v||k.codes.length!==v.codes.length)return;
+    if(displayBodyAliases.has(k.key)){
+        var old=displayBodyAliases.get(k.key);
+        if(old&&old.target!==v.key)displayBodyAliases.set(k.key,null);
+    }else if(displayBodyAliases.size<MAX_CACHE_ENTRIES)displayBodyAliases.set(k.key,{target:v.key,result:b.body});
+}
+function displayBodyAlias(source,text){
+    if(source!=="en"||typeof text!=="string")return null;
+    var env=displayEnvelope(text),alias=canonicalDisplay(env.body);
+    if(!alias)return null;
+    var old=displayBodyAliases.get(alias.key);
+    if(!old)return null;
+    var at=0,out=protectedParts(old.result).map(function(p){
+        return p.locked?alias.codes[at++]:p.value;
+    }).join("");
+    if(at!==alias.codes.length)return null;
+    out=env.prefix+out;
+    return validTranslation(source,text,out,true)?out:null;
+}
 function indexDisplayAlias(source,text,result){
     indexCaptionAlias(source,text,result);
+    indexDisplayBody(source,text,result);
     if(source!=="en")return;
     var alias=canonicalDisplay(text);
     if(!alias)return;
@@ -1006,6 +1041,8 @@ function cachedPart(source,text){
     }
     var caption=captionAliases.get(key);
     if(typeof caption==="string"&&validTranslation(source,text,caption,true))return caption;
+    var bodyAlias=displayBodyAlias(source,text);
+    if(bodyAlias!==null)return bodyAlias;
     var alias=aliasDisplay(source,text);
     if(alias!==null&&acceptCache(source,text,alias,true,true))return cache.get(key);
     return null;
@@ -1325,7 +1362,34 @@ function projectCaption(text){
     nextPrefetch();
     return text;
 }
+function projectMessageSurface(win,text){
+    if(typeof $gameMessage==="undefined"||!$gameMessage||!$gameMessage.hasText||
+       !$gameMessage.hasText()||typeof $gameMessage.allText!=="function"||
+       typeof text!=="string"||text.length>1800)return text;
+    var current=$gameMessage.allText();
+    // Never translate the separate name box, control parameters or an
+    // unrelated measuring call. Require the exact active message body.
+    function matches(raw){
+        if(typeof raw!=="string")return false;
+        if(raw===text)return true;
+        var a=displayEnvelope(raw),b=displayEnvelope(text);
+        if(a.body===b.body)return true;
+        var ak=canonicalDisplay(a.body),bk=canonicalDisplay(b.body);
+        return !!(ak&&bk&&ak.key===bk.key);
+    }
+    if(!matches(current)&&!matches(win._iaSourceMessage))return text;
+    var source=languageFor(text);
+    if(source!=="en")return text; // existing Japanese path is unchanged
+    var ready=readyText(source,text);
+    if(ready!==null&&validTranslation(source,text,ready,true)){
+        hideLate(win);state.shown++;
+        return ready;
+    }
+    return text;
+}
 function projectSurface(win,text){
+    if(typeof Window_Message!=="undefined"&&win instanceof Window_Message)
+        return projectMessageSurface(win,text);
     if(questSurface(win,text))return questDraw(win,text);
     if(isAmbientSurface(win,text))return projectCaption(text);
     return text;
@@ -1505,6 +1569,7 @@ function hookNativeSurface(){
     // The author's name window is created as a subwindow of Window_Message.
     // Mark that instance, not an arbitrary class or all Japanese short labels.
     if(typeof Window_Message!=="undefined"&&Window_Message.prototype){
+        hookSurfaceConversion(Window_Message.prototype,true);
         var create=Window_Message.prototype.createSubWindows;
         if(typeof create==="function")Window_Message.prototype.createSubWindows=function(){
             var result=create.apply(this,arguments);
@@ -1719,10 +1784,11 @@ function hookMessages(){
     var proto=Window_Message.prototype,original=proto.startMessage;
     if(typeof original!=="function")return;
     proto.startMessage=function(){
-        hideLate(this);
+        hideLate(this);this._iaSourceMessage=null;
         try{
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
                 var text=$gameMessage.allText(),source=languageFor(text);
+                this._iaSourceMessage=text;
                 if(source){
                     var old=readyText(source,text);
                     if(typeof old==="string"&&old!==text){
@@ -1770,7 +1836,7 @@ function hookMessages(){
         return update.apply(this,arguments);
     };
     var terminate=proto.terminateMessage;
-    if(typeof terminate==="function")proto.terminateMessage=function(){hideLate(this);return terminate.apply(this,arguments);};
+    if(typeof terminate==="function")proto.terminateMessage=function(){hideLate(this);this._iaSourceMessage=null;return terminate.apply(this,arguments);};
     if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.add==="function"){
         var add=Game_Message.prototype.add;
         Game_Message.prototype.add=function(text){

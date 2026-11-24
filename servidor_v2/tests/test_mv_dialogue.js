@@ -1093,6 +1093,34 @@ async function testR4P5DynamicNativeCaptionConversion(){
     assert.equal(win.duration,120);assert.equal(scene.windows.length,0);
 }
 
+
+async function testR4P5BFormattedMessageBodyReplay(){
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
+    const header="<WordWrap>\\n<Commander>";
+    const raw=header+"We must find the \\m[Things]missing key\\c[0] before dawn.";
+    const result=header+"Debemos encontrar la \\m[Things]llave perdida\\c[0] antes del amanecer.";
+    const body="We must find the \x1bC[11]missing key\x1bC[0] before dawn.";
+    const expected="Debemos encontrar la \x1bC[11]llave perdida\x1bC[0] antes del amanecer.";
+    const state={files:{},dirs:{[folder]:true,[data]:true}};
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true})+"\n";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1});
+    const plugins=[{name:"YEP_X_MessageMacros1",status:true,parameters:{"Macro 1 Name":"Things","Macro 1 Text":"\\c[11]"}}];
+    const f=fixture(2,{fsState:state,plugins,disconnected:true,configure(c){
+        c.Window_Message.prototype.convertEscapeCharacters=function(v){return v;};
+    }});
+    await wait(100);
+    const c=f.context,scene=new c.Scene_Map();c.SceneManager._scene=scene;
+    f.$gameMessage._texts=[raw];
+    const w=new c.Window_Message();
+    assert.equal(w.convertEscapeCharacters(body),expected);
+    assert.equal(w.convertEscapeCharacters("Commander"),"Commander");
+    assert.equal(w.convertEscapeCharacters("We must open the door."),"We must open the door.");
+    assert.equal(f.$gameMessage.allText(),raw,"presentation conversion cannot rewrite the event");
+    assert.equal(scene.windows.length,0);assert.equal(f.posts.length,0);
+}
+
 async function testTitlePreparationCanBeSkipped(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -1150,6 +1178,7 @@ async function testBoundedMapPrefetchAndPressure(){
     await testR4P4AmbientNativeCaption();
     await testR4P5QuestOverrideAndCaptionAlias();
     await testR4P5DynamicNativeCaptionConversion();
+    await testR4P5BFormattedMessageBodyReplay();
     await testR3P2KnownLinesNotHiddenByOnePendingLine();
     await testTitlePreparationCanBeSkipped();
     await testPermanentQualityFailureIsNotRetried();
