@@ -2390,12 +2390,12 @@ function firstViewMissing(win,raw,choice){
     firstViewRequest(source,raw);return true;
 }
 function firstViewWait(win){
-    // Neural inference is asynchronous and must never suspend the native
-    // MV/MZ message loop. Visible messages and choices already enqueue their
-    // own foreground requests and can render the late result when it arrives.
-    // Keep the bounded first-view gate only for authored TSV localization,
-    // where the source table must resolve a native key before display.
-    if(!tsv.detected&&!scriptProfile)return false;
+    // Large MV projects must never suspend the game loop while neural
+    // inference is pending. Visible messages and choices already enqueue
+    // foreground requests and can render the late result when it arrives.
+    // Keep the bounded first-view gate for MZ contracts and authored TSV
+    // localization, which may need variable/key resolution before display.
+    if(!isMZ&&!tsv.detected)return false;
     if(inputFormActive()||win.pause||win._textState||
        (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return false;
     var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
