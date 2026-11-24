@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R1-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R2-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -444,7 +444,7 @@ function safeCachePath(){
 function queueFlush(){
     if(!diskReady||diskBusy||!diskQueue.length||Date.now()<diskRetryAt)return;
     if(!safeCachePath()){diskStats.errors++;diskRetryAt=Date.now()+2000;return;}
-    var items=[],lines=[],count=tableStats.root?16:1;
+    var items=[],lines=[],count=externalTables()?16:1;
     while(diskQueue.length&&items.length<count){
         var item=diskQueue.shift(),line=JSON.stringify(item)+"\n";
         if(line.length>6000){diskStats.rejected++;continue;}
@@ -469,7 +469,7 @@ function queueFlush(){
     catch(error){completed(error);}
 }
 function enqueuePersistentCache(record){
-    if(diskQueue.length>=(tableStats.root?4096:400)){diskStats.errors++;return;}
+    if(diskQueue.length>=(externalTables()?4096:400)){diskStats.errors++;return;}
     diskQueue.push(record);queueFlush();
 }
 function startPersistentCache(){
@@ -477,7 +477,7 @@ function startPersistentCache(){
     cacheFile=path.join(cacheDir,"translations-ja-en-es-v2.jsonl");
     function finish(ok){
         cacheReadDone=true;diskReady=ok;
-        if(tableStats.root){
+        if(externalTables()){
             // Early visible requests can precede the disk read. Reconcile
             // restored exact keys, then inventory against the full cache.
             discovered.forEach(function(item){
@@ -498,7 +498,7 @@ function startPersistentCache(){
                 diskStats.errors++;finish(false);return;
             }
             diskNeedsSeparator=!!data&&data.charAt(data.length-1)!=="\n";
-            var lines=data.split("\n"),limit=Math.min(lines.length,tableStats.root?300000:100000);
+            var lines=data.split("\n"),limit=Math.min(lines.length,externalTables()?300000:100000);
             var at=0,loadedKeys=new Map();
             // Recover only explicit author-provided kana readings, then audit
             // prior results. Do not delete or rewrite the existing journal.
@@ -628,6 +628,8 @@ function repairDisplayTerms(source,original,result){
 }
 function languageFor(s){
     if(typeof s!=="string"||!s||s.length>1800)return null;
+    if(tsvExcluded(s))return null;
+    var declared=tsvEntry(s);if(declared&&!actorNames[s])return declared.source;
     if(typeof tableStats!=="undefined"&&(tableStats.root||isMZ)&&csvExecutableSyntax(s))return null;
     if(isMZ&&/(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(s))return null;
     if(isMZ&&actorNames[s])return null;
@@ -647,7 +649,7 @@ function languageFor(s){
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
-var controlRE=/\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<\/?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
+var controlRE=/(?:\\|\x1b)[Tt][Ll]\{[^{}\r\n]{1,300}\}|\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!.,|^<>$])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<\/?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
 // Brackets at a segment's edges are presentation, not instructions for OPUS.
 // Preserve them byte-for-byte, including an opening/closing bracket on separate
 // native lines. Internal punctuation stays in the sentence for grammar.
@@ -795,6 +797,7 @@ function englishPlanTranslate(text,plan,priority){
 function hasProse(source,text){return source==="ja"?hasJapaneseProse(text):/[A-Za-z]{2}/.test(visibleProse(text))&&!actorNames[text];}
 
 function translatePreservingControls(source,text,skipPlan,priority){
+    if(tsvRef(text)||tsvExcluded(text))return Promise.resolve(null);
     priority=!!(priority||foregroundDepth);
     var key=source+"\u0000"+text;
     var ready=readyText(source,text);
@@ -1209,6 +1212,7 @@ function localizeDate(text){
     return null;
 }
 function translatedNativeLabel(text,identity){
+    if(tsvExcluded(text))return text;
     if(typeof text!=="string"||text.length>1800||!isJapanese(text))return text;
     if(typeof SceneManager!=="undefined"&&SceneManager._scene&&
        typeof Scene_Name!=="undefined"&&SceneManager._scene instanceof Scene_Name){
@@ -1452,7 +1456,7 @@ function hookSurfaceConversion(proto,ownOnly){
             if(!surfaceDepth)args[0]=projectSurface(this,args[0]);
             if(csv&&(!surfaceDepth||choice)){
                 var before=csvProjectDisplay(args[0],choice,true);
-                if(before!==null)args[0]=before;
+                if(before!==null){args[0]=before;if(tsv.detected&&typeof Window_Message!=="undefined"&&this instanceof Window_Message){state.shown++;tsv.shown++;}}
             }
         }catch(_){state.errors++;}
         surfaceDepth++;
@@ -1460,7 +1464,7 @@ function hookSurfaceConversion(proto,ownOnly){
         // The game may turn a lookup key into text or expand \V here.
         // Match only known CSV display strings (or a real choice window).
         if(csv&&typeof out==="string"&&out!==args[0]){
-            try{var after=csvProjectDisplay(out,choice,true);if(after!==null)return after;}catch(_){state.errors++;}
+            try{var after=csvProjectDisplay(out,choice,true);if(after!==null){if(tsv.detected&&typeof Window_Message!=="undefined"&&this instanceof Window_Message){state.shown++;tsv.shown++;}return after;}}catch(_){state.errors++;}
         }
         return out;
     };
@@ -1760,7 +1764,7 @@ function csvWindowChoice(win){
         hasNativeClass(win,/^Window_(?:ChoiceList|Choice|SelectChoice)/));
 }
 function csvWindowEligible(win){
-    return (tableStats.root||isMZ)&&!identityDrawDepth&&(!win||!win._iaOwnSurface&&!win._iaNameSurface)&&
+    return (externalTables()||isMZ)&&!identityDrawDepth&&(!win||!win._iaOwnSurface&&!win._iaNameSurface)&&
         !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name);
 }
 function csvActorExpansion(text){
@@ -1819,6 +1823,8 @@ function csvRequestLive(source,text){
     requestVisible(source,text).then(function(){csvLiveRequests.delete(key);},function(){csvLiveRequests.delete(key);state.errors++;});
 }
 function csvProjectDisplay(text,choice,requestMissing){
+    var localized=tsvProject(text,requestMissing);if(localized!==null)return localized;
+    if(tsvExcluded(text))return null;
     if((!tableStats.root&&!isMZ)||typeof text!=="string"||!text.trim()||text.length>1800||csvExecutableSyntax(text)||actorNames[text])return null;
     if(isMZ&&/(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
     var raw=text;
@@ -1858,6 +1864,12 @@ function csvProjectDisplay(text,choice,requestMissing){
     return null;
 }
 function csvPlainLabel(text){
+    if(tsv.detected&&!surfaceDepth&&!identityDrawDepth&&typeof text==="string"&&
+       !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)){
+        var localized=tsvProject(text,true);
+        if(localized!==null&&!/[\\\x1b\r\n]/.test(localized))return localized;
+        if(tsvExcluded(text))return null;
+    }
     if(!tableStats.root||surfaceDepth||identityDrawDepth||typeof text!=="string"||
        /[\r\n\\\x1b<>]/.test(text)||actorNames[text]||csvExecutableSyntax(text)||
        (typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name))
@@ -2040,6 +2052,7 @@ var lateStats={shown:0,requested:0,unsupported:0};
 function hideLate(win){win._iaLateTicket=null;}
 function nativeRenderParts(text){
     if(typeof text!=="string"||text.length>1800)return null;
+    if(tsv.detected)text=text.replace(/(?:\\|\x1b)[.|]/g,"");
     // Resolve only the CSV dialect's leading, color-delimited actor name.
     // No event variable, script or actual actor record is modified.
     if(tableStats.root){
@@ -2081,7 +2094,7 @@ function snapshotMessage(win,ticket){
        typeof b.clearRect!=="function"||typeof b.blt!=="function"||
        (typeof win.textColor!=="function"&&!(isMZ&&typeof ColorManager!=="undefined"&&typeof ColorManager.textColor==="function"))||
        (isMZ&&ts.rtl))return;
-    var original=nativeRenderParts(ticket.displayed),native=nativeRenderParts(ts.text);
+    var original=nativeRenderParts(ticket.visualOriginal||ticket.displayed),native=nativeRenderParts(ts.text);
     if(!original||!native||plainCompare(original.flat)!==plainCompare(native.flat))return;
     // Native plugin conversion can change a macro or text alignment.
     // Require the same visible color runs, not merely the same words.
@@ -2203,6 +2216,7 @@ function hookMessages(){
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
                 var text=$gameMessage.allText(),source=languageFor(text);
                 this._iaSourceMessage=text;
+                if(tsvRef(text))tsvPrioritize(text);
                 if(source){
                     var old=readyText(source,text);
                     if(old===null&&tableStats.root)old=csvKnownReady(text);
@@ -2229,6 +2243,7 @@ function hookMessages(){
             }
         }catch(_){state.errors++;}
         var out=original.apply(this,arguments);
+        if(tsv.detected)try{tsvLateTicket(this);}catch(_){state.errors++;}
         if(this._iaLateTicket)try{snapshotMessage(this,this._iaLateTicket);}catch(_){hideLate(this);}
         return out;
     };
@@ -2298,7 +2313,7 @@ function hookChoices(){
             }
         }catch(_){state.errors++;}
         var args=Array.prototype.slice.call(arguments);
-        if(changed&&!isMZ){args[0]=translated;state.shown++;}
+        if(changed&&!isMZ&&!tsv.detected){args[0]=translated;state.shown++;}
         return original.apply(this,args);
     };
 }
@@ -2310,6 +2325,190 @@ var scanStats={files:0,totalFiles:0,ready:0,rejected:0,skipped:0,done:false,limi
 var scanStarted=false,prefetchBusy=false,MAX_DISCOVERED=40000;
 var inkStats={detected:false,files:0,candidates:0,excluded:0};
 var tableStats={files:0,candidates:0,root:false,rootDone:false,rootFiles:0,rootTotal:0,rootSkipped:0,authored:0};
+
+// Explicit localization dialect: data/Languages.tsv with a Key and four
+// named language columns. The game's identifiers are never neural input.
+var tsv={detected:false,valid:false,done:false,loading:false,rows:0,conflicts:0,shown:0,
+    keys:new Map(),display:new Map(),chinese:new Map()};
+function externalTables(){return tableStats.root||tsv.detected;}
+function tsvRef(text){return typeof text==="string"&&/(?:\\|\x1b)tl\{[^{}\r\n]{1,300}\}/i.test(text);}
+function tsvNormal(text){
+    return text.replace(/\r\n/g,"\n").replace(/\x1b(?=[A-Za-z{}!.,|^<>$])/g,"\\");
+}
+function tsvEntry(text){
+    if(!tsv.detected||typeof text!=="string")return null;
+    return tsv.display.get(tsvNormal(text))||null;
+}
+function tsvExcluded(text){
+    if(tsvRef(text))return true;
+    if(!tsv.valid||tsvEntry(text))return false;
+    // This table explicitly declares Chinese separately. Never infer
+    // Japanese from bare Han characters or from a localization key.
+    return tsv.keys.has(text)||tsv.chinese.has(text)||
+        (/[\u3400-\u9fff]/.test(text)&&!/[\u3041-\u3096\u30a1-\u30fa\uff66-\uff9d]/.test(text))||
+        /^[A-Z][0-9]{3,}$/i.test(text);
+}
+function detectTsv(){
+    if(!content)return;
+    var dir=path.join(content,"data"),file=path.join(dir,"Languages.tsv");
+    if(!directoryUnder(content,dir)||!regularUnder(dir,file,4*1024*1024))return;
+    tsv.detected=true;
+    MAX_DISCOVERED=Math.max(MAX_DISCOVERED,90000);
+    MAX_CACHE_ENTRIES=Math.max(MAX_CACHE_ENTRIES,150000);
+    CACHE_LIMIT=Math.max(CACHE_LIMIT,128*1024*1024);
+}
+function tsvCandidate(source,text){
+    if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
+       tsvRef(text)||csvExecutableSyntax(text)||/[\u0000\uFFFD]/.test(text)||
+       /^\s*(?:\/\/|[#=$@+]|(?:eval|function|return|var|let|const)\s)/i.test(text)||
+       /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return false;
+    var prose=visibleProse(text).trim();
+    if(!prose||/^[A-Za-z0-9_]+\.(?:png|ogg|js|json|csv|tsv)$/i.test(prose)||
+       /^[A-Z][0-9]{3,}$/i.test(prose))return false;
+    return source==="en"?/[A-Za-z]{2}/.test(prose)&&!isJapanese(prose):isJapanese(prose);
+}
+function tsvRegister(source,text){
+    if(!tsvCandidate(source,text))return null;
+    var entry={source:source,text:text},key=tsvNormal(text);
+    csvSetUnique(tsv.display,key,entry,function(a,b){return a.source===b.source&&a.text===b.text;});
+    return entry;
+}
+function tsvRead(done){
+    if(tsv.done){done();return;}
+    if(tsv.loading)return;
+    tsv.loading=true;
+    var dir=path.join(content,"data"),file=path.join(dir,"Languages.tsv");
+    function finish(ok){
+        tsv.done=true;tsv.loading=false;
+        if(ok)scanStats.files++;else scanStats.skipped++;
+        done();
+    }
+    if(!regularUnder(dir,file,4*1024*1024)){finish(false);return;}
+    fs.readFile(file,"utf8",function(err,raw){
+        if(err||typeof raw!=="string"||Buffer.byteLength(raw,"utf8")>4*1024*1024){finish(false);return;}
+        try{
+            // This TSV dialect is literal tabs and line endings, not
+            // RFC-4180 quoting. Require all five columns for every row.
+            var lines=raw.replace(/^\uFEFF/,"").split(/\r?\n/);
+            var header=(lines.shift()||"").split("\t").map(function(s){return s.trim().toLowerCase();});
+            if(header.join("\t")!=="key\tenglish\tchinese(simplified)\tchinese(traditional)\tjapanese"||
+               lines.length>20000){finish(false);return;}
+            var records=[];
+            for(var i=0;i<lines.length;i++){
+                if(!lines[i].trim())continue;
+                var cells=lines[i].split("\t");
+                if(cells.length!==5){finish(false);return;}
+                if(cells[0]&&cells[0].length<=300&&!/[{}\u0000]/.test(cells[0]))records.push(cells);
+            }
+            // Conflicting keys are not guessed; exact already-resolved
+            // display values can still be translated independently.
+            records.forEach(function(c){
+                if(c[2])tsv.chinese.set(c[2],true);
+                if(c[3])tsv.chinese.set(c[3],true);
+                csvSetUnique(tsv.keys,c[0],c,function(a,b){return a.join("\t")===b.join("\t");});
+            });
+            tsv.keys.forEach(function(v){if(!v)tsv.conflicts++;});
+            var entries=[];
+            records.forEach(function(c){
+                var en=tsvRegister("en",c[1]),ja=tsvRegister("ja",c[4]);
+                if(en)entries.push(en);
+                if(ja)entries.push(ja);
+                // Bilingual reuse is safe only when the native codes and
+                // numbers match exactly; otherwise translate each column.
+                if(en&&ja&&csvControlSignature(en.text)===csvControlSignature(ja.text)&&numbersIn(en.text)===numbersIn(ja.text)){
+                    csvSetUnique(csvAlternate,"ja\u0000"+ja.text,en,function(a,b){return a.source===b.source&&a.text===b.text;});
+                }
+            });
+            tsv.rows=records.length;tsv.valid=true;
+            // Establish the entire provenance index before scheduling.
+            // Queue English first, then Japanese; actual visible requests
+            // are prioritized by the existing foreground scheduler.
+            entries.sort(function(a,b){return a.source===b.source?0:a.source==="en"?-1:1;});
+            var at=0;
+            function slice(){
+                var end=Math.min(at+180,entries.length);
+                for(;at<end;at++){
+                    var e=entries[at];
+                    if(tsvEntry(e.text)&&tsvEntry(e.text).source===e.source){
+                        addPrefetch(e.text,false,e.source);
+                        tableStats.candidates++;
+                    }
+                }
+                if(at<entries.length){setTimeout(slice,0);return;}
+                finish(true);nextPrefetch();
+            }
+            slice();
+        }catch(_){state.errors++;finish(false);}
+    });
+}
+function tsvKeyEntries(key){
+    var row=tsv.keys.get(key);
+    if(!row)return [];
+    return [tsvEntry(row[1]),tsvEntry(row[4])].filter(Boolean);
+}
+function tsvRequest(entry){
+    if(!entry||actorNames[entry.text])return;
+    addPrefetch(entry.text,true,entry.source);
+    if(state.connected&&cacheReadDone)csvRequestLive(entry.source,entry.text);
+    nextPrefetch();
+}
+function tsvPrioritize(text){
+    if(!tsv.detected||!tsvRef(text))return;
+    text.replace(/(?:\\|\x1b)tl\{([^{}\r\n]{1,300})\}/gi,function(_,key){
+        tsvKeyEntries(key).forEach(tsvRequest);return _;
+    });
+}
+function tsvReady(entry,request){
+    if(!entry||actorNames[entry.text])return null;
+    var out=readyText(entry.source,entry.text);
+    if(typeof out==="string"&&validTranslation(entry.source,entry.text,out,true))return out;
+    if(request)tsvRequest(entry);
+    return null;
+}
+function tsvProject(text,request){
+    if(!tsv.detected||typeof text!=="string"||text.length>1800||identityDrawDepth||
+       actorNames[text]||csvExecutableSyntax(text))return null;
+    var normal=tsvNormal(text),out=null;
+    if(tsvRef(normal)){
+        var failed=false,changed=false;
+        // Resolve only explicit lookup references. All populated columns
+        // must agree on the control/number signature before bypassing the
+        // author's lookup; otherwise let the author resolve it first.
+        out=normal.replace(/\\tl\{([^{}\r\n]{1,300})\}/gi,function(token,key){
+            var row=tsv.keys.get(key),entries=tsvKeyEntries(key);
+            if(!row||!entries.length){failed=true;return token;}
+            var chosen=entries[0],sig=csvControlSignature(chosen.text),nums=numbersIn(chosen.text);
+            if(row.slice(1).some(function(v){return v&&(csvControlSignature(v)!==sig||numbersIn(v)!==nums);})){
+                if(request)entries.forEach(tsvRequest);
+                failed=true;return token;
+            }
+            var translated=null;
+            for(var i=0;i<entries.length&&translated===null;i++)translated=tsvReady(entries[i],request);
+            if(translated===null){failed=true;return token;}
+            changed=true;return translated;
+        });
+        if(failed||!changed)return null;
+    }else{
+        out=tsvReady(tsvEntry(normal),request);
+        if(out===null)return null;
+    }
+    // Maintain the phase of escape conversion used by native windows.
+    if(text.indexOf("\x1b")>=0&&text.indexOf("\\")<0)out=out.replace(/\\(?=[A-Za-z{}!.,|^<>$])/g,"\x1b");
+    return out===text?null:out;
+}
+function tsvLateTicket(win){
+    if(!tsv.detected||win._iaLateTicket||!win._textState||
+       typeof $gameMessage==="undefined"||!$gameMessage||!$gameMessage.hasText())return;
+    var text=win._textState.text,entry=tsvEntry(text);
+    if(!entry||!nativeRenderParts(text))return;
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    if(!scene)return;
+    win._iaLateTicket={message:$gameMessage,displayed:$gameMessage.allText(),
+        visualOriginal:text,original:entry.text,source:entry.source,scene:scene,
+        result:null,drawn:false,pages:1,geometry:null};
+    lateStats.requested++;tsvRequest(entry);
+}
+
 var csvKnown=new Map(),csvAuthored=new Map(),csvAlternate=new Map(),csvResolving=false,csvPreferred="en";
 var csvRenderAliases=new Map(),csvNameTemplates=new Map(),csvNameCount=0,csvLiveRequests=new Map();
 var csvUiStats={choices:0,drawn:0,overflow:0,rows:0};
@@ -2975,13 +3174,15 @@ function scanExtraSources(dataDir,done){
 
 function addPrefetch(text,priority,trustedLang){
     if(typeof text!=="string"||!text)return;
+    if(tsvRef(text)){if(priority)tsvPrioritize(text);return;}
+    if(tsvExcluded(text))return;
     learnReadings(text);
     var source=languageFor(text)||(trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
     if(!source)return;
     var key=source+"\u0000"+text,item=discovered.get(key);
     if(collectInitial&&initialKeys.size<48)initialKeys.set(key,true);
     if(item){
-        if(tableStats.root&&item.status!=="ready"&&cacheReadDone&&readyText(source,text)!==null){markPrefetchReady(item);return;}
+        if(externalTables()&&item.status!=="ready"&&cacheReadDone&&readyText(source,text)!==null){markPrefetchReady(item);return;}
         if(priority&&item.status==="queued"&&!item.priority){
             item.priority=true;priorityQueue.push(item);
         }
@@ -2990,7 +3191,7 @@ function addPrefetch(text,priority,trustedLang){
     if(discovered.size>=MAX_DISCOVERED){scanStats.limited=true;return;}
     item={source:source,text:text,status:"queued",priority:!!priority};
     discovered.set(key,item);
-    if((!tableStats.root||cacheReadDone)&&readyText(source,text)!==null){markPrefetchReady(item);return;}
+    if((!externalTables()||cacheReadDone)&&readyText(source,text)!==null){markPrefetchReady(item);return;}
     (priority?priorityQueue:prefetchQueue).push(item);
 }
 function ambientPayload(text){
@@ -3088,7 +3289,9 @@ function scanDatabase(name,data){
     });
 }
 function startFullScan(){
-    if(scanStarted||!content||(tableStats.root&&!cacheReadDone))return;scanStarted=true;
+    if(scanStarted||!content||(externalTables()&&!cacheReadDone))return;
+    if(tsv.detected&&!tsv.done){tsvRead(startFullScan);return;}
+    scanStarted=true;
     var dataDir=path.join(content,"data");
     if(typeof fs.readdir!=="function"){scanStats.done=true;return;}
     try{
@@ -3108,7 +3311,7 @@ function startFullScan(){
             var i=order.indexOf(a),j=order.indexOf(b);
             return (i<0?99:i)-(j<0?99:j)||a.localeCompare(b);
         });
-        scanStats.totalFiles=files.length;
+        scanStats.totalFiles=files.length+(tsv.detected?1:0);
         inkStats.detected=directoryUnder(dataDir,path.join(dataDir,"ink"))&&regularUnder(path.join(dataDir,"ink"),path.join(dataDir,"ink","main.json"),20*1024*1024);
         if(files.length>5000){files=files.slice(0,5000);scanStats.limited=true;}
         function step(){
@@ -3168,7 +3371,7 @@ function deferPrefetch(item,retryAt){
 // A single scheduler survives all native scene transitions.
 function nextPrefetch(){
     if(prefetchBusy||!state.connected||!cacheReadDone)return;
-    if(tableStats.root&&diskReady&&diskQueue.length>=3000)return;
+    if(externalTables()&&diskReady&&diskQueue.length>=3000)return;
     if(!priorityQueue.length&&!prefetchQueue.length)return;
     prefetchBusy=true;
     setTimeout(function(){
@@ -3197,7 +3400,7 @@ function nextPrefetch(){
                 return Promise.resolve().then(function(){
                     var existing=readyText(item.source,item.text);
                     if(existing!==null)return existing;
-                    return translatePreservingControls(item.source,item.text,false,tableStats.root?false:item.priority);
+                    return translatePreservingControls(item.source,item.text,false,externalTables()?false:item.priority);
                 }).then(function(out){
                     if(out!==null)markPrefetchReady(item);
                     else if(item.status!=="ready"){
@@ -3215,8 +3418,8 @@ function nextPrefetch(){
 // First-pass preparation is a bounded, optional title-screen wait, never
 // a wait inside Game_Interpreter or Window_Message. The title keeps running.
 function firstMapProgress(){
-    if(tableStats.root){
-        var complete=tableStats.rootDone&&scanStats.done&&cacheReadDone&&
+    if(externalTables()){
+        var complete=(!tableStats.root||tableStats.rootDone)&&(!tsv.detected||tsv.done)&&scanStats.done&&cacheReadDone&&
             scanStats.ready+scanStats.rejected>=discovered.size&&!prefetchBusy;
         return {ready:scanStats.ready,finished:scanStats.ready+scanStats.rejected,total:discovered.size,complete:complete};
     }
@@ -3235,7 +3438,7 @@ function hookTitleStart(){
     var proto=Scene_Title.prototype,start=proto.start;
     proto.start=function(){
         var out=start.apply(this,arguments);
-        if(tableStats.root){queueFlush();nextPrefetch();}
+        if(externalTables()){queueFlush();nextPrefetch();}
         if(!runtimeActivated){
             runtimeActivated=true;
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
@@ -3248,7 +3451,7 @@ function hookTitleStart(){
         var gate=scene._iaStartGate;
         if(!gate)return;
         scene._iaStartGate=null;
-        if(tableStats.root){queueFlush();nextPrefetch();}
+        if(externalTables()){queueFlush();nextPrefetch();}
         if(scene._iaTitleProgress&&typeof scene._iaTitleProgress.hide==="function")scene._iaTitleProgress.hide();
         // invoke the original title handler exactly once, with its own arguments
         return launch.apply(scene,gate.args);
@@ -3378,6 +3581,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
+            tsv.detected?"TSV: "+tsv.rows+" · Claves ambiguas: "+tsv.conflicts+" · Mostr.: "+tsv.shown:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
             "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · C:"+String(ambientStats.factory||0)
         ];
@@ -3406,7 +3610,7 @@ function setupHud(){
             runtimeActivated=true;
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
         }
-        try{collectMapText();if(tableStats.root)nextPrefetch();}catch(_){state.errors++;}
+        try{collectMapText();if(externalTables())nextPrefetch();}catch(_){state.errors++;}
         if(Input.isTriggered("ia-traductora")&&this._iaPanel){
             this._iaPanel.visible=!this._iaPanel.visible;
             this._iaMini.visible=!this._iaPanel.visible;
@@ -3418,7 +3622,7 @@ function setupHud(){
 try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";setupHud();
-    state.phase="RUTA";initPaths();detectRootCsv();
+    state.phase="RUTA";initPaths();detectRootCsv();detectTsv();
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
     loadDisplayMacros();startPersistentCache();
