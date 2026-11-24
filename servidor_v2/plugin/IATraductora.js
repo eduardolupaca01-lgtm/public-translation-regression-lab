@@ -2395,7 +2395,7 @@ function firstViewWait(win){
     // own foreground requests and can render the late result when it arrives.
     // Keep the bounded first-view gate only for authored TSV localization,
     // where the source table must resolve a native key before display.
-    if(!tsv.detected)return false;
+    if(!tsv.detected&&!scriptProfile)return false;
     if(inputFormActive()||win.pause||win._textState||
        (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return false;
     var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
