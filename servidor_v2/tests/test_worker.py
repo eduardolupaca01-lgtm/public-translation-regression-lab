@@ -439,7 +439,14 @@ class HalvaNativeWorkerTests(unittest.TestCase):
             make_runtime(runtime)
             service=ia.Service(root,engine,neural=FakeNeural(),halva_content=runtime)
             try:
-                self.assertEqual(ia.publish(service,24123),engine.parent/"bridge.json")
+                actual=ia.publish(service,24123)
+                expected=engine.parent/"bridge.json"
+                # Windows TEMP can use an 8.3 alias while Service resolves
+                # the long spelling. Prove physical identity, not spelling.
+                self.assertEqual(actual.resolve(strict=True),expected.resolve(strict=True))
+                self.assertTrue(actual.samefile(expected))
+                self.assertEqual(actual.resolve(strict=True).parent,engine.parent.resolve(strict=True))
+                self.assertFalse(actual.resolve(strict=True).is_relative_to(runtime.resolve(strict=True)))
                 self.assertEqual(service.translate("en","Good morning."),"Buen día")
             finally:service.close()
             import shutil

@@ -63,7 +63,10 @@ func TestHalvaNativeInstallRoundTripAndRecover(t *testing.T){
    a,_:=json.Marshal(old[i]);b,_:=json.Marshal(newList[i]);if !bytes.Equal(a,b){t.Fatal("original plugin changed")}
   }
   var params map[string]string
-  if json.Unmarshal(newList[len(old)]["parameters"],&params)!=nil||params["iaHalvaRoot"]!=root{t.Fatal("persistent root absent")}
+  canonical,e:=filepath.EvalSymlinks(root);if e!=nil{t.Fatal(e)}
+  if json.Unmarshal(newList[len(old)]["parameters"],&params)!=nil||params["iaHalvaRoot"]!=canonical{t.Fatal("canonical persistent root absent")}
+  aInfo,e:=os.Stat(root);if e!=nil{t.Fatal(e)}
+  bInfo,e:=os.Stat(params["iaHalvaRoot"]);if e!=nil||!os.SameFile(aInfo,bInfo){t.Fatal("persistent root is a different directory")}
   before,e:=halvaDecode(original);if e!=nil{t.Fatal(e)}
   for key,f:=range before.entries{
    if key=="js/plugins.js"{continue}
@@ -101,4 +104,14 @@ func TestHalvaRejectsInvalidAndUnsafeArchives(t *testing.T){
  if e=os.WriteFile(filepath.Join(halvaPackDir(root),"DatabasePackage.halva"),[]byte("unsupported"),0600);e!=nil{t.Fatal(e)}
  if e=Install(filepath.Join(root,"Game.exe"),p);e==nil{t.Fatal("unsupported DB accepted")}
  if _,e=os.Lstat(filepath.Join(root,brandFolder));!os.IsNotExist(e){t.Fatal("wrote to unsupported game")}
+}
+
+func TestHalvaRootRejectsLinkedAncestor(t *testing.T){
+ root,_,_:=halvaFixture(t,"MZ")
+ link:=filepath.Join(t.TempDir(),"alias")
+ if e:=os.Symlink(filepath.Dir(root),link);e!=nil{t.Skip("directory symlink not available on this runner")}
+ aliased:=filepath.Join(link,filepath.Base(root),"Game.exe")
+ if _,ok:=halvaRootFromDetection(aliased,cookToolPreflight(filepath.Dir(aliased)));ok{
+  t.Fatal("linked ancestor must remain rejected")
+ }
 }

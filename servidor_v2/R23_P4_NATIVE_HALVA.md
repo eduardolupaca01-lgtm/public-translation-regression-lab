@@ -9,3 +9,6 @@ La ruta persistente se declara como parámetro del plugin y se verifica con reci
 Alcance: Halva v1 legible Brotli/ZIP con JS/JSON estándar. No Halva2 cifrado, binarios sin arranque JavaScript estándar ni variantes con controles que rechacen modificaciones. No OCR, sin panel externo. Las pruebas sintéticas cubren formatos, rutas, restauración, preservación, presentación nativa MZ simulada y memoria fuera del directorio temporal. No equivalen a ejecutar el lanzador comercial real. Se requiere validar F10 y sustitución de diálogo en la copia real antes de anunciar compatibilidad.
 
 Referencias: https://github.com/FirehawkV21/Halva.Package/tree/807dff87bdb00e9dce134cd30a5177f74567ede1 ; https://dragonhousehelpcenter.azurewebsites.net/manuals/rmcooktooldx/config ; https://github.com/andybalholm/brotli/tree/v1.1.1 (MIT).
+
+## Corrección de compilación Windows
+La prueba de persistencia comparaba rutas 8.3 de TEMP con rutas largas resueltas. Ahora verifica la identidad física del archivo puente y su ubicación fuera del runtime. El instalador acepta nombres cortos ordinarios mediante resolución canónica, pero conserva el rechazo de enlaces de directorio y ancestros. Se mantienen todas las pruebas, incluidos los modelos reales.

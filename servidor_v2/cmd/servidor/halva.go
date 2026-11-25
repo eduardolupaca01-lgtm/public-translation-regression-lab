@@ -92,11 +92,20 @@ func halvaRootFromDetection(gameEXE string,e error)(string,bool){
  if e==nil||!strings.HasPrefix(e.Error(),cookToolPackedCode+":"){return "",false}
  abs,err:=filepath.Abs(gameEXE);if err!=nil{return "",false}
  root:=filepath.Dir(abs)
- // Bind the install to a real directory and never follow a relocated root
- // through an unexpected alias.
+ // Reject directory symlinks/junctions in every ancestor before resolving.
+ // Windows may expand an ordinary 8.3 name (RUNNER~1) to its long name;
+ // compare physical directory identity rather than the spelling.
+ for p:=root;;p=filepath.Dir(p){
+  info,e:=os.Lstat(p)
+  if e!=nil||!info.IsDir()||info.Mode()&os.ModeSymlink!=0{return "",false}
+  if filepath.Dir(p)==p{break}
+ }
  real,err:=filepath.EvalSymlinks(root)
- if err!=nil||!strings.EqualFold(filepath.Clean(real),filepath.Clean(root)){return "",false}
- return root,true
+ if err!=nil{return "",false}
+ original,e:=os.Lstat(root);if e!=nil{return "",false}
+ canonical,e:=os.Lstat(real)
+ if e!=nil||!canonical.IsDir()||canonical.Mode()&os.ModeSymlink!=0||!os.SameFile(original,canonical){return "",false}
+ return real,true
 }
 
 // Only the original two small, plain archives are inspected. Unsupported
