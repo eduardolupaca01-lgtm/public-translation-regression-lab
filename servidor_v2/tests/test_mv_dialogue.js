@@ -1952,90 +1952,126 @@ async function testInventoryHasNoFortyThousandTextCeiling(){
         "a large number of valid texts must not be reported as a truncated inventory");
 }
 async function testR6FirstViewNativeGate(mz){
-    const text="Where are you going?",choice="Please open the door.",cold="Please close the window.";
-    const f=fixture(110,{mz,nativePaint:true,responses:{[text]:"¿Adónde vas?",[choice]:"Abre la puerta, por favor.",[cold]:"Cierra la ventana, por favor."},configure(c){
-        const p=c.Window_Message.prototype;
-        p.updateWait=function(){return false;};
-        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
-        p.update=function(){
-            this.updates++;
-            if(this.pause)return;
-            if(this.updateWait())return;
-            if(this.canStart())this.startMessage();
-            else if(!this._textState&&c.$gameMessage._choices.length&&!this._choice)
-                this._choice=new c.Window_ChoiceList(c.$gameMessage._choices);
+    const text="Where are you going?";
+    const choice="Please open the door.";
+    const cold="Please close the window.";
+    const f=fixture(110,{mz:mz,nativePaint:true,responses:{
+        "Where are you going?":"¿Adónde vas?",
+        "Please open the door.":"Por favor, abre la puerta.",
+        "Please close the window.":"Por favor, cierra la ventana."
+    },configure:function(c){
+        c.Window_Message.prototype.canStart=function(){return c.$gameMessage.hasText();};
+        c.Window_Message.prototype.startMessage=function(){
+            this.originalStarts++;
+            this._textState={text:c.$gameMessage.allText(),index:0};
+            this.pause=false;
         };
-        function Choice(items){
-            this._list=items.map((name,index)=>({name,symbol:"choice",ext:index,enabled:true}));
-            this.painted=[];this._list.forEach((_,i)=>this.drawItem(i));
+        c.Window_Message.prototype.startInput=function(){
+            if(!this._choice)this._choice=new c.Window_ChoiceList(this);
+            this._choice.start();
+        };
+        c.Window_Message.prototype.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.pause){
+                if(c.$gameMessage._choices.length&&!this._choice)this.startInput();
+                return;
+            }
+            if(this.canStart())this.startMessage();
+            else if(c.$gameMessage._choices.length&&!this._choice)this.startInput();
+        };
+        function Choice(messageWindow){
+            this._messageWindow=messageWindow;
+            this._list=[];
+            this.painted=[];
+            this.started=false;
         }
-        Choice.prototype.drawItem=function(i){this.painted.push(this._list[i].name);};
-        Choice.prototype.update=function(){};
+        Choice.prototype.start=function(){
+            this.started=true;
+            this._list=c.$gameMessage._choices.map(function(name,index){
+                return {name:name,ext:index,enabled:true};
+            });
+            this._list.forEach((_,index)=>this.drawItem(index));
+        };
+        Choice.prototype.drawItem=function(index){
+            const item=this._list[index];
+            this.painted.push(item.name);
+        };
         c.Window_ChoiceList=Choice;
-        c.Game_Message.prototype.clear=function(){this._texts=[];this._choices=[];};
     }});
-    await wait(25);
-    const m=f.$gameMessage,w=new f.context.Window_Message();
-    f.context.SceneManager._scene=new f.context.Scene_Map();
+    const c=f.context,m=f.$gameMessage;
     m.add(text);
-    if(mz)m.setChoices([choice]);
+    const w=new c.Window_Message();
     w.update();
-    if(mz){
-        assert.equal(w.originalStarts,0,"MZ keeps its bounded first-view translation gate");
-        assert.equal(w.updates,1,"MZ update loop keeps running while translation is pending");
-        assert.equal(m.allText(),text,"waiting cannot mutate native message");
-        const limit=Date.now()+4000;
-        while(!w.originalStarts&&Date.now()<limit){await wait(50);w.update();}
-        assert.equal(w.originalStarts,1,"MZ native start occurs exactly once");
-        assert.equal(w._textState.text,"¿Adónde vas?");
-    }else{
-        assert.equal(w.originalStarts,1,"English MV dialogue must paint immediately");
-        assert.equal(w.updates,1,"MV update loop never waits for neural inference");
-        assert.equal(w._textState.text,text,"MV first paint keeps the original source text");
-        assert.equal(m.allText(),text,"late translation never mutates native message data");
-        assert.ok(w._iaLateTicket&&w._iaLateTicket.geometry,
-            "native bitmap geometry is captured for the late-render ticket");
-        // Simulate the native message reaching its pause point. Late rendering
-        // is allowed only after the original page is complete and no choice is active.
-        w.finishPage();
-        function renderedMessage(){
-            return w.contents.ops.filter(op=>op.y===0&&op.x>=160)
-                .sort((a,b)=>a.x-b.x).map(op=>op.text).join(" ");
-        }
-        const lateLimit=Date.now()+6000;
-        while(renderedMessage().indexOf("¿Adónde")<0&&Date.now()<lateLimit){
-            await wait(25);w.update();
-        }
-        assert.ok(renderedMessage().indexOf("¿Adónde")>=0&&renderedMessage().indexOf("vas?")>=0,
-            "late result redraws the original native message bitmap");
-        assert.equal(m.allText(),text,"late redraw leaves story/event data untouched");
-        m.setChoices([choice]);
-    }
-    const actual=new f.context.Window_ChoiceList(m._choices);
-    await wait(180);
-    actual.drawItem(0);
-    assert.equal(actual.painted[actual.painted.length-1],"Abre la puerta, por favor.");
-    assert.equal(actual._list[0].name,choice,"choice source label remains unchanged");
-    assert.equal(actual._list[0].ext,0,"choice branch index remains unchanged");
+    assert.equal(w.originalStarts,0,(mz?"MZ":"MV")+" must hold the first message before its first paint");
+    await wait(170);
+    w.update();
+    assert.equal(w.originalStarts,1,(mz?"MZ":"MV")+" must start the first message after translation");
+    assert.ok(w._textState.text.includes("¿Adónde vas?"),"first-view dialogue is translated in the native message window");
+    assert.equal(m.allText(),text,"first-view projection does not mutate the game's source message");
+    w.finishPage();
+    m.setChoices([choice],0,0);
+    w.startInput();
+    assert.ok(w._choice&&!w._choice.started,"choice window start is deferred while its first-view translations are pending");
+    await wait(170);
+    assert.ok(w._choice.started,"native choice window starts after its labels are ready");
+    assert.deepEqual(w._choice._list.map(x=>x.name),["Por favor, abre la puerta."],"first choice paint uses translated labels");
+    assert.deepEqual(w._choice._list.map(x=>x.ext),[0],"choice branch indices remain unchanged");
+    assert.deepEqual(m._choices,[choice],"original Game_Message choice labels are restored after native start");
 
-    m.clear();m.setChoices([cold]);
-    const only=new f.context.Window_Message();only.update();
-    if(mz){
-        assert.equal(only._choice,undefined,"MZ waits for its bounded standalone-choice translation");
-        const choiceLimit=Date.now()+4000;
-        while(!only._choice&&Date.now()<choiceLimit){await wait(50);only.update();}
-        assert.ok(only._choice);
-        assert.equal(only._choice.painted[0],"Cierra la ventana, por favor.");
-    }else{
-        assert.ok(only._choice,"English MV standalone choices must remain immediately selectable");
-        const choiceLimit=Date.now()+4000;
-        while(Date.now()<choiceLimit){
-            await wait(25);only._choice.drawItem(0);
-            if(only._choice.painted[only._choice.painted.length-1]==="Cierra la ventana, por favor.")break;
-        }
-        assert.equal(only._choice.painted[only._choice.painted.length-1],"Cierra la ventana, por favor.");
-    }
+    m.clear();
+    m.setChoices([cold],0,0);
+    const only=new c.Window_Message();
+    only.update();
+    assert.ok(!only._choice||!only._choice.started,"standalone MV/MZ choices do not paint before translation");
+    await wait(170);
+    only.update();
+    assert.ok(only._choice&&only._choice.started,"standalone choice window opens after its first-view translation");
+    assert.deepEqual(only._choice._list.map(x=>x.name),["Por favor, cierra la ventana."]);
+    assert.deepEqual(only._choice._list.map(x=>x.ext),[0]);
+    assert.deepEqual(m._choices,[cold],"standalone choice source remains unchanged");
 }
+
+async function testR9BuiltinNameInputProtected(){
+    const f=fixture(5,{nativePaint:true,responses:{
+        "What should I call you?":"¿Cómo debería llamarte?"
+    },configure:function(c){
+        c.Scene_Name.prototype.start=function(){this.started=true;};
+        c.Scene_Name.prototype.terminate=function(){this.terminated=true;};
+        function NameEdit(){c.Window_Base.call(this);}
+        NameEdit.prototype=Object.create(c.Window_Base.prototype);
+        NameEdit.prototype.constructor=NameEdit;
+        function NameInput(){c.Window_Base.call(this);}
+        NameInput.prototype=Object.create(c.Window_Base.prototype);
+        NameInput.prototype.constructor=NameInput;
+        c.Window_NameEdit=NameEdit;
+        c.Window_NameInput=NameInput;
+    }});
+    const c=f.context,m=f.$gameMessage;
+    const scene=new c.Scene_Name();
+    scene._editWindow=new c.Window_NameEdit();
+    scene._inputWindow=new c.Window_NameInput();
+    c.SceneManager._scene=scene;
+    scene.start();
+    scene._editWindow.drawText("Player",0,0,120);
+    scene._inputWindow.drawText("A",0,0,40);
+    scene._inputWindow.drawText("OK",0,0,40);
+    await wait(60);
+    assert.deepEqual(scene._editWindow.drawn,["Player"],"native name-edit contents remain untouched");
+    assert.deepEqual(scene._inputWindow.drawn,["A","OK"],"native name-input character grid and commands remain untouched");
+    assert.equal(f.posts.length,0,"name input surfaces are never submitted for translation");
+    scene.terminate();
+    c.SceneManager._scene=new c.Scene_Map();
+    m.add("What should I call you?");
+    const message=new c.Window_Message();
+    message.update();
+    assert.equal(message.originalStarts,0,"the prompt before Scene_Name still waits for translation");
+    await wait(80);
+    message.update();
+    assert.equal(message.originalStarts,1,"the normal dialogue path resumes after leaving Scene_Name");
+    assert.ok(message._textState.text.includes("¿Cómo debería llamarte?"),"the name prompt is translated without touching the input screen");
+}
+
 async function testR6OfflineDeadlineAndForm(){
     const f=fixture(0,{mz:true,disconnected:true,configure(c){
         const p=c.Window_Message.prototype;p.updateWait=function(){return false;};
@@ -2343,6 +2379,7 @@ async function testR8GeneralDisplaySurfaces(){
     await testR6FirstViewNativeGate(false);
     await testR6FirstViewNativeGate(true);
     await testR6OfflineDeadlineAndForm();
+    await testR9BuiltinNameInputProtected();
     await testR5DynamicNamesAndAuthoredRepetition(false);
     await testR5DynamicNamesAndAuthoredRepetition(true);
     await testR5DynamicNamesAndAuthoredRepetition(false,true);
