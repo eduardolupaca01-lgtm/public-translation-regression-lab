@@ -369,7 +369,15 @@ class CompressedMZWorkerTests(unittest.TestCase):
                 thread.start()
                 try:
                     descriptor=json.loads(bridge.read_text(encoding="utf8"))
-                    self.assertEqual(bridge,content/"data"/"IATraductora"/"bridge.json")
+                    # Windows tempfile can return an 8.3 alias (RUNNER~1)
+                    # while game_root resolves the long name (runneradmin).
+                    # Verify actual file identity, not the spelling of a path.
+                    expected_bridge=content/"data"/"IATraductora"/"bridge.json"
+                    self.assertTrue(expected_bridge.is_file())
+                    self.assertFalse(expected_bridge.is_symlink())
+                    self.assertTrue(bridge.samefile(expected_bridge),
+                                    "The authenticated bridge must be in the actual game data directory")
+                    self.assertEqual(bridge.resolve(strict=True),expected_bridge.resolve(strict=True))
                     base="http://127.0.0.1:"+str(descriptor["port"])
                     headers={"X-IA-Token":descriptor["token"],"Content-Type":"application/json"}
                     with urlopen(Request(base+"/status",headers=headers),timeout=3) as response:
