@@ -179,6 +179,7 @@ function fixture(translationDelay=0,options={}){
     }
     Window_Message.prototype.update=function(){this.updates++};
     Window_Message.prototype.terminateMessage=function(){this.terminated=(this.terminated||0)+1;};
+    Window_Message.prototype.updateWait=function(){return false;};
     if(options.nativeWait){
         Window_Message.prototype.startWait=function(n){this._waitCount=n;};
         Window_Message.prototype.updateWait=function(){
@@ -196,6 +197,9 @@ function fixture(translationDelay=0,options={}){
     Game_Message.prototype.add=function(text){this._texts.push(text);};
     Game_Message.prototype.setChoices=function(choices){
         this._choices=choices.slice();
+    };
+    Game_Message.prototype.clear=function(){
+        this._texts=[];this._choices=[];this._choiceCallback=null;
     };
     const $gameMessage=new Game_Message();
     function LegacyPromise(executor){
@@ -1843,6 +1847,86 @@ async function testR5DynamicNamesAndAuthoredRepetition(mz,firstView=false){
 }
 
 
+
+async function testYEPFormattingCodesDoNotHideWords(){
+    const raw="Please remember \\fithat\\fi and \\fball\\fb choices.";
+    const f=fixture(45,{responses:{
+        "Please remember":"Por favor, recuerda",
+        "that":"eso",
+        "and":"y",
+        "all":"todo",
+        "choices.":"opciones."
+    },configure:function(c){
+        const p=c.Window_Message.prototype;
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        p.startMessage=function(){
+            this.originalStarts++;
+            this._textState={text:c.$gameMessage.allText(),index:0};
+            this.pause=false;
+        };
+        p.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.canStart())this.startMessage();
+        };
+    }});
+    await wait(25);
+    const c=f.context,m=f.$gameMessage;
+    c.SceneManager._scene=new c.Scene_Map();
+    m.add(raw);
+    const w=new c.Window_Message();
+    await wait(190);
+    w.update();
+    assert.equal(w.originalStarts,1,"the formatted first-view message must start after its translation is ready");
+    assert.ok(f.posts.some(function(p){return p.text==="that";}),"the word after \\fi must reach the translator");
+    assert.ok(f.posts.some(function(p){return p.text==="all";}),"the word after \\fb must reach the translator");
+    assert.ok(w._textState.text.includes("\\fi")&&w._textState.text.includes("\\fb"),
+        "YEP italic and bold toggles must remain in the displayed message");
+    assert.ok(w._textState.text.includes("eso")&&w._textState.text.includes("todo"),
+        "the prose adjacent to YEP toggles must be translated");
+}
+async function testSceneRevisitUsesCompletedTranslation(){
+    const raw="Please return to the village.";
+    const translated="Por favor, vuelve al pueblo.";
+    const f=fixture(140,{responses:{[raw]:translated},configure:function(c){
+        const p=c.Window_Message.prototype;
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        p.startMessage=function(){
+            this.originalStarts++;
+            this._textState={text:c.$gameMessage.allText(),index:0};
+            this.pause=false;
+        };
+        p.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.canStart())this.startMessage();
+        };
+    }});
+    await wait(25);
+    const c=f.context,m=f.$gameMessage;
+    c.SceneManager._scene=new c.Scene_Map();
+    m.add(raw);
+    const first=new c.Window_Message();
+    first.update();
+    assert.equal(first.originalStarts,0,"the first visit waits for the visible translation");
+    assert.ok(first._iaFirstGate,"the first visit owns a bounded presentation gate");
+    first._iaFirstGate.started-=9000;
+    first.update();
+    assert.equal(first.originalStarts,1,"the bounded gate eventually releases the original-language message");
+    assert.equal(first._textState.text,raw,"the first visit falls back safely if inference is not ready");
+    c.SceneManager._scene=new c.Scene_Title();
+    m.clear();
+    await wait(220);
+    assert.ok(f.posts.some(function(p){return p.text===raw;}),"the first visit's translation request completes in the background");
+    c.SceneManager._scene=new c.Scene_Map();
+    m.add(raw);
+    const revisit=new c.Window_Message();
+    revisit.update();
+    assert.equal(revisit.originalStarts,1,"the next visit does not wait again for a completed translation");
+    assert.equal(revisit._textState.text,translated,"the same scene text is Spanish on its next presentation");
+    assert.equal(m.allText(),translated,"the cached translation is used without rewriting event data");
+}
+
 async function testLargeGamePausesBackgroundPrefetch(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -1869,8 +1953,13 @@ async function testLargeGamePausesBackgroundPrefetch(){
         "bulk inventory must pause instead of competing with a large active game");
     f.$gameMessage._texts=["Please open the gate now."];
     const firstView=new f.context.Window_Message();
+    assert.equal(firstView.updateWait(),true,
+        "the first visible dialogue must wait briefly even while bulk inventory is paused");
+    await wait(80);
+    assert.ok(f.posts.some(p=>p.text==="Please open the gate now."),
+        "the visible dialogue must bypass the paused background inventory queue");
     assert.equal(firstView.updateWait(),false,
-        "English MV dialogue must fail open instead of waiting for neural inference");
+        "the first visible dialogue must resume as soon as its translation is cached");
     f.$gameMessage._texts=[];
     f.$gameMessage.add("Please translate this visible sentence.");
     await wait(80);
@@ -2381,6 +2470,8 @@ async function testR8GeneralDisplaySurfaces(){
     await testMZNativeContractsAndControls();
     await testNameIdentityMigrationAndNameSetupFirstPaint();
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
+    await testYEPFormattingCodesDoNotHideWords();
+    await testSceneRevisitUsesCompletedTranslation();
     await testLargeGamePausesBackgroundPrefetch();
     await testLargeCommonEventsJsonIsParsedIncrementally();
     await testInventoryHasNoFortyThousandTextCeiling();
