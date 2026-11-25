@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R12-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R13-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -1981,6 +1981,7 @@ function nativeDisplayProjection(text,context,bitmap){
     if(inputFormActive()||identityDrawDepth||typeof text!=="string"||!text.trim()||
        text.length>1800||actorNames[text]||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
+    var phoneLabel=phoneDrawLabel(text);if(phoneLabel!==null)return phoneLabel;
     var external=iavraDisplayValue(text,true);if(external!==null)return external;
     var localized=tsvProject(text,true);if(localized!==null)return localized;
     if(tsvExcluded(text))return null;
@@ -3307,18 +3308,181 @@ function picturePlan(raw){
     var source=authoredSource(body,false);
     return source?{source:source,body:body,prefix:prefix,suffix:""}:null;
 }
+// R13: use only documented phone presentation commands and explicit fields.
+function phoneEnabled(){return pluginEnabled(/^PKD_PhoneMenu(?:_?Pro)?$/i);}
+function explicitUiPlan(raw){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||
+       actorNames[raw.trim()]||externalLocalizationReference(raw)||tsvExcluded(raw)||
+       csvExecutableSyntax(raw)||/[\u0000\uFFFD]|(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(raw)||
+       /(?:^|[^\\A-Za-z])(?:[vngpi]\[[^\]]*\])/i.test(raw)||
+       /^\s*(?:[$@#=]|\/\/)|\b(?:build|version)\s+\d/i.test(raw))return null;
+    var prose=visibleProse(raw).trim();
+    if(!prose||!/[A-Za-z\u3041-\u30fa\u3400-\u9fff]{2}/.test(prose))return null;
+    var labels={"hehe":"Jeje","haha":"Jaja","messages":"Mensajes","navigate":"Navegar",
+        "close":"Cerrar","confirm":"Confirmar","main menu":"Menú principal",
+        "select scene":"Seleccionar escena","turn page":"Pasar página"};
+    if(Object.prototype.hasOwnProperty.call(labels,prose.toLowerCase())&&prose===raw.trim())
+        return {body:raw,source:"en",prefix:"",suffix:"",fixed:raw.replace(prose,labels[prose.toLowerCase()])};
+    var source=authoredSource(raw,false)||displaySource(raw,"surface");
+    var en=/^en(?:[_-]|$)/i.test(scriptLocale)||
+        (typeof $dataSystem!=="undefined"&&$dataSystem&&/^en(?:[_-]|$)/i.test($dataSystem.locale||""));
+    // Explicit English display fields can contain short noun phrases.
+    // Never expand this fallback to arbitrary scripts or unrecognized names.
+    if(!source&&en&&/[A-Za-z]{2}\s+[A-Za-z]{2}/.test(prose)&&
+       !/[áéíóúüñ¿¡]/i.test(prose)&&!/^[A-Z0-9_ -]+$/.test(prose)&&!/[{}=<>$@]/.test(prose))
+        source="en";
+    return source?{source:source,body:raw,prefix:"",suffix:""}:null;
+}
+var phoneListMemo=typeof WeakMap==="function"?new WeakMap():null;
+function phoneList(list){
+    if(!phoneEnabled()||!Array.isArray(list)||list.length>30000)return false;
+    if(phoneListMemo&&phoneListMemo.has(list))return phoneListMemo.get(list);
+    var yes=list.some(function(c){
+        return c&&c.code===355&&c.parameters&&typeof c.parameters[0]==="string"&&
+            /^\s*this\.(?:phoneSetWaitFor|setAnswerForChoice|phoneSwitchToDefaultMessages|phoneSwitchBackToMessages)\s*\(/.test(c.parameters[0]);
+    });
+    if(phoneListMemo)phoneListMemo.set(list,yes);
+    return yes;
+}
+function phoneAnswer(raw){
+    if(typeof raw!=="string"||raw.length>4000)return null;
+    var m=/^(\s*this\.setAnswerForChoice\(\s*[1-9]\d{0,2}\s*,\s*)("(?:[^"\\\r\n]|\\.)*")(\s*\)\s*;?\s*)$/.exec(raw);
+    if(!m)return null;
+    var value;try{value=JSON.parse(m[2]);}catch(_){return null;}
+    var plan=explicitUiPlan(value);if(!plan)return null;
+    return {plan:plan,head:m[1],tail:m[3]};
+}
+function rememberUi(plan,priority){
+    if(plan&&typeof plan.fixed!=="string")authoredRemember(plan.source,plan.body,priority);
+}
+function readUi(plan,requestMissing){
+    if(!plan)return null;
+    if(typeof plan.fixed==="string")return plan.fixed;
+    if(stableDisplay(plan.body,false)===plan.body)return plan.body;
+    return authoredRead(plan,requestMissing);
+}
+function scanPhoneList(list,priority){
+    if(!phoneList(list))return;
+    // Collect all authored names before inventorying visible text.
+    if(isMZ)list.forEach(function(c){if(c&&c.code===101&&c.parameters)protectMZName(c.parameters[4]);});
+    for(var i=0;i<list.length;i++){
+        var c=list[i];if(!c||!Array.isArray(c.parameters))continue;
+        if(c.code===401)rememberUi(explicitUiPlan(c.parameters[0]),priority);
+        else if(c.code===102&&Array.isArray(c.parameters[0]))
+            c.parameters[0].forEach(function(v){rememberUi(explicitUiPlan(v),priority);});
+        else if(c.code===355&&(!list[i+1]||list[i+1].code!==655)){
+            var answer=phoneAnswer(c.parameters[0]);if(answer)rememberUi(answer.plan,priority);
+        }
+    }
+}
+function phoneCommandPlan(interpreter){
+    var list=interpreter._list,index=interpreter._index,c=list&&list[index];
+    if(!phoneList(list)||!c||!Array.isArray(c.parameters)||
+       (typeof interpreter.phoneSetWaitFor!=="function"&&typeof interpreter.setAnswerForChoice!=="function"))return null;
+    var entries=[];
+    if(c.code===101){
+        for(var at=index+1;at<list.length&&list[at]&&list[at].code===401&&at<=index+64;at++){
+            var plan=list[at].parameters&&explicitUiPlan(list[at].parameters[0]);
+            if(plan)entries.push({at:at,plan:plan});
+        }
+    }else if(c.code===102&&Array.isArray(c.parameters[0])){
+        c.parameters[0].forEach(function(raw,choice){
+            var plan=explicitUiPlan(raw);if(plan)entries.push({at:index,choice:choice,plan:plan});
+        });
+    }else if(c.code===355&&(!list[index+1]||list[index+1].code!==655)){
+        var a=phoneAnswer(c.parameters[0]);if(a)entries.push({at:index,answer:a,plan:a.plan});
+    }
+    return entries.length?{list:list,index:index,entries:entries}:null;
+}
+var phoneHooked=typeof WeakSet==="function"?new WeakSet():null;
+function hookPhoneExecute(proto){
+    if(!proto||typeof proto.executeCommand!=="function"||
+       (phoneHooked&&phoneHooked.has(proto))||proto.executeCommand._iaPhoneHook)return;
+    var execute=proto.executeCommand;
+    var wrapped=function(){
+        var job=null;
+        try{if(!inputFormActive())job=phoneCommandPlan(this);}catch(_){state.errors++;}
+        if(!job){this._iaPhoneGate=null;return execute.apply(this,arguments);}
+        var waiting=false,changed=false,values=job.entries.map(function(entry){
+            var value=readUi(entry.plan,true);
+            if(value===null){
+                if(rejectedKeys.get(entry.plan.source+"\u0000"+entry.plan.body)!==Infinity)waiting=true;
+            }else if(value!==entry.plan.body)changed=true;
+            return value;
+        });
+        if(waiting){
+            var now=Date.now(),g=this._iaPhoneGate,scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+            if(!g||g.list!==job.list||g.index!==job.index||g.scene!==scene)
+                g=this._iaPhoneGate={list:job.list,index:job.index,scene:scene,started:now};
+            if(now-g.started<(state.connected?FIRST_VIEW_LIMIT:FIRST_VIEW_OFFLINE))return false;
+        }
+        this._iaPhoneGate=null;
+        if(!changed)return execute.apply(this,arguments);
+        var projected=job.list.slice(),copies=Object.create(null);
+        job.entries.forEach(function(entry,i){
+            var value=values[i];if(value===null||value===entry.plan.body)return;
+            var at=entry.at,c=projected[at];
+            if(!copies[at]){
+                var copy={};Object.keys(c).forEach(function(k){if(k!=="__proto__")copy[k]=c[k];});
+                copy.parameters=c.parameters.slice();projected[at]=copy;copies[at]=true;
+            }
+            var params=projected[at].parameters;
+            if(entry.choice!==undefined){
+                if(params[0]===job.list[at].parameters[0])params[0]=params[0].slice();
+                params[0][entry.choice]=value;
+            }else if(entry.answer){
+                params[0]=entry.answer.head+JSON.stringify(value).replace(/\u2028/g,"\\u2028").replace(/\u2029/g,"\\u2029")+entry.answer.tail;
+            }else params[0]=value;
+        });
+        // Only transient native dispatch. No persistent source-list changes.
+        this._list=projected;
+        try{return execute.apply(this,arguments);}
+        finally{
+            if(this._list===projected)this._list=job.list;
+            if(projected[job.index]&&this._params===projected[job.index].parameters)
+                this._params=job.list[job.index].parameters;
+        }
+    };
+    wrapped._iaPhoneHook=true;proto.executeCommand=wrapped;
+    if(phoneHooked)phoneHooked.add(proto);
+}
+function hookPhoneInterpreter(){
+    if(!phoneEnabled()||typeof Game_Interpreter==="undefined"||!Game_Interpreter.prototype)return;
+    hookPhoneExecute(Game_Interpreter.prototype);
+    var setup=Game_Interpreter.prototype.setup;
+    if(typeof setup==="function")Game_Interpreter.prototype.setup=function(list){
+        var out=setup.apply(this,arguments);
+        if(phoneList(list)){
+            try{hookPhoneExecute(Object.getPrototypeOf(this));scanPhoneList(list,true);nextPrefetch();}
+            catch(_){state.errors++;}
+        }
+        return out;
+    };
+}
+function phoneDrawLabel(raw){
+    if(!phoneEnabled()||typeof raw!=="string"||raw.length>160||identityDrawDepth||inputFormActive())return null;
+    var m=/^(.{1,100}) is typing([ .…]*)$/.exec(raw);
+    if(raw!=="Messages"&&(!m||!actorNames[m[1]]))return null;
+    if(!/\bPKD_PhoneMenu(?:_?Pro)?\.js(?::|\?)/i.test(String(new Error().stack||"")))return null;
+    return raw==="Messages"?"Mensajes":m[1]+" está escribiendo"+m[2];
+}
 function notificationPlan(params){
-    if(!isMZ||!Array.isArray(params)||params[0]!=="LL_InfoPopupWIndow"||
-       params[1]!=="showMessage"||!pluginEnabled(/^LL_InfoPopupWIndow$/)||
-       !params[3]||typeof params[3]!=="object"||Array.isArray(params[3]))return null;
+    if(!isMZ||!Array.isArray(params)||!params[3]||typeof params[3]!=="object"||Array.isArray(params[3]))return null;
+    if(params[0]==="Hendrix_Pictures_UI_Creator"&&params[1]==="ShowText"&&pluginEnabled(/^Hendrix_Pictures_UI_Creator$/)){
+        if(params[3].textVocabulary)return null;
+        var picture=explicitUiPlan(params[3].text);
+        if(picture)picture.field="text";
+        return picture;
+    }
+    if(params[0]!=="LL_InfoPopupWIndow"||params[1]!=="showMessage"||!pluginEnabled(/^LL_InfoPopupWIndow$/))return null;
     var raw=params[3].messageText;
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(raw))return null;
     var source=authoredSource(raw,false)||displaySource(raw,"surface");
-    return source?{source:source,body:raw,prefix:"",suffix:""}:null;
+    return source?{source:source,body:raw,prefix:"",suffix:"",field:"messageText"}:null;
 }
 function hookNotificationMZ(){
-    if(!isMZ||!pluginEnabled(/^LL_InfoPopupWIndow$/))return;
+    if(!isMZ||!pluginEnabled(/^(?:LL_InfoPopupWIndow|Hendrix_Pictures_UI_Creator)$/))return;
     if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&
        typeof Game_Interpreter.prototype.command357==="function"){
         var p=Game_Interpreter.prototype,native357=p.command357;
@@ -3328,7 +3492,7 @@ function hookNotificationMZ(){
                 this._iaNoticeGate=null;
                 return native357.apply(this,arguments);
             }
-            var shown=authoredRead(plan,true),raw=plan.body;
+            var shown=readUi(plan,true),raw=plan.body;
             if(shown===null){
                 var now=Date.now(),g=this._iaNoticeGate,
                     scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
@@ -3341,7 +3505,7 @@ function hookNotificationMZ(){
             if(shown===null)return native357.apply(this,arguments);
             var copy=params.slice(),fields={};
             Object.keys(params[3]).forEach(function(k){if(k!=="__proto__")fields[k]=params[3][k];});
-            fields.messageText=shown;copy[3]=fields;
+            fields[plan.field]=shown;copy[3]=fields;
             var args=Array.prototype.slice.call(arguments);args[0]=copy;
             return native357.apply(this,args);
         };
@@ -3352,11 +3516,11 @@ function hookNotificationMZ(){
         var call=PluginManager.callCommand;
         PluginManager.callCommand=function(self,name,command,fields){
             if(inputFormActive())return call.apply(this,arguments);
-            var plan=notificationPlan([name,command,"",fields]),shown=plan?authoredRead(plan,true):null;
+            var plan=notificationPlan([name,command,"",fields]),shown=plan?readUi(plan,true):null;
             if(shown===null)return call.apply(this,arguments);
             var args=Array.prototype.slice.call(arguments),copy={};
             Object.keys(fields).forEach(function(k){if(k!=="__proto__")copy[k]=fields[k];});
-            copy.messageText=shown;args[3]=copy;return call.apply(this,args);
+            copy[plan.field]=shown;args[3]=copy;return call.apply(this,args);
         };
     }
 }
@@ -3365,7 +3529,7 @@ function scriptScanCommand(cmd,next,priority){
     var a=cmd.parameters,plan=null;
     if(cmd.code===357){
         var notice=notificationPlan(a);
-        if(notice){authoredRemember(notice.source,notice.body,priority);return;}
+        if(notice){rememberUi(notice,priority);return;}
     }
     if(cmd.code===122){rememberDisplayLiteral(cmd,priority);return;}
     if(cmd.code===357&&enabledTextPicture()&&a[0]==="TextPicture"&&a[1]==="set"&&a[3]&&typeof a[3].text==="string"){
@@ -3380,6 +3544,7 @@ function scriptScanCommand(cmd,next,priority){
     if(plan)authoredRemember(plan.source,plan.body,priority);
 }
 function hookAuthoredMZ(){
+    hookPhoneInterpreter();
     if(!isMZ)return;
     hookNotificationMZ();
     if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&typeof Game_Interpreter.prototype.setup==="function"){
@@ -5025,6 +5190,7 @@ function ambientPayload(text){
 }
 function scanCommands(list,priority){
     if(!Array.isArray(list))return;
+    scanPhoneList(list,priority);
     for(var i=0;i<list.length;i++){
         var cmd=list[i];
         if(!cmd||!Array.isArray(cmd.parameters))continue;

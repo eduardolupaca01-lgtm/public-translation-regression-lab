@@ -2533,6 +2533,81 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR13PhonePrivateInterpreterAndPictureText(){
+    const speech="I will meet you at the station.",answer="That is a lovely photograph.",
+        choice="Cute profile photo",notice="Look at the clock in the upper left corner.";
+    const expectedSpeech="Te encontraré en la estación.",expectedAnswer="Es una fotografía preciosa.",
+        expectedChoice="Foto de perfil bonita",expectedNotice="Mira el reloj de la esquina superior izquierda.";
+    const list=[
+        {code:101,parameters:["",0,0,2,"Alice"]},{code:401,parameters:[speech]},
+        {code:355,parameters:['this.setAnswerForChoice(3, "'+answer+'");']},
+        {code:102,parameters:[[choice],0,0,2,0]},
+        {code:101,parameters:["",0,0,2,"Alice"]},{code:401,parameters:["Hehe"]},
+        {code:355,parameters:["this.phoneSetWaitFor('Alice');"]},
+        {code:355,parameters:['Phone.AddMessage("IconA", "Alice", 4, true);']},{code:0,parameters:[]}
+    ];
+    const picture=["Hendrix_Pictures_UI_Creator","ShowText","Show Text Window",
+        {id:"Tutorial",text:notice,sizePosition:"300,200,0,0",textSettings:'{"align":"center"}',update:"false",textVocabulary:""}];
+    const data=path.join("/tmp","servidor-qa-juego-日本語","data");
+    const state={files:{},dirs:{[data]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"en_US"});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:list.concat([{code:357,parameters:picture}])}]}]});
+    const saved=JSON.stringify(list),pictureSaved=JSON.stringify(picture);
+    const f=fixture(90,{mz:true,fsState:state,responses:{[speech]:expectedSpeech,[answer]:expectedAnswer,[choice]:expectedChoice,[notice]:expectedNotice},
+        plugins:[{name:"PKD_PhoneMenu",status:true,parameters:{}},{name:"Hendrix_Pictures_UI_Creator",status:true,parameters:{}}],configure(c){
+            function Base(){this.calls=[];this._index=0;}
+            Base.prototype.setup=function(list){this._list=list;this._index=0;};
+            Base.prototype.command357=function(params){this.calls.push(params);return true;};
+            Base.prototype.executeCommand=function(){
+                const cmd=this._list[this._index];this._params=cmd.parameters;
+                if(cmd.code===357){if(!this.command357(cmd.parameters))return false;}
+                else if(cmd.code===101)this.command101();
+                else if(cmd.code===102)this.calls.push({choices:cmd.parameters[0].slice(),branch:cmd.parameters[1]});
+                else this.calls.push(cmd.parameters[0]);
+                this._index++;return true;
+            };
+            function PhoneInterpreter(){Base.call(this);}
+            PhoneInterpreter.prototype=Object.create(Base.prototype);
+            PhoneInterpreter.prototype.constructor=PhoneInterpreter;
+            PhoneInterpreter.prototype.phoneSetWaitFor=function(){};
+            PhoneInterpreter.prototype.setAnswerForChoice=function(){};
+            PhoneInterpreter.prototype.command101=function(){
+                const speaker=this._params[4],text=[];
+                while(this._list[this._index+1]&&this._list[this._index+1].code===401)
+                    text.push(this._list[++this._index].parameters[0]);
+                this.calls.push({speaker,text:text.join("\n")});
+            };
+            c.Game_Interpreter=Base;c.PhoneInterpreter=PhoneInterpreter;c.$dataSystem={locale:"en_US"};
+        }});
+    await wait(30);const c=f.context;c.SceneManager._scene=new c.Scene_Map();
+    const it=new c.PhoneInterpreter();it.setup(list);
+    assert.equal(it.executeCommand(),false,"cold phone message waits before private native dispatch");
+    assert.equal(it.calls.length,0);
+    const run=async expectedIndex=>{
+        const end=Date.now()+3500;
+        while(it._index<expectedIndex&&Date.now()<end){it.executeCommand();await wait(20);}
+        assert.equal(it._index,expectedIndex);
+    };
+    await run(2);
+    assert.equal(it.calls[0].speaker,"Alice");
+    assert.equal(it.calls[0].text,expectedSpeech,"private phone first paint uses Spanish even without Game_Message");
+    await run(3);assert.equal(it.calls[1],'this.setAnswerForChoice(3, "'+expectedAnswer+'");');
+    await run(4);assert.equal(it.calls[2].choices[0],expectedChoice);assert.equal(it.calls[2].branch,0);
+    await run(6);assert.equal(it.calls[3].text,"Jeje");
+    await run(8);assert.equal(it.calls[4],"this.phoneSetWaitFor('Alice');");
+    assert.equal(it.calls[5],'Phone.AddMessage("IconA", "Alice", 4, true);');
+    assert.equal(it._list,list);assert.equal(JSON.stringify(list),saved);
+    assert.ok(!f.posts.some(p=>p.text==="Alice"||/Phone\.AddMessage|setAnswerForChoice|IconA/.test(p.text)));
+    const native=new c.Game_Interpreter();native.setup([{code:357,parameters:picture}]);
+    const end=Date.now()+3500;while(!native.calls.length&&Date.now()<end){native.executeCommand();await wait(30);}
+    assert.equal(native.calls.length,1);assert.equal(native.calls[0][3].text,expectedNotice);
+    for(const k of Object.keys(picture[3]))if(k!=="text")assert.equal(native.calls[0][3][k],picture[3][k]);
+    assert.equal(JSON.stringify(picture),pictureSaved);
+    const dynamic=picture.slice();dynamic[3]=Object.assign({},picture[3],{text:"v[0142]"});
+    native.setup([{code:357,parameters:dynamic}]);native.executeCommand();
+    assert.equal(native.calls[1][3].text,"v[0142]");
+    assert.ok(!f.posts.some(p=>p.text==="v[0142]"));
+}
 async function testR12NotificationFirstAppearance(){
     const raw="\\C[2]新しい鍵を入手しました。\\C[0]",plain="新しい鍵を入手しました。";
     const es="Has obtenido una llave nueva.",expected="\\C[2]"+es+"\\C[0]";
@@ -2825,6 +2900,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR13PhonePrivateInterpreterAndPictureText();
     await testR12NotificationFirstAppearance();
     await testR12NativeSpeakerPresentation();
     await testR11NevDialogUiAlignmentLateRedraw();
