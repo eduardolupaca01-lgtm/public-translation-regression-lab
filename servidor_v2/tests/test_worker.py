@@ -69,7 +69,10 @@ class EngineTests(unittest.TestCase):
             ("５年前に会った。","Nos vimos hace cuatro años.","Nos vimos hace cuatro años."),
             ("５年後です。","Pasarán años.","Pasarán años."),
             ("５年と２月です。","Cinco años y dos meses.","Cinco años y dos meses."),
-            ("５時です。","Son las cinco y media.","Son las cinco y media.")
+            ("５時です。","Son las cinco y media.","Son las cinco y media."),
+            ("５年後です。","Pasarán treinta y cinco años.","Pasarán treinta y cinco años."),
+            ("５年後です。","Pasarán cinco años y dos meses.","Pasarán cinco años y dos meses."),
+            ("５年後です。","Pasarán ciento cinco años.","Pasarán ciento cinco años.")
         ]
         for original,generated,want in cases:
             self.assertEqual(ia.recover_numeric_surface("ja",original,generated),want)

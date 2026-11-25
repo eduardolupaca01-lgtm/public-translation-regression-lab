@@ -75,6 +75,9 @@ Scene_Map.prototype.addWindow=function(window){this.windows.push(window);};
         w.parent=this;this.addWindow(w);
     };
 })();
+function Game_Interpreter(){this._list=[];this._index=0;this.calls=[];}
+Game_Interpreter.prototype.setup=function(list){this._list=list;this._index=0;};
+Game_Interpreter.prototype.command357=function(params){this.calls.push(params);return true;};
 const gameMessage=new Game_Message();
 const choiceValues=Object.create(null);
 function Window_ChoiceList(){
@@ -110,13 +113,13 @@ const ctx={
     process,Buffer,Promise,Date,Number,Map,Error,
     setTimeout,clearTimeout,
     setInterval(fn,ms){const id=setInterval(fn,ms);intervals.push(id);return id;},
-    Window_Base,Window_Message,Game_Message,Scene_Map,Window_ChoiceList,Window_NameBox,
+    Window_Base,Window_Message,Game_Message,Game_Interpreter,Scene_Map,Window_ChoiceList,Window_NameBox,
     $gameVariables:{value(id){return choiceValues[id];},setValue(){throw Error("IA_UNEXPECTED_GAME_WRITE");}},
     Graphics:{boxWidth:1280},
     Input:{keyMapper:{},isTriggered(){return keyPressed;}},
     SceneManager:{_scene:null},
     $gameMessage:gameMessage,
-    $plugins:[{name:"GALV_TimedMessagePopups",status:true,parameters:{}},{name:"KNS_CsvReader",status:true,parameters:{}}]
+    $plugins:[{name:"GALV_TimedMessagePopups",status:true,parameters:{}},{name:"KNS_CsvReader",status:true,parameters:{}},{name:"LL_InfoPopupWIndow",status:isMZ,parameters:{}}]
 };
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate,limitMs,code){
@@ -220,7 +223,29 @@ async function run(){
     console.log("SERVIDOR_V2_R6_REAL_OPUS_FIRST_DIALOG_AND_CHOICES_NO_REPLAY_PASS");
     assert.equal(gameMessage._choices.length,2,"IA_CHOICE_COUNT_CHANGED");
     assert.ok(gameMessage._choices.every(v=>typeof v==="string"&&v.trim()),"IA_NATIVE_CHOICES_EMPTY");
+    // R12: use newly written neutral Japanese dialogues containing the
+    // same structural risks as the report: fullwidth numerals, clock
+    // punctuation and a second line. Never accept partial Japanese.
+    gameMessage.setChoices([]);
+    const numericLines=["私たちは５年前に会いました。","今は５時です。駅はどこですか？"];
+    for(const raw of numericLines){
+        const dialogue=new Window_Message();gameMessage._texts=[raw];
+        await until(()=>{dialogue.update();return dialogue.starts===1;},35000,"IA_R12_NUMBER_FIRST_VIEW_TIMEOUT");
+        assert.ok(!japanese(gameMessage.allText())&&/\b5\b/.test(gameMessage.allText()),"IA_R12_NUMBER_OR_JAPANESE_RESIDUAL");
+        assert.equal(dialogue.starts,1);
+    }
+    console.log("SERVIDOR_V2_R12_REAL_OPUS_JA_NUMBER_FIRST_VIEW_PASS");
     if(isMZ){
+        const popup=["LL_InfoPopupWIndow","showMessage","",{messageText:"\\C[2]新しい鍵を入手しました。\\C[0]",showCount:"180",windowX:"auto",windowY:"20",windowBackground:"0"}];
+        const saved=JSON.stringify(popup),interpreter=new Game_Interpreter();
+        interpreter.setup([{code:357,parameters:popup}]);
+        await until(()=>interpreter.command357(popup)===true,35000,"IA_R12_NOTIFICATION_TIMEOUT");
+        assert.equal(interpreter.calls.length,1,"IA_R12_NOTIFICATION_REPEATED");
+        const visible=interpreter.calls[0][3].messageText;
+        assert.ok(!japanese(visible)&&/^\\C\[2\]/.test(visible)&&/\\C\[0\]$/.test(visible),"IA_R12_NOTIFICATION_NOT_TRANSLATED");
+        assert.equal(JSON.stringify(popup),saved,"IA_R12_NOTIFICATION_DATA_CHANGED");
+        for(const k of Object.keys(popup[3]))if(k!=="messageText")assert.equal(interpreter.calls[0][3][k],popup[3][k]);
+        console.log("SERVIDOR_V2_R12_REAL_OPUS_MZ_NOTIFICATION_PASS");
         const name=new Window_NameBox(new Rectangle(0,0,250,52));
         gameMessage.setSpeakerName("Haruka");name.setName("Haruka");
         assert.equal(gameMessage._speakerName,"Haruka");

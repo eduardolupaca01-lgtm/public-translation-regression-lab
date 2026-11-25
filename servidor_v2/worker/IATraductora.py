@@ -56,6 +56,18 @@ def recover_numeric_surface(lang, original, output):
     if len(hits)!=1 or _ES_CARDINALS[hits[0]["number"].lower()]!=number:
         return output
     start,end=hits[0].span("number")
+    # Reject multiword numerals (treinta y cinco, ciento cinco) and
+    # additional explicit quantities. A suffix match must not change 35
+    # into "treinta y 5", nor hide a second invented quantity.
+    extended=r"(?:treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|cien|ciento|doscient[oa]s|trescient[oa]s|cuatrocient[oa]s|quinient[oa]s|seiscient[oa]s|setecient[oa]s|ochocient[oa]s|novecient[oa]s|mil|mill[oó]n(?:es)?)"
+    if re.search(r"\b(?:"+_ES_NUMBER_WORD+"|"+extended+r")\s+(?:y\s+)?$",output[:start],re.I):
+        return output
+    units="|".join(_ES_COUNTER.values())
+    extras=list(re.finditer(r"\b(?:"+_ES_NUMBER_WORD+r")\s+(?:"+units+r")\b",output,re.I))
+    if any(hit.start()!=start for hit in extras):
+        return output
+    if unit!="時" and re.search(r"\b(?:a\s+)?las\s+(?:"+_ES_NUMBER_WORD+r")\b",output,re.I):
+        return output
     return output[:start]+str(number)+output[end:]
 
 def normalize_ja_digits(text):
