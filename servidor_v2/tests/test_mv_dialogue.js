@@ -2595,7 +2595,7 @@ async function testR14VisuQuestAndStatusMetadata(){
         }});
     const c=f.context;
     new c.Scene_Title().start();
-    const until=async predicate=>{const deadline=Date.now()+5000;while(!predicate()&&Date.now()<deadline)await wait(30);assert.ok(predicate());};
+    const until=async predicate=>{const deadline=Date.now()+5000;while(Date.now()<deadline){if(predicate())return;await wait(30);}assert.fail("R14: timed out waiting for native presentation");};
     await until(()=>c.window.__IA_TRADUCTORA_TEST__.done());
     const required=[bio,desc,other,gab,hudText,variable];
     const deadline=Date.now()+5000;
