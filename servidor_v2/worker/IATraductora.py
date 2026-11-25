@@ -87,6 +87,14 @@ def quality_reason(lang, original, output):
         return "IA_QUALITY_NUMBER_MISSING"
     if lang=="ja" and re.search(r"[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff\uff66-\uff9d]",output):
         return "IA_QUALITY_JAPANESE_RESIDUAL"
+    # A compact Japanese label cannot plausibly become a chain of
+    # glued sentence fragments. Mirror the JS cache validator; do not
+    # invalidate the database schema or remove otherwise valid entries.
+    if lang=="ja" and len(original.strip())<=32 and len(output.strip())>=12:
+        stops=len(re.findall(r"[。！？.!?]",original))
+        glued=len(re.findall(r"[a-záéíóúüñ][.!?]+(?=[A-Za-zÁÉÍÓÚÜÑáéíóúüñ])",output))
+        if stops<=1 and glued>=2:
+            return "IA_QUALITY_JA_FRAGMENT_NOISE"
     if lang=="en":
         # The bridge is responsible for native controls, not the model.
         # Reject stale model responses with invented tags and runaway output.

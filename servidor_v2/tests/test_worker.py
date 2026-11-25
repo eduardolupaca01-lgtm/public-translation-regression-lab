@@ -62,6 +62,25 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(ia.quality_reason(lang,original,output),reason)
         self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (8)"))
         self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
+    def test_r24_revalidates_legacy_fragment_cache(self):
+        import hashlib
+        src="移動距離"
+        bad="Hola.Sí.Bien."
+        self.assertEqual(ia.native_quality_reason("ja",src,bad),"IA_QUALITY_JA_FRAGMENT_NOISE")
+        self.assertIsNone(ia.native_quality_reason("ja",src,"Distancia recorrida"))
+        self.assertIsNone(ia.native_quality_reason("ja","本当？はい。","¿De verdad? Sí."))
+        memory=self.s.memory
+        key=hashlib.sha256(("ja\0"+src).encode()).hexdigest()
+        # Emulate an old validated journal row, without deleting the DB.
+        memory.db.execute("INSERT OR REPLACE INTO translations (key_sha256,schema_version,source,original,translated,created_unix) VALUES (?,?,?,?,?,?)",(key,ia.CACHE_SCHEMA,"ja",src,bad,0))
+        memory.db.commit()
+        self.assertIsNone(memory.get(key,"ja",src))
+        self.assertTrue(memory.put(key,"ja",src,"Distancia recorrida"))
+        self.assertEqual(memory.get(key,"ja",src),"Distancia recorrida")
+        other="おはようございます。"
+        self.assertEqual(self.s.translate("ja",other),"Buenos días")
+        self.assertEqual(self.s.translate("ja",other),"Buenos días")
+
     def test_r12_numeric_recovery_requires_equal_counter(self):
         cases=[
             ("５年前に会った。","Nos vimos hace cinco años.","Nos vimos hace 5 años."),

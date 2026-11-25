@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R23-P4-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R24-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -429,7 +429,7 @@ function validTranslation(source,original,result,composed){
         return false;
     var fixed=stableDisplay(original,false);
     if(fixed!==null&&fixed!==result)return false;
-    if(source==="ja"&&(spuriousLaughter(original,result)||spuriousApplause(original,result)))return false;
+    if(source==="ja"&&(spuriousLaughter(original,result)||spuriousApplause(original,result)||r24FragmentNoise(original,result)))return false;
     if(source==="en"&&badEnglishOutput(visibleProse(original),visibleProse(result)))return false;
     if(/(?:\\|\x1b)[NVP]\[[0-9]+\](?=[A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/i.test(result))return false;
     if(source==="ja"){
@@ -1090,7 +1090,20 @@ function translatePreservingControls(source,text,skipPlan,priority){
 // Short, deterministic RPG UI labels should not require neural inference.
 // Game-specific actor readings can be overridden in cache/nombres_es.json;
 // do not modify the game's actor database or player-entered name.
+// Short UI labels are whole semantic units, never per-character substitutions.
+function r24FragmentNoise(original,result){
+    if(typeof original!=="string"||typeof result!=="string")return false;
+    var src=visibleProse(original).trim(),out=visibleProse(result).trim();
+    if(!isJapanese(src)||src.length>32||out.length<12)return false;
+    var sourceStops=(src.match(/[。！？.!?]/g)||[]).length;
+    var glued=(out.match(/[a-záéíóúüñ][.!?]+(?=[A-Za-zÁÉÍÓÚÜÑáéíóúüñ])/g)||[]).length;
+    return sourceStops<=1&&glued>=2;
+}
 var knownUi={
+    "好感度":"Afinidad","重要ステータス":"Estado importante","記録":"Registro",
+    "お話しする":"Hablar","ゲームする":"Jugar","勉強をみる":"Revisar estudios",
+    "寝る":"Dormir","データ":"Datos","恋愛レベル":"Nivel de relación",
+    "設定":"Configuración","結果":"Resultados","回数":"Veces","合計":"Total",
     "持ち物":"Objetos","オプション":"Opciones","セーブ":"Guardar",
     "ゲーム終了":"Salir del juego","キャンセル":"Cancelar",
     "決定":"Aceptar","大事なもの":"Objetos importantes",
@@ -1676,7 +1689,8 @@ function captionRequest(source,text){
         return out&&validTranslation(source,text,out,true)?out:null;
     });
 }
-var surfaceRequests=new Map(),surfaceDepth=0;
+var surfaceRequests=new Map(),surfaceDepth=0,r24GlyphDepth=0;
+var r24DTextStats={pictures:0,redraws:0};
 function projectCaption(text){
     var source=captionSource(text);
     if(!source)return text;
@@ -2333,6 +2347,13 @@ function hookMZPresentation(){
 }
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
+        // Native MV consumes one glyph per call. Its width and paint must
+        // see identical text, not a new model lookup for each character.
+        var normalCharacter=Window_Base.prototype.processNormalCharacter;
+        if(typeof normalCharacter==="function")Window_Base.prototype.processNormalCharacter=function(){
+            r24GlyphDepth++;
+            try{return normalCharacter.apply(this,arguments);}finally{r24GlyphDepth--;}
+        };
         function bindDisplayOwner(win){
             try{if(win&&win.contents&&typeof win.contents==="object")win.contents._iaOwnerWindow=win;}catch(_){}
         }
@@ -2374,8 +2395,9 @@ function hookNativeSurface(){
                 }catch(_){state.errors++;}
                 if(identity)identityDrawDepth++;
                 surfaceDepth++;
+                if(method==="drawTextEx")r24GlyphDepth++;
                 try{return original.apply(this,args);}
-                finally{surfaceDepth--;if(identity)identityDrawDepth--;}
+                finally{if(method==="drawTextEx")r24GlyphDepth--;surfaceDepth--;if(identity)identityDrawDepth--;}
             };
         });
     }
@@ -2789,8 +2811,14 @@ function hookNativeSurface(){
             finally{bitmapNativeDepth--;}
         }
         Bitmap.prototype.drawText=function(){
-            if(bitmapReplayDepth||inputFormActive()||
+            if(bitmapReplayDepth||r24GlyphDepth||inputFormActive()||
                (typeof Window_Message!=="undefined"&&this._iaOwnerWindow instanceof Window_Message))return callBitmapDraw(this,arguments);
+            // A bare Japanese glyph at the bitmap layer is not sufficient
+            // evidence of a complete linguistic unit. Keep explicit labels.
+            var glyph=arguments[0];
+            if(typeof glyph==="string"&&glyph.length===1&&isJapanese(glyph)&&
+               !Object.prototype.hasOwnProperty.call(knownUi,glyph))
+                return callBitmapDraw(this,arguments);
             var args=Array.prototype.slice.call(arguments),raw=typeof args[0]==="string"?args[0]:null;
             if(raw&&!identityDrawDepth&&statusPresentationScope()){
                 args[0]=statusRenderValue(raw);
@@ -2829,7 +2857,9 @@ function hookNativeSurface(){
         };
         var measure=Bitmap.prototype.measureTextWidth;
         if(typeof measure==="function")Bitmap.prototype.measureTextWidth=function(text){
-            if(inputFormActive())return measure.apply(this,arguments);
+            if(inputFormActive()||r24GlyphDepth||
+               (typeof text==="string"&&text.length===1&&isJapanese(text)&&!Object.prototype.hasOwnProperty.call(knownUi,text)))
+                return measure.apply(this,arguments);
             var bitmap=this,args=Array.prototype.slice.call(arguments),label=null;
             if(!identityDrawDepth&&statusPresentationScope()){args[0]=statusRenderValue(text);return measure.apply(this,args);}
             if(visuQuestBitmapScope(bitmap)){args[0]=visuQuestBitmapText(bitmap,text);return measure.apply(this,args);}
@@ -4203,6 +4233,124 @@ function scriptScanCommand(cmd,next,priority){
         if(plan)scriptStats.dialogues++;
     }
     if(plan)authoredRemember(plan.source,plan.body,priority);
+}
+// R24: DTextPicture is a documented text-to-bitmap renderer, not a static
+// picture file. Translate its original text before both measuring and paint.
+// Only the plugin's real, enabled contract is wrapped; no script evaluation.
+function r24DTextLabel(raw,request){
+    if(!raw||!raw.trim()||!isJapanese(raw))return {value:raw,waiting:false};
+    var m=/^([ \t\u3000]*)([\s\S]*?)([ \t\u3000]*)$/.exec(raw),body=m[2];
+    if(actorNames[body]||inputFormActive()||externalLocalizationReference(body)||
+       tsvExcluded(body)||csvExecutableSyntax(body))return {value:raw,waiting:false};
+    // Preserve numbers as game data. Translate the label independently
+    // only when a separator makes the counter boundary explicit.
+    var count=/^(.{1,90}?)([ \t\u3000]*[：:][ \t\u3000]*|[ \t\u3000]+)([0-9０-９]+)([ \t\u3000]*)(回|分|秒|時間|日)?$/.exec(body);
+    var label=count?count[1].trim():body;
+    if(!label||actorNames[label]||!isJapanese(label))return {value:raw,waiting:false};
+    var out=stableDisplay(label,false);
+    if(out===null){
+        if(label.length===1)return {value:raw,waiting:false,blocked:true};
+        out=readyText("ja",label);
+        if(out===null){
+            if(request)firstViewRequest("ja",label);
+            return {value:raw,waiting:true};
+        }
+        if(!validTranslation("ja",label,out,true))return {value:raw,waiting:false};
+    }
+    if(count){
+        var n=Number(count[3].replace(/[０-９]/g,function(c){return String(c.charCodeAt(0)-65296);}));
+        var units={"回":n===1?"vez":"veces","分":"min","秒":"s","時間":"h","日":n===1?"día":"días"};
+        out+=count[2]+count[3]+(count[5]?" "+units[count[5]]:count[4]);
+    }
+    return {value:m[1]+out+m[3],waiting:false};
+}
+function r24DTextProject(raw,request){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||
+       inputFormActive()||externalLocalizationReference(raw)||tsvExcluded(raw))return null;
+    // Preserve the documented DText control grammar, including resolved
+    // ESC style commands and their literal RGB/font parameters.
+    var controls=/(?:\\|\x1b)(?:(?:C|I|FS|PX|PY|OW)\[\d{1,8}\]|OC\[(?:\d{1,4}|#[0-9a-fA-F]{3,8}|rgba?\([0-9., %]{1,40}\))\]|F\[[IBN/]\]|[{}])|\r?\n/gi;
+    var chunks=[],at=0,match;
+    while((match=controls.exec(raw))!==null){
+        if(match.index>at)chunks.push({v:raw.slice(at,match.index),locked:false});
+        chunks.push({v:match[0],locked:true});at=controls.lastIndex;
+    }
+    if(at<raw.length)chunks.push({v:raw.slice(at),locked:false});
+    if(chunks.some(function(p){return !p.locked&&/[\\\x1b<>{}\u0000\uFFFD]/.test(p.v);}))return null;
+    var waiting=false,changed=false,blocked=false;
+    var projected=chunks.map(function(p){
+        if(p.locked)return p.v;
+        var r=r24DTextLabel(p.v,request);waiting=waiting||r.waiting;blocked=blocked||!!r.blocked;
+        changed=changed||r.value!==p.v;
+        return r.value;
+    }).join("");
+    // Keep the whole original on screen until each visible segment is ready.
+    return {value:!waiting&&!blocked&&changed&&numbersIn(raw)===numbersIn(projected)?projected:raw,waiting:waiting};
+}
+function hookR24DTextPicture(){
+    if(!pluginEnabled(/^DTextPicture$/i)||typeof Sprite_Picture==="undefined"||
+       !Sprite_Picture.prototype)return;
+    var p=Sprite_Picture.prototype,make=p.makeDynamicBitmap,update=p.updateBitmap;
+    if(typeof make!=="function"||typeof update!=="function"||typeof p.picture!=="function")return;
+    var gameProto=typeof Game_Picture!=="undefined"&&Game_Picture.prototype;
+    var getter=gameProto&&gameProto.getDText,active=null;
+    if(typeof getter==="function")gameProto.getDText=function(){
+        if(active&&active.pic===this)return active.value;
+        return getter.apply(this,arguments);
+    };
+    function infoFor(sprite){
+        var pic=sprite.picture(),info=pic&&pic.dTextInfo;
+        if(!info||info.vertical||inputFormActive()||typeof info.value!=="string")return null;
+        var raw=typeof getter==="function"?getter.call(pic):info.value;
+        return typeof raw==="string"&&raw.length<=1800?{pic:pic,info:info,raw:raw}:null;
+    }
+    p.makeDynamicBitmap=function(){
+        var data=null,projection=null;
+        try{data=infoFor(this);if(data)projection=r24DTextProject(data.raw,true);}catch(_){state.errors++;}
+        var previous=this.dTextInfo,prior=active,copy=null;
+        var value=projection?projection.value:data?data.raw:null;
+        if(data&&typeof value==="string"){
+            // MV consumes Sprite_Picture.dTextInfo.value. MZ consumes
+            // Game_Picture.getDText(). Only the synchronous render sees
+            // the projected copy; saved game data is untouched.
+            copy=Object.create(data.info);
+            copy.value=value;this.dTextInfo=copy;
+            active={pic:data.pic,value:value};
+        }
+        r24GlyphDepth++;identityDrawDepth++;
+        try{
+            var result=make.apply(this,arguments);
+            if(data){
+                this._iaR24DText={pic:data.pic,info:data.info,raw:data.raw,shown:value,checked:Date.now()};
+                r24DTextStats.pictures++;
+                if(value!==data.raw)r24DTextStats.redraws++;
+            }else this._iaR24DText=null;
+            return result;
+        }finally{
+            r24GlyphDepth--;identityDrawDepth--;active=prior;
+            if(copy)this.dTextInfo=previous;
+        }
+    };
+    // Do not replay a renderer that publishes dimensions to game variables.
+    // The next author-driven repaint still gets the completed translation.
+    var params=typeof PluginManager!=="undefined"&&typeof PluginManager.parameters==="function"?
+        PluginManager.parameters("DTextPicture")||{}:{};
+    var dimensionSideEffects=Object.keys(params).some(function(k){
+        return /^(?:width|height)variable(?:id)?$/i.test(k)&&Number(params[k])>0;
+    });
+    p.updateBitmap=function(){
+        var result=update.apply(this,arguments);
+        try{
+            var ticket=this._iaR24DText;
+            if(!ticket||dimensionSideEffects||this.visible===false||Date.now()-ticket.checked<120)return result;
+            ticket.checked=Date.now();
+            var data=infoFor(this);
+            if(!data||data.pic!==ticket.pic||data.info!==ticket.info||data.raw!==ticket.raw)return result;
+            var plan=r24DTextProject(data.raw,true);
+            if(plan&&!plan.waiting&&plan.value!==ticket.shown)this.makeDynamicBitmap();
+        }catch(_){state.errors++;}
+        return result;
+    };
 }
 function hookAuthoredMZ(){
     hookPhoneInterpreter();
@@ -7165,7 +7313,8 @@ function cteHudRefresh(){
         cte.enabled?"Idioma: "+cte.locale.status+" · Contexto: "+cte.contextHits+" · TextState: "+cte.textStates:"Etiquetas y diálogos nativos",
         "Textos listos: "+scanStats.ready+"/"+discovered.size+" · Fallos: "+scanStats.rejected,
         "Errores: "+state.errors+" · Avisos CTE: "+cte.errors,
-        "F10: cerrar"
+        "DTextPicture: "+(pluginEnabled(/^DTextPicture$/i)?"activo":"no detectado")+" · Render: "+r24DTextStats.pictures+" · Traducidos: "+r24DTextStats.redraws,
+        "QA caché: "+diskStats.rejected+" · F10: cerrar"
     ].join("\n");
 }
 function cteHudToggle(){
@@ -7312,7 +7461,7 @@ try{
         state.phase="OPCIONES";hookChoices();
         hookChoiceFirstView();hookCsvChoiceLabels();
         state.phase="INTERFAZ";hookInputForm();
-        hookBuiltinNameInputScene();hookNativeSurface();hookR22Commands();hookAuthoredMZ();hookRemNative();hookChauPopups();hookTitleStart();
+        hookBuiltinNameInputScene();hookNativeSurface();hookR22Commands();hookR24DTextPicture();hookAuthoredMZ();hookRemNative();hookChauPopups();hookTitleStart();
     }
     state.phase="CONEXION";loadIavraCatalogs(function(){startFullScan();nextPrefetch();});startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
@@ -7334,7 +7483,8 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         has:function(source,text){return discovered.has(source+"\u0000"+text);},
         done:function(){return scanStats.done;},
         limited:function(){return scanStats.limited;},
-        r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue
+        r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
+        r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise
     };
 }
 })();

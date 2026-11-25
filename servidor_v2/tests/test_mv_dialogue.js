@@ -2678,7 +2678,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R23-P4-20261125"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R24-20261125"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -3579,7 +3579,70 @@ async function testHalvaNativePersistentBridge(){
     await wait(60);assert.equal(restored.posts.length,0,"stale plugin must not translate after restoring the package");
     console.log("IA_HALVA_NATIVE_BRIDGE_PERSISTENT_PASS");
 }
+async function testR24WholeDynamicPicturesAndGlyphs(){
+    for(const mz of [false,true]){
+        const raw="移動距離： 8回",label="移動距離",spanish="Distancia recorrida： 8 veces";
+        const originalInfo={value:raw,realTime:true,vertical:false};
+        const root=path.join("/tmp","r24-picture-"+(mz?"mz":"mv"));
+        const f=fixture(1,{root,mz,testHooks:true,plugins:[{name:"DTextPicture",status:true}],responses:{[label]:"Distancia recorrida"},configure(c){
+            function Game_Picture(){this.dTextInfo=originalInfo;this._dTextValue=raw;}
+            if(mz)Game_Picture.prototype.getDText=function(){return this._dTextValue;};
+            function Sprite_Picture(pic){this._pic=pic;this.dTextInfo=null;this.visible=true;this.rebuilds=0;}
+            Sprite_Picture.prototype.picture=function(){return this._pic;};
+            Sprite_Picture.prototype.updateBitmap=function(){
+                if(!this.dTextInfo){this.dTextInfo=this.picture().dTextInfo;this.makeDynamicBitmap();}
+            };
+            Sprite_Picture.prototype.makeDynamicBitmap=function(){
+                const value=mz?this.picture().getDText():this.dTextInfo.value;
+                this.rendered=value;this.rebuilds++;
+                this.bitmap=new c.Bitmap(1000,50);
+                let x=0;
+                for(const ch of value){
+                    const w=this.bitmap.measureTextWidth(ch);
+                    this.bitmap.drawText(ch,x,0,w*2,32,"left");x+=w;
+                }
+            };
+            c.Game_Picture=Game_Picture;c.Sprite_Picture=Sprite_Picture;
+            c.Window_Base.prototype.processNormalCharacter=function(ts){
+                const ch=ts.text[ts.index++],w=this.contents.measureTextWidth(ch);
+                this.contents.drawText(ch,ts.x,0,w*2,32,"left");ts.x+=w;
+            };
+        }});
+        await wait(60);
+        const c=f.context,probe=c.window.__IA_TRADUCTORA_TEST__;
+        assert.equal(probe.r24FragmentNoise(label,"Hola.Sí.Bien."),true);
+        assert.equal(probe.r24FragmentNoise(label,"Distancia recorrida"),false);
+        const fixed=probe.r24DTextProject("\x1bF[B]好感度： 8回\x1bF[N]",false);
+        assert.equal(fixed.value,"\x1bF[B]Afinidad： 8 veces\x1bF[N]");
+        assert.equal(probe.r24DTextProject("好感度： 1回",false).value,"Afinidad： 1 vez");
+        assert.equal(probe.r24DTextProject("好感度： \\V[2]",false),null,"unknown or unresolved control not changed");
+        const scene=new c.Scene_Map();c.SceneManager._scene=scene;scene.createAllWindows();scene.update();
+        const pic=new c.Game_Picture(),sprite=new c.Sprite_Picture(pic);
+        sprite.updateBitmap();
+        assert.equal(sprite.bitmap.ops.map(x=>x.text).join(""),sprite.rendered);
+        const deadline=Date.now()+3500;
+        while(sprite.rendered!==spanish&&Date.now()<deadline){await wait(80);sprite.updateBitmap();}
+        assert.equal(sprite.rendered,spanish,"whole label projected before measuring and painting");
+        assert.equal(sprite.bitmap.ops.map(x=>x.text).join(""),spanish);
+        assert.equal(pic.dTextInfo,originalInfo);
+        assert.equal(pic.dTextInfo.value,raw);
+        if(mz)assert.equal(pic.getDText(),raw,"saved picture value stays original");
+        assert.ok(f.posts.some(x=>x.text===label),"one semantic label reaches OPUS");
+        assert.ok(!f.posts.some(x=>x.text.length===1),"glyphs never reach OPUS");
+        const win=new c.Window_Base();win.contents=new c.Bitmap(100,60);
+        const ts={text:"移動",index:0,x:0};
+        win.processNormalCharacter(ts);win.processNormalCharacter(ts);
+        assert.deepEqual(win.contents.ops.map(x=>x.text),["移","動"]);
+        assert.equal(ts.x,24,"unchanged glyph measurement");
+        const b=new c.Bitmap(200,50);b.drawText("記録",0,0,200,32);
+        assert.equal(b.lastText,"Registro","a standalone complete label still translates");
+        b.drawText("移",0,0,20,32);
+        assert.equal(b.lastText,"移","unknown standalone glyph is not a model input");
+        console.log("IA_R24_DTEXT_"+(mz?"MZ":"MV")+"_WHOLE_LABEL_PASS");
+    }
+}
 (async()=>{
+    await testR24WholeDynamicPicturesAndGlyphs();
     await testHalvaNativePersistentBridge();
     await testR22MvPhysicalKeyMenusAndNativeFlow();
     await testR8GeneralDisplaySurfaces();
