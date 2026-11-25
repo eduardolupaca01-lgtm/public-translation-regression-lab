@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R10-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R11-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -665,8 +665,8 @@ function languageFor(s){
 // sentence-like. Restrict one-word inference to a conservative UI vocabulary;
 // multiword labels use explicit English signals and never inspect script text.
 var displayUiWords=Object.create(null),displaySignalWords=Object.create(null);
-("accept back shop read help options save load continue exit quit cancel confirm yes no start next previous return retry resume pause menu settings close open buy sell talk interact select choose skip inventory equipment status profile journal quests quest map guide information details more less done finish apply reset default enabled disabled agree decline reject gift compliment").split(" ").forEach(function(w){displayUiWords[w]=true;});
-("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door").split(" ").forEach(function(w){displaySignalWords[w]=true;});
+("accept back shop read help options save load continue exit quit cancel confirm yes no start next previous return retry resume pause menu settings close open buy sell talk interact select choose skip inventory equipment status profile journal quests quest map guide information details more less done finish apply reset default enabled disabled agree decline reject gift compliment popup rules bet shoe chips flowers prize grab round level score").split(" ").forEach(function(w){displayUiWords[w]=true;});
+("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door click press key target ring closes wrong means instant fail start").split(" ").forEach(function(w){displaySignalWords[w]=true;});
 function displaySource(text,context){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
        externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
@@ -2194,7 +2194,7 @@ function nativeRenderParts(text){
             text=head[1]+name+head[3]+text.slice(head[0].length);
         }
     }
-    var re=/<\/?wordwrap>|\\n[cr]?<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\]|i\[\d{1,4}\])|\r?\n|<br>/gi;
+    var re=/<\/?wordwrap>|\\n[cr]?<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:AC|c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\]|i\[\d{1,4}\])|\r?\n|<br>/gi;
     var parts=[],flat="",at=0,m,color=null,seen=false;
     function prose(value){
         if(/[\\\x1b<>|\f]/.test(value))return false;
@@ -2206,6 +2206,8 @@ function nativeRenderParts(text){
         var code=m[0];at=re.lastIndex;
         if(/^\\n[cr]?</i.test(code)){if(seen)return null;continue;}
         if(/^<\/?wordwrap>$/i.test(code))continue;
+        // NEV_DialogUI uses the AC control for centered message text; its native text-state x already contains the center offset.
+        if(/^(?:\\|\x1b)AC$/i.test(code))continue;
         if(/^(?:\r?\n|<br>)$/i.test(code)){parts.push({text:"\n",color:color});flat+="\n";continue;}
         var icon=/^(?:\\|\x1b)i\[(\d{1,4})\]$/i.exec(code);
         if(icon){var id=Number(icon[1]);if(id>4095)return null;
