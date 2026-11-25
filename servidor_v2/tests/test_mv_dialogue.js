@@ -2533,6 +2533,79 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR15NativeLocaleAndFallback(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),base=path.join(root,"www"),
+        loc=path.join(base,"loc"),pics=path.join(base,"img","pictures"),data=path.join(base,"data");
+    const fileState={files:{},dirs:{[loc]:true,[pics]:true,[data]:true}};
+    const key="sample_event_1",missing="sample_event_2",original="We will meet in the garden.",
+        spanish="Nos veremos en el jardin.",fallback="Please wait near the fountain.",
+        esFallback="Espera cerca de la fuente.",desc="The blue lantern.",esDesc="La linterna azul.";
+    const enMap={[key]:{text:[original]},[missing]:{text:[fallback]}},
+        spMap={[key]:{text:[spanish]},[missing]:{text:[fallback]}};
+    const enDesc={sample_desc:{text:[desc]}},spDesc={sample_desc:{text:[esDesc]}};
+    const enLines={sample_line:{en:["Good morning, friend."],jp:["おはよう。"]}},
+        spLines={sample_line:{en:["Buenos días, amigo."],jp:["おはよう。"]}};
+    const catalog={"RemMap_EN.json":enMap,"RemMap_SP.json":spMap,"RemDesc_EN.json":enDesc,
+        "RemDesc_SP.json":spDesc,"RemLines.json":enLines,"RemLines_SP.json":spLines};
+    for(const [name,doc] of Object.entries(catalog))fileState.files[path.join(loc,name)]=JSON.stringify(doc);
+    fileState.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    const ref="\\REM_MAP["+key+"]",missingRef="\\REM_MAP["+missing+"]",choiceRef="\\REM_DESC[sample_desc]";
+    fileState.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[
+        {code:401,parameters:[ref]},{code:401,parameters:[missingRef]},
+        {code:102,parameters:[[choiceRef],0,0,2,0]}]}]}]});
+    for(const mode of ["easy","normal","hard"])for(const i of [1,2])
+        fileState.files[path.join(pics,"difficulty_"+mode+i+"_SP.png")]="synthetic picture";
+    const plugins=["RemtairyTextManager","RemtairyTextManager_SP","RemtairyConfigManager","RemtairyMisc","RemtairyLines"]
+        .map(name=>({name,status:true,parameters:{}}));
+    const originalCatalog=JSON.stringify(catalog);
+    function configure(c){
+        c.RemLanguageEN=1;c.RemLanguageSP=6;
+        c.ConfigManager={remLanguage:1,remVoiceLanguage:0,saves:0,
+            applyData(config){this.remLanguage=config.remLanguage;this.remVoiceLanguage=config.remVoiceLanguage;},
+            save(){this.saves++;}};
+        const maps=new Map([[1,()=>enMap],[6,()=>spMap]]),descs=new Map([[1,()=>enDesc],[6,()=>spDesc]]);
+        c.TextManager={getLocalizedMapMappings(){return maps;},getLocalizedDescriptionMappings(){return descs;},
+            getLocalizedText(m,id){const table=m.get(c.ConfigManager.remLanguage)();return table[id].text.join("\n");},
+            remMiscMapText(id){return this.getLocalizedText(maps,id);},
+            remMiscDescriptionText(id){return this.getLocalizedText(descs,id);}};
+        Object.defineProperty(c.TextManager,"isSpanish",{get(){return c.ConfigManager.remLanguage===6;}});
+        c.Window_Base.prototype.convertEscapeCharacters=function(raw){
+            return raw.replace(/\\REM_(MAP|DESC)\[([A-Za-z0-9_]+)\]/g,(_,type,id)=>
+                type==="MAP"?c.TextManager.remMiscMapText(id):c.TextManager.remMiscDescriptionText(id));
+        };
+    }
+    const f=fixture(75,{fsState:fileState,plugins,responses:{[fallback]:esFallback},configure,testHooks:true});
+    const c=f.context;c.ConfigManager.applyData({remLanguage:1,remVoiceLanguage:0});
+    assert.equal(c.ConfigManager.remLanguage,6,"the detected native Spanish locale is preferred at boot");
+    assert.equal(c.ConfigManager.remVoiceLanguage,0,"voice language remains the player's original selection");
+    assert.equal(c.ConfigManager.saves,0,"never save configuration directly");
+    const w=new c.Window_Base();w.initialize(0,0,600,200);
+    assert.equal(w.convertEscapeCharacters(ref),spanish);
+    assert.equal(w.convertEscapeCharacters(choiceRef),esDesc);
+    new c.Scene_Title().start();
+    await wait(45);
+    assert.equal(c.TextManager.remMiscMapText(key),spanish);
+    assert.equal(w.convertEscapeCharacters(missingRef),fallback,"only genuinely untranslated prose uses the worker");
+    const end=Date.now()+3000;
+    while(Date.now()<end&&c.TextManager.remMiscMapText(missing)!==esFallback)await wait(30);
+    assert.equal(c.TextManager.remMiscMapText(missing),esFallback);
+    assert.ok(f.posts.some(p=>p.text===fallback));
+    assert.ok(!f.posts.some(p=>p.text===original||p.text===spanish||p.text===desc||p.text===esDesc||/REM_(?:MAP|DESC)\[/.test(p.text)),
+        "native translated catalog entries and executable lookup keys must not be sent to the model");
+    assert.equal(JSON.stringify(catalog),originalCatalog);
+    assert.ok(c.TextManager.isSpanish);
+    c.ConfigManager.remLanguage=1;
+    new c.Scene_Title().start();
+    assert.equal(c.ConfigManager.remLanguage,1,"an explicit later language choice is not reset in the same session");
+    const partial={files:Object.assign({},fileState.files),dirs:Object.assign({},fileState.dirs)};
+    delete partial.files[path.join(pics,"difficulty_hard2_SP.png")];
+    const g=fixture(1,{fsState:partial,plugins,configure,disconnected:true});
+    g.context.ConfigManager.applyData({remLanguage:1,remVoiceLanguage:0});
+    assert.equal(g.context.ConfigManager.remLanguage,1,"missing native picture prevents automatic language switch");
+    const h=fixture(1,{fsState:{files:Object.assign({},fileState.files),dirs:Object.assign({},fileState.dirs)},plugins:[],configure,disconnected:true});
+    h.context.ConfigManager.applyData({remLanguage:1,remVoiceLanguage:0});
+    assert.equal(h.context.ConfigManager.remLanguage,1,"unrelated games never use this adapter");
+}
 async function testR14VisuQuestAndStatusMetadata(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","data");
     const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
@@ -3005,6 +3078,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR15NativeLocaleAndFallback();
     await testR14VisuQuestAndStatusMetadata();
     await testR13PhonePrivateInterpreterAndPictureText();
     await testR12NotificationFirstAppearance();

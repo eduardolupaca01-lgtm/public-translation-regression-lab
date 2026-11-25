@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R14-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R15-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -20,6 +20,7 @@ try{
 }catch(_){return;}
 if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
+var remNative={detected:false,images:false,configured:false,spanish:new Set(),fallback:new Map()};
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var runtimeActivated=false,connectionProbe=false,lastStatusProbe=0;
@@ -365,6 +366,7 @@ function numbersIn(text){
 // stock syntax even if the plugin/catalog is not ready, plus configured variants.
 function externalLocalizationReference(text){
     if(typeof text!=="string")return false;
+    if(remNative.detected&&/(?:\\|\x1b)REM_[A-Z_]{1,40}\[[^\]\r\n]{1,200}\]/i.test(text))return true;
     if(/#\{[A-Za-z0-9_.-]{1,300}\}|«[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+»/.test(text))return true;
     return typeof iavra!=="undefined"&&!!iavra&&iavra.detected&&iavraHasReference(text);
 }
@@ -636,7 +638,7 @@ function repairDisplayTerms(source,original,result){
     return result;
 }
 function languageFor(s){
-    if(typeof s!=="string"||!s||s.length>1800)return null;
+    if(typeof s!=="string"||!s||s.length>1800||remNativeSpanishText(s))return null;
     if(externalLocalizationReference(s))return null;
     if(tsvExcluded(s))return null;
     var declared=tsvEntry(s);if(declared&&!actorNames[s])return declared.source;
@@ -669,7 +671,7 @@ var displayUiWords=Object.create(null),displaySignalWords=Object.create(null);
 ("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door click press key target ring closes wrong means instant fail start tap space fill bar time runs lands green zone drag cursor path arrows matching arrow charge gauge release inside target band rotate moving capture reaction marker clicking").split(" ").forEach(function(w){displaySignalWords[w]=true;});
 function displaySource(text,context){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
-       externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
+       remNativeSpanishText(text)||externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
     var source=languageFor(text);if(source)return source;
     var prose=visibleProse(text).replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
@@ -1124,6 +1126,7 @@ function aliasDisplay(source,text){
     return validTranslation(source,text,out,true)?out:null;
 }
 function cachedPart(source,text){
+    if(remNativeSpanishText(text))return text;
     var key=source+"\u0000"+text;
     if(approvedKeys.has(key))return approvedKeys.get(key);
     var fixed=stableDisplay(text,false);
@@ -2040,6 +2043,7 @@ function nativeDisplayProjection(text,context,bitmap){
     if(statusPresentationScope())return statusRenderValue(text);
     if(visuQuestBitmapScope(bitmap))return visuQuestBitmapText(bitmap,text);
     if(ultraHudScope())return ultraHudRender(text);
+    if(remNativeSpanishText(text))return text;
     var phoneLabel=phoneDrawLabel(text);if(phoneLabel!==null)return phoneLabel;
     var external=iavraDisplayValue(text,true);if(external!==null)return external;
     var localized=tsvProject(text,true);if(localized!==null)return localized;
@@ -2895,7 +2899,7 @@ function displayLate(win){
 // All asynchronous results go into the existing validated cache.
 var FIRST_VIEW_LIMIT=8000,FIRST_VIEW_OFFLINE=1500;
 function firstViewRequest(source,text){
-    if(!source||typeof text!=="string"||!text||externalLocalizationReference(text))return;
+    if(!source||typeof text!=="string"||!text||remNativeSpanishText(text)||externalLocalizationReference(text))return;
     addPrefetch(text,true,source);
     var key=source+"\u0000"+text;
     // The message/choice currently blocking presentation bypasses disk-cache
@@ -2932,7 +2936,12 @@ function choiceDisplay(win,raw,requestMissing){
     return null;
 }
 function firstViewMissing(win,raw,choice){
-    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||csvExecutableSyntax(raw))return false;
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||remNativeSpanishText(raw)||csvExecutableSyntax(raw))return false;
+    var remFallback=remNativeFallback(raw);
+    if(remFallback){
+        if(readyText("en",remFallback)!==null||rejectedKeys.get("en\u0000"+remFallback)===Infinity)return false;
+        firstViewRequest("en",remFallback);return true;
+    }
     var externalKey=iavraResolveText(raw);
     if(externalKey){
         if(readyText(externalKey.source,externalKey.text)!==null)return false;
@@ -5063,6 +5072,133 @@ function regularUnder(base,file,max){
             !path.isAbsolute(rel)&&rel.split(/[\\\/]/).indexOf("..")<0;
     }catch(_){return false;}
 }
+function remNativeActive(){
+    return remNative.detected&&typeof ConfigManager!=="undefined"&&
+        typeof RemLanguageSP!=="undefined"&&ConfigManager.remLanguage===RemLanguageSP;
+}
+function remNativeSpanishText(raw){
+    return typeof raw==="string"&&remNativeActive()&&remNative.spanish.has(raw);
+}
+function readRemCatalog(base,name){
+    var file=path.join(base,name);
+    if(!regularUnder(base,file,4*1024*1024))return null;
+    var raw=fs.readFileSync(file,"utf8");
+    if(typeof raw!=="string"||raw.length>4*1024*1024)return null;
+    var doc=JSON.parse(raw.replace(/^\uFEFF/,""));
+    if(!doc||typeof doc!=="object"||Array.isArray(doc)||Object.keys(doc).length>16000)return null;
+    return doc;
+}
+function remCatalogLines(doc,key,field){
+    if(!doc||!Object.prototype.hasOwnProperty.call(doc,key))return null;
+    var v=doc[key],lines=v&&v[field];
+    return Array.isArray(lines)&&lines.length<=256&&lines.every(function(line){
+        return typeof line==="string"&&line.length<=4096&&!/[\u0000\uFFFD]/.test(line);
+    })?lines:null;
+}
+function remIndexSpanish(text){
+    if(typeof text==="string"&&text.trim()&&text.length<=1800&&remNative.spanish.size<60000){
+        remNative.spanish.add(text);
+    }
+}
+function remReadPairs(base,enFile,spFile,field,kind){
+    var en=readRemCatalog(base,enFile),sp=readRemCatalog(base,spFile);
+    if(!en||!sp)return false;
+    var matched=0,valid=0;
+    Object.keys(en).forEach(function(key){
+        if(!/^[A-Za-z0-9_ -]{1,180}$/.test(key))return;
+        var from=remCatalogLines(en,key,field);if(!from||!from.length)return;
+        valid++;
+        var to=remCatalogLines(sp,key,field),raw=from.join("\n");
+        if(to&&to.length){
+            matched++;
+            var shown=to.join("\n");
+            if(raw!==shown){
+                remIndexSpanish(shown);
+                if(from.length===to.length)to.forEach(function(line,i){if(line!==from[i])remIndexSpanish(line);});
+                else to.forEach(function(line){if(from.indexOf(line)<0)remIndexSpanish(line);});
+                return;
+            }
+        }
+        // Some native entries really are untranslated. Only complete plain
+        // English prose is eligible; never infer a name, key or custom macro.
+        if(kind&&/^[A-Za-z][A-Za-z0-9 ,.'’!?;:()\-]{12,399}$/.test(raw)&&
+           /[.!?]$/.test(raw)&&!/[áéíóúüñ¿¡]/i.test(raw)&&
+           remNative.fallback.size<2000)
+            remNative.fallback.set(kind+":"+key,raw);
+    });
+    return valid>0&&matched>0&&matched/valid>=0.75;
+}
+function detectRemNative(){
+    if(isMZ||!content||typeof ConfigManager==="undefined"||typeof TextManager==="undefined"||
+       typeof RemLanguageSP==="undefined"||typeof RemLanguageEN==="undefined"||
+       !integer(RemLanguageSP)||!integer(RemLanguageEN)||RemLanguageSP===RemLanguageEN||
+       typeof ConfigManager.applyData!=="function"||typeof TextManager.getLocalizedMapMappings!=="function"||
+       typeof TextManager.getLocalizedDescriptionMappings!=="function"||
+       typeof TextManager.remMiscMapText!=="function"||typeof TextManager.remMiscDescriptionText!=="function"||
+       !["RemtairyTextManager","RemtairyTextManager_SP","RemtairyConfigManager","RemtairyMisc","RemtairyLines"].every(function(name){
+           return typeof $plugins!=="undefined"&&Array.isArray($plugins)&&$plugins.some(function(p){return p&&p.status&&p.name===name;});
+       }))return;
+    try{
+        var base=path.join(content,"loc");
+        if(!directoryUnder(content,base))return;
+        var maps=TextManager.getLocalizedMapMappings(),descs=TextManager.getLocalizedDescriptionMappings();
+        if(!maps||!descs||typeof maps.has!=="function"||typeof descs.has!=="function"||
+           !maps.has(RemLanguageSP)||!descs.has(RemLanguageSP))return;
+        if(!remReadPairs(base,"RemMap_EN.json","RemMap_SP.json","text","MAP")||
+           !remReadPairs(base,"RemDesc_EN.json","RemDesc_SP.json","text","DESC")||
+           !remReadPairs(base,"RemLines.json","RemLines_SP.json","en",null)){
+            remNative.spanish.clear();remNative.fallback.clear();return;
+        }
+        remNative.detected=true;
+        // The authored difficulty event chooses language-specific pictures.
+        // Before auto-selecting Spanish, ensure those variants actually
+        // exist locally (ordinary PNG or RPG Maker encrypted PNG).
+        var pics=path.join(content,"img","pictures");
+        remNative.images=directoryUnder(content,pics)&&["easy","normal","hard"].every(function(mode){
+            return [1,2].every(function(i){
+                var name="difficulty_"+mode+i+"_SP";
+                return [".png",".rpgmvp"].some(function(ext){return regularUnder(pics,path.join(pics,name+ext),64*1024*1024);});
+            });
+        });
+    }catch(_){remNative.detected=false;remNative.images=false;remNative.spanish.clear();remNative.fallback.clear();}
+}
+function preferRemNativeSpanish(){
+    if(!remNative.detected||remNative.configured)return;
+    remNative.configured=true;
+    // A Spanish-target translator may prefer the author's Spanish text for
+    // an English-language boot. Never rewrite a voice setting or call save.
+    // A later explicit language change is left entirely to the game.
+    if(remNative.images&&ConfigManager.remLanguage===RemLanguageEN)
+        ConfigManager.remLanguage=RemLanguageSP;
+}
+function remNativeFallback(raw){
+    if(!remNativeActive()||typeof raw!=="string")return null;
+    var m=/^(?:\\|\x1b)REM_(MAP|DESC)\[([A-Za-z0-9_]{1,180})\]$/i.exec(raw);
+    if(!m)return null;
+    var body=remNative.fallback.get(m[1].toUpperCase()+":"+m[2]);
+    return body&&languageFor(body)==="en"?body:null;
+}
+function hookRemNative(){
+    if(!remNative.detected)return;
+    var apply=ConfigManager.applyData;
+    ConfigManager.applyData=function(){
+        var out=apply.apply(this,arguments);preferRemNativeSpanish();return out;
+    };
+    // Only these native text accessors, never the identifier, menu branch,
+    // database object, loaded catalog or language mapping itself.
+    [["remMiscMapText","MAP"],["remMiscDescriptionText","DESC"]].forEach(function(pair){
+        var method=pair[0],native=TextManager[method];
+        TextManager[method]=function(id){
+            var raw=native.apply(this,arguments);
+            if(!remNativeActive()||typeof id!=="string"||inputFormActive())return raw;
+            var candidate=remNative.fallback.get(pair[1]+":"+id);
+            if(!candidate||candidate!==raw||languageFor(raw)!=="en")return raw;
+            var value=readyText("en",raw);
+            if(value!==null)return value;
+            firstViewRequest("en",raw);return raw;
+        };
+    });
+}
 function directoryUnder(base,dir){
     try{
         var st=fs.lstatSync(dir),rel=path.relative(base,fs.realpathSync(dir));
@@ -5522,7 +5658,7 @@ function scanExtraSources(dataDir,done){
 }
 
 function addPrefetch(text,priority,trustedLang){
-    if(typeof text!=="string"||!text)return;
+    if(typeof text!=="string"||!text||remNativeSpanishText(text)||remNative.detected&&externalLocalizationReference(text))return;
     if(tsvRef(text)){if(priority)tsvPrioritize(text);return;}
     if(tsvExcluded(text))return;
     learnReadings(text);
@@ -5956,6 +6092,7 @@ function hookTitleStart(){
        typeof Scene_Title.prototype.start!=="function")return;
     var proto=Scene_Title.prototype,start=proto.start;
     proto.start=function(){
+        preferRemNativeSpanish();
         var out=start.apply(this,arguments);
         if(externalTables()){queueFlush();nextPrefetch();}
         if(!runtimeActivated){
@@ -5992,7 +6129,7 @@ function hookTitleStart(){
         if(this._iaTitleProgress)this._iaTitleProgress.hide();
         // TSV games start immediately; F10 still exposes preparation.
         // The queue belongs to the process, not the title scene.
-        if(tsv.detected){startFullScan();nextPrefetch();return launch.apply(this,arguments);}
+        if(tsv.detected||remNativeActive()){startFullScan();nextPrefetch();return launch.apply(this,arguments);}
         var info=firstMapProgress();
         if((!tableStats.root&&scanStats.done&&!initialMapFile)||info.complete||!content||
            !this._commandWindow||typeof this._commandWindow.activate!=="function"||
@@ -6148,7 +6285,7 @@ function setupHud(){
 try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";setupHud();
-    state.phase="RUTA";initPaths();detectRootCsv();detectTsv();detectIavraLocalization();
+    state.phase="RUTA";initPaths();detectRootCsv();detectTsv();detectIavraLocalization();detectRemNative();
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
     loadDisplayMacros();startPersistentCache();
@@ -6158,7 +6295,7 @@ try{
     state.phase="OPCIONES";hookChoices();
     hookChoiceFirstView();hookCsvChoiceLabels();
     state.phase="INTERFAZ";hookInputForm();
-    hookBuiltinNameInputScene();hookNativeSurface();hookAuthoredMZ();hookTitleStart();
+    hookBuiltinNameInputScene();hookNativeSurface();hookAuthoredMZ();hookRemNative();hookTitleStart();
     state.phase="CONEXION";loadIavraCatalogs(function(){startFullScan();nextPrefetch();});startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.
