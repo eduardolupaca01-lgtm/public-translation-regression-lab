@@ -202,7 +202,59 @@ async function runCompressedMZ(){
     for(const [file,raw] of originals)assert.equal(fs.readFileSync(file,"utf8"),raw,"IA_R18_COMPRESSED_ORIGINAL_CHANGED");
     console.log("SERVIDOR_V2_R18_REAL_OPUS_COMPRESSED_MZ_IAVRA_DIALOG_CHOICE_POPUP_PASS");
 }
+async function runCteMZ(){
+    assert.ok(isMZ,"IA_R20_CTE_MZ_REQUIRED");
+    const registry=fs.readFileSync(path.join(content,"js","plugins.js"),"utf8");
+    ctx.$plugins=JSON.parse(registry.slice(registry.indexOf("["),registry.lastIndexOf("]")+1));
+    ctx.Input.keyMapper={121:"debug",90:"ok"};
+    let physicalKey=null;
+    ctx.window.addEventListener=(type,cb,capture)=>{if(type==="keydown"&&capture)physicalKey=cb;};
+    ctx.window.__IA_TRADUCTORA_TEST_HOOKS__=true;
+    Window_Base.prototype.convertEscapeCharacters=function(raw){return raw.replace(/\\/g,"\x1b");};
+    Window_ChoiceList.prototype.convertEscapeCharacters=function(raw){return Window_Base.prototype.convertEscapeCharacters.call(this,raw);};
+    Window_Message.prototype.startMessage=function(){this.starts++;this.painted=Window_Base.prototype.convertEscapeCharacters.call(this,gameMessage.allText());};
+    const scene=new Scene_Map();ctx.SceneManager._scene=scene;
+    vm.runInNewContext(source,ctx,{filename:"IATraductora.js"});
+    scene.createAllWindows();
+    assert.equal(ctx.Input.keyMapper[121],"debug","IA_R20_ORIGINAL_F10_MAPPING_CHANGED");
+    ctx.Input.keyMapper={121:"debug",90:"ok"};
+    assert.equal(typeof physicalKey,"function");
+    physicalKey({key:"F10",preventDefault(){},stopImmediatePropagation(){}});
+    assert.ok(scene._iaPanel.visible,"IA_R20_PHYSICAL_F10_NOT_OPEN");
+    await until(()=>{
+        scene.update();scene._iaPanel.refresh();
+        return scene._iaPanel.drawn.some(v=>v.includes("IA local conectada"))&&ctx.window.__IA_TRADUCTORA_TEST__.done();
+    },120000,"IA_R20_CTE_WORKER_NOT_CONNECTED");
+    assert.ok(ctx.window.__IA_TRADUCTORA_TEST__.inventorySize()>=1200,"IA_R20_CTE_LARGE_INVENTORY_MISSING");
+    // No draw call before this assertion. The worker must process missing
+    // priority catalog text while the active scene is a real map fixture.
+    await until(()=>{
+        scene.update();scene._iaPanel.refresh();
+        return scene._iaPanel.drawn.some(v=>/Recibidas: [1-9]\d*/.test(v));
+    },120000,"IA_R20_CTE_PREFETCH_STARVED");
+    const win=new Window_Base(new Rectangle(0,0,600,200));
+    const raw="The lantern is on the table.";
+    await until(()=>/linterna|farol|lámpara/i.test(win.convertEscapeCharacters(raw)),120000,"IA_R20_CTE_NEURAL_TEXT_MISSING");
+    gameMessage._texts=[raw];const msg=new Window_Message();
+    msg.update();await until(()=>{msg.update();return msg.starts===1;},15000,"IA_R20_CTE_DIALOG_TIMEOUT");
+    assert.ok(/linterna|farol|lámpara/i.test(msg.painted)&&/mesa/i.test(msg.painted),"IA_R20_CTE_DIALOG_NOT_SPANISH");
+    assert.equal(gameMessage.allText(),raw);
+    gameMessage.setChoices(["Open the wooden gate.","Wait here."]);
+    const choice=new Window_ChoiceList();
+    choice._list=gameMessage._choices.map((name,i)=>({name,ext:i,symbol:"choice",enabled:i===0}));
+    choice._list.forEach((_,i)=>choice.drawItem(i));
+    assert.equal(choice.painted[0],"Abre la puerta de madera.");
+    assert.equal(choice.painted[1],"Espera aquí.");
+    assert.equal(choice._list[1].ext,1);assert.equal(choice._list[1].enabled,false);
+    assert.equal(choice._list[0].name,"Open the wooden gate.");
+    assert.equal(win.convertEscapeCharacters("NEW [A lost lantern] OBJECTIVE"),"NUEVO OBJETIVO DE [Un farol perdido]");
+    assert.equal(win.convertEscapeCharacters("Find the lost key."),"Encuentra la llave perdida.");
+    physicalKey({key:"F10",preventDefault(){},stopImmediatePropagation(){}});
+    assert.equal(scene._iaPanel.visible,false);
+    console.log("SERVIDOR_V2_R20_REAL_OPUS_CTE_F10_LARGE_INVENTORY_DIALOG_CHOICE_QUEST_PASS");
+}
 async function run(){
+    if(process.argv[3]==="--cte")return runCteMZ();
     if(process.argv[3]==="--por")return runCompressedMZ();
     // This is the CI-created synthetic acceptance game, not a user's game.
     const root=path.join(content,"csv"),sheet=path.join(root,"sheet.csv");

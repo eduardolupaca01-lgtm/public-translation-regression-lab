@@ -1,0 +1,22 @@
+"use strict";
+const fs=require("node:fs"),path=require("node:path");
+const root=path.resolve(process.argv[2]),js=path.join(root,"js"),data=path.join(root,"data"),base=path.join(root,"languages");
+for(const dir of [path.join(js,"plugins"),data,path.join(base,"EN"),path.join(base,"ES")])fs.mkdirSync(dir,{recursive:true});
+fs.writeFileSync(path.join(root,"Game.exe"),Buffer.from([77,90,0,0]));
+for(const name of ["rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows"])fs.writeFileSync(path.join(js,name+".js"),"// synthetic MZ marker\n");
+const plugins=["thirdparty/CustomTranslationEngine","auramz/quests","auramz/extra_buttons"].map(name=>({name,status:true,parameters:{}}));
+fs.writeFileSync(path.join(js,"plugins.js"),"var $plugins = "+JSON.stringify(plugins)+";");
+function put(dir,file,doc){fs.writeFileSync(path.join(dir,file),JSON.stringify(doc));}
+put(data,"System.json",{locale:"en_US",startMapId:1});
+put(base,"Languages.json",{codes:{EN:1,ES:.8}});
+const en=path.join(base,"EN"),es=path.join(base,"ES"),rows={};
+for(let i=0;i<1350;i++)rows["message-"+i]="Please bring the crate number "+(i+1)+".";
+put(en,"Actors.json",{"actor-1":{name:"Alice"}});
+put(en,"AllCommons.json",{"common-1":{"message-1":"The lantern is on the table.","choice-1":"Open the wooden gate.\nWait here."}});
+put(es,"AllCommons.json",{"common-1":{"message-1":"","choice-1":"Abre la puerta de madera.\nEspera aquí."}});
+put(en,"Map002.json",{events:{"1":{pages:{"0":rows}}}});
+put(en,"AllPlugins.json",{plugins:{"auramz/quests":{newObjectiveLabel_cte:"NEW [%1] OBJECTIVE"}}});
+put(es,"AllPlugins.json",{plugins:{"auramz/quests":{newObjectiveLabel_cte:"NUEVO OBJETIVO DE [%1]"}}});
+put(en,"Quests.json",{"0":{title_cte:"A lost lantern",objectives_cte:{"0":"Find the lost key."}}});
+put(es,"Quests.json",{"0":{title_cte:"Un farol perdido",objectives_cte:{"0":"Encuentra la llave perdida."}}});
+console.log("IA_R20_CTE_FIXTURE_CREATED");

@@ -2533,6 +2533,69 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR20CteLargeInventoryAndPhysicalF10(){
+    const root=path.join("/tmp","servidor-qa-cte-large-日本語"),data=path.join(root,"data"),base=path.join(root,"languages"),
+        en=path.join(base,"EN"),es=path.join(base,"ES");
+    const state={files:{},dirs:{[data]:true,[base]:true,[en]:true,[es]:true}};
+    const priority="Please bring the silver lantern.",priorityEs="Por favor, trae el farol de plata.";
+    const source="\\c[2]Important notice:\\c[0] The garden is open.\nPlease wait here.",
+        target="\\c[2]Aviso importante:\\c[0] El jardín está abierto. Espera aquí.";
+    const title="A lost lantern",titleEs="Un farol perdido",objective="Find the lost key.",objectiveEs="Encuentra la llave perdida.";
+    const rows={};
+    for(let i=0;i<1350;i++)rows["message-"+i]="Please bring the crate number "+(i+1)+".";
+    function put(folder,file,doc){state.files[path.join(folder,file)]=JSON.stringify(doc);}
+    put(data,"System.json",{locale:"en_US",startMapId:1});
+    put(base,"Languages.json",{codes:{EN:1,ES:.8}});
+    put(en,"Actors.json",{"actor-1":{name:"Alice"}});
+    put(en,"AllCommons.json",{"common-1":{"message-1":priority,"message-2":source}});
+    put(es,"AllCommons.json",{"common-1":{"message-1":"","message-2":target}});
+    put(en,"Map002.json",{events:{"1":{pages:{"0":rows}}}});
+    put(en,"AllPlugins.json",{plugins:{"auramz/quests":{newObjectiveLabel_cte:"NEW [%1] OBJECTIVE"}}});
+    put(es,"AllPlugins.json",{plugins:{"auramz/quests":{newObjectiveLabel_cte:"\`Malformed [%1]]\`"}}});
+    put(en,"Quests.json",{"0":{title_cte:title,objectives_cte:{"0":objective}}});
+    put(es,"Quests.json",{"0":{title_cte:titleEs,objectives_cte:{"0":objectiveEs}}});
+    let onKey,overlay;
+    const f=fixture(50,{root,mz:true,fsState:state,testHooks:true,
+        plugins:["thirdparty/CustomTranslationEngine","auramz/quests","auramz/extra_buttons"].map(name=>({name,status:true,parameters:{}})),
+        responses:{[priority]:priorityEs},configure(c){
+            c.SceneManager._scene=new c.Scene_Map();
+            c.Input.keyMapper={121:"debug",90:"ok"};
+            c.window.addEventListener=(type,cb,capture)=>{if(type==="keydown"&&capture)onKey=cb;};
+            c.document={getElementById(){return null;},body:{appendChild(el){overlay=el;}},
+                createElement(){return {style:{},textContent:""};}};
+            c.Window_Base.prototype.convertEscapeCharacters=function(raw){return raw.replace(/\\/g,"\x1b");};
+            c.Window_Base.prototype.drawTextEx=function(v){this.lastTextEx=this.convertEscapeCharacters(v);return this.lastTextEx.length;};
+        }});
+    const c=f.context;
+    assert.equal(c.Input.keyMapper[121],"debug");
+    c.Input.keyMapper={121:"debug",90:"ok"}; // custom controls reloaded at runtime
+    c.SceneManager._scene.createAllWindows();
+    assert.equal(typeof onKey,"function");
+    let prevented=0,stopped=0;
+    const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("R20"));
+    onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
+    onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
+    onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
+    assert.equal(c.Input.keyMapper[90],"ok");
+    const until=async predicate=>{const end=Date.now()+8000;while(Date.now()<end){if(predicate())return;await wait(25);}assert.fail("R20 timeout");};
+    await until(()=>c.window.__IA_TRADUCTORA_TEST__.done());
+    assert.ok(c.window.__IA_TRADUCTORA_TEST__.inventorySize()>=1200);
+    // This must be sent by the prefetch queue without any rendering request
+    // and while Scene_Map is active. R19's large-inventory guard starved it.
+    await until(()=>f.posts.some(p=>p.text===priority));
+    const w=new c.Window_Base(new c.Rectangle(0,0,600,200));
+    await until(()=>w.convertEscapeCharacters(priority)===priorityEs);
+    const rewrapped=source.replace("\n","   ");
+    assert.equal(w.convertEscapeCharacters(rewrapped),target.replace(/\\/g,"\x1b"));
+    assert.equal(w.convertEscapeCharacters(target),target.replace(/\\/g,"\x1b"));
+    const b=new c.Bitmap(500,60);
+    b.drawText("NEW ["+title+"] OBJECTIVE",0,0,400,30);
+    assert.equal(b.lastText,"NUEVO OBJETIVO DE ["+titleEs+"]");
+    b.drawText(objective,0,0,400,30);assert.equal(b.lastText,objectiveEs);
+    assert.equal(w.convertEscapeCharacters("NEW [%1] OBJECTIVE"),"NUEVO OBJETIVO DE [%1]");
+    assert.ok(!f.posts.some(p=>p.text===target||p.text===source||p.text.includes("%1")));
+}
 async function testR19CteNativeChoicesAndCatalogs(){
     const root=path.join("/tmp","servidor-qa-cte-日本語"),data=path.join(root,"data"),
         languages=path.join(root,"languages"),en=path.join(languages,"EN"),es=path.join(languages,"ES");
@@ -3333,6 +3396,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR20CteLargeInventoryAndPhysicalF10();
     await testR19CteNativeChoicesAndCatalogs();
     await testR17CompressedNativeMZ();
     await testR16HexChoicesAndChauPopup();

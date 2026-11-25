@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R19-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R20-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -4125,9 +4125,11 @@ function bindNativeMessageBitmap(win){
 // R19: native context-sensitive localization owns all event/choice data.
 // For the verified CTE JSON dialect, use a separate read-only display path.
 var cte={enabled:false,started:false,done:false,known:new Map(),spanish:new Set(),speakers:new Set(),
-    paired:0,missing:0,choiceMismatch:0,conflicts:0,errors:0,depth:0,paint:0,frame:null};
+    paired:0,missing:0,choiceMismatch:0,conflicts:0,errors:0,depth:0,paint:0,frame:null,
+    aliases:new Map(),spanishFlat:new Set(),fragments:new Set(),questTitles:new Set(),questTemplate:false};
+function cteProfile(){return isMZ&&pluginEnabled(/^(?:thirdparty\/)?CustomTranslationEngine$/);}
 function detectCte(){
-    if(!isMZ||!pluginEnabled(/^(?:thirdparty\/)?CustomTranslationEngine$/)||!content)return;
+    if(!cteProfile()||!content)return;
     var base=path.join(content,"languages"),en=path.join(base,"EN"),es=path.join(base,"ES");
     if(!directoryUnder(content,base)||!directoryUnder(base,en)||!directoryUnder(base,es)||
        !regularUnder(base,path.join(base,"Languages.json"),65536)||
@@ -4141,6 +4143,7 @@ function detectCte(){
 function cteNormal(text){
     return text.replace(/\r\n/g,"\n").replace(/(?:\\|\x1b)([ci])\[(\d{1,4})\]/gi,function(_,c,n){return "\\"+c.toLowerCase()+"["+n+"]";});
 }
+function cteFlat(raw){return cteNormal(raw).replace(/[ \t\n]+/g," ").trim();}
 function cteSafe(raw){
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||/[\u0000\uFFFD]|[\r](?!\n)|(?:^|\n)\s*[@＠]|[<>{}]|%[0-9]|\$\{|(?:^|\n)\s*\/\//.test(raw))return false;
     var prose=cteNormal(raw).replace(/\\[ci]\[\d{1,4}\]/g,"");
@@ -4156,7 +4159,7 @@ function ctePair(raw,value,priority,speaker){
     if(typeof value==="string"&&cteSafe(value)&&cteNormal(value)!==key&&
        cteSignature(raw)===cteSignature(value)&&numbersIn(raw)===numbersIn(value)){
         target=cteNormal(value);
-        if(cte.spanish.size<100000)cte.spanish.add(target);
+        if(cte.spanish.size<100000){cte.spanish.add(target);cte.spanishFlat.add(cteFlat(target));}
     }
     if(speaker){
         // Punctuated narrative captions, not personal names or actor IDs.
@@ -4165,12 +4168,26 @@ function ctePair(raw,value,priority,speaker){
     }
     var old=cte.known.get(key);
     if(old){
-        if(old.target!==target){if(!old.conflict)cte.conflicts++;old.conflict=true;}
+        if(old.target!==null&&target!==null&&old.target!==target){
+            if(!old.conflict)cte.conflicts++;old.conflict=true;
+        }else if(old.target===null&&target!==null){
+            old.target=target;cte.missing=Math.max(0,cte.missing-1);cte.paired++;
+        }
         old.priority=old.priority||priority;
         return;
     }
-    cte.known.set(key,{raw:key,target:target,priority:!!priority,conflict:false});
+    cte.known.set(key,{raw:key,target:target,priority:!!priority,conflict:false,declared:true});
+    var flat=cteFlat(key);
+    if(!cte.aliases.has(flat))cte.aliases.set(flat,key);
+    else if(cte.aliases.get(flat)!==key)cte.aliases.set(flat,null);
     if(target!==null)cte.paired++;else cte.missing++;
+    // Native word wrapping sometimes resolves a line independently. These
+    // are eligible for inference, not an invented correspondence between
+    // English and Spanish lines with different line counts.
+    if(!speaker&&key.indexOf("\n")>=0&&cte.fragments.size<50000)
+        key.split("\n").forEach(function(line){
+            if(cteSafe(line)&&languageFor(line)==="en")cte.fragments.add(cteNormal(line));
+        });
 }
 function cteField(file,keys){
     var last=keys[keys.length-1]||"",joined=keys.join("/");
@@ -4195,6 +4212,12 @@ function cteCatalog(file,en,es){
         if(typeof a==="string"){
             if(!cteField(file,keys))return;
             var last=keys[keys.length-1];
+            if(file==="AllPlugins.json"&&keys.join("/")==="plugins/auramz/quests/newObjectiveLabel_cte"&&
+               a==="NEW [%1] OBJECTIVE"&&pluginEnabled(/^auramz\/quests$/))cte.questTemplate=true;
+            if(file==="Quests.json"&&last==="title_cte"){
+                if(cteSafe(a))cte.questTitles.add(cteNormal(a));
+                if(cteSafe(b))cte.questTitles.add(cteNormal(b));
+            }
             if(/^choice-\d+$/.test(last)){
                 var src=a.split(/\r?\n/),dest=typeof b==="string"?b.split(/\r?\n/):[];
                 // Do not shift options by pairing a truncated translation.
@@ -4227,20 +4250,27 @@ function startCteScan(){
     var base=path.join(content,"languages"),en=path.join(base,"EN"),es=path.join(base,"ES");
     fs.readdir(en,function(err,names){
         if(err){cte.done=true;scanStats.done=true;cte.errors++;return;}
-        var order=["Actors.json","AllCommons.json","Map001.json","AllPlugins.json","Speakers.json","Quests.json","TemplateMessages.json","Compendium.json","System.json","Items.json","Weapons.json","Armors.json","Skills.json","States.json","Classes.json","Enemies.json","Costumes.json","AllTroops.json"];
+        var order=["Actors.json","AllPlugins.json","Quests.json","Map001.json","AllCommons.json","Speakers.json","TemplateMessages.json","Compendium.json","System.json","Items.json","Weapons.json","Armors.json","Skills.json","States.json","Classes.json","Enemies.json","Costumes.json","AllTroops.json"];
         var files=names.filter(function(n){return order.indexOf(n)>=0||/^Map\d{3,6}\.json$/.test(n);}).sort(function(a,b){
             var x=order.indexOf(a),y=order.indexOf(b);return (x<0?99:x)-(y<0?99:y)||a.localeCompare(b);
         }).slice(0,800);
         scanStats.totalFiles=files.length;var at=0;
         function step(){
             if(at>=files.length){
-                cte.done=true;scanStats.done=true;
-                // Only missing, unambiguous display fields need OPUS.
-                cte.known.forEach(function(entry,key){
-                    if(!entry.conflict&&!entry.target&&!cte.spanish.has(key)&&!actorNames[key]&&languageFor(key)==="en")
-                        authoredRemember("en",key,entry.priority);
-                });
-                nextPrefetch();return;
+                // Slice a large inventory so the game UI remains responsive.
+                // Existing catalog pairs are already available during this scan.
+                var iterator=cte.known.entries();
+                function enqueueSlice(){
+                    for(var n=0;n<200;n++){
+                        var item=iterator.next();
+                        if(item.done){cte.done=true;scanStats.done=true;nextPrefetch();return;}
+                        var key=item.value[0],entry=item.value[1];
+                        if(!entry.conflict&&!entry.target&&!cte.spanishFlat.has(cteFlat(key))&&!actorNames[key]&&cteSource(entry))
+                            authoredRemember("en",key,entry.priority);
+                    }
+                    setTimeout(enqueueSlice,0);
+                }
+                enqueueSlice();return;
             }
             var file=files[at++];
             try{var src=cteReadCatalog(en,file),dest=cteReadCatalog(es,file);if(src)cteCatalog(file,src,dest);else scanStats.skipped++;}
@@ -4250,22 +4280,47 @@ function startCteScan(){
         step();
     });
 }
-function cteEntry(raw,speaker){
-    if(!cteSafe(raw)||actorNames[raw])return null;
-    var key=cteNormal(raw);
-    if(cte.spanish.has(key)||speaker&&!cte.speakers.has(key))return null;
-    var entry=cte.known.get(key);
-    return entry&&!entry.conflict?entry:null;
+function cteSource(entry){
+    if(!entry||!cteSafe(entry.raw)||actorNames[entry.raw])return false;
+    return languageFor(entry.raw)==="en"||
+        entry.declared===true&&authoredSource(entry.raw,true)==="en";
 }
-function cteResult(raw,request,converted,speaker){
-    if(!cte.enabled||!cte.done||inputFormActive())return raw;
-    var entry=cteEntry(raw,speaker);
+function cteEntry(raw,speaker,live){
+    if(!cteSafe(raw)||actorNames[raw])return null;
+    var key=cteNormal(raw),flat=cteFlat(key);
+    if(cte.spanish.has(key)||cte.spanishFlat.has(flat))return null;
+    if(cte.known.has(key)){
+        var exact=cte.known.get(key);
+        return !exact.conflict&&(!speaker||cte.speakers.has(key))?exact:null;
+    }
+    if(cte.aliases.has(flat)){
+        var alias=cte.aliases.get(flat),entry=alias!==null&&cte.known.get(alias);
+        return entry&&!entry.conflict&&(!speaker||cte.speakers.has(alias))?entry:null;
+    }
+    // A resolved display fragment from a proven catalog, or a genuine
+    // message/choice surface. Never infer arbitrary JS or an identity.
+    if(!speaker&&(cte.fragments.has(key)||live===true)&&languageFor(key)==="en")
+        return {raw:key,target:null,priority:true,conflict:false};
+    return null;
+}
+function cteQuestLabel(raw,request){
+    if(!cte.questTemplate||typeof raw!=="string")return null;
+    if(raw==="NEW [%1] OBJECTIVE")return "NUEVO OBJETIVO DE [%1]";
+    var m=/^NEW \[([^\[\]\r\n]{1,180})\] OBJECTIVE$/.exec(raw);
+    if(!m||!cte.questTitles.has(cteNormal(m[1])))return null;
+    return "NUEVO OBJETIVO DE ["+cteResult(m[1],request,false,false,false)+"]";
+}
+function cteResult(raw,request,converted,speaker,live){
+    if(!cte.enabled||inputFormActive()||typeof raw!=="string")return raw;
+    var label=!speaker?cteQuestLabel(raw,request):null;
+    if(label!==null)return label;
+    var entry=cteEntry(raw,speaker,live);
     if(!entry)return raw;
     var value=entry.target;
     if(!value){
-        // The model receives only proven English display prose; never
-        // conditional expressions, identifiers or unresolved custom tags.
-        if(languageFor(entry.raw)!=="en")return raw;
+        // Native lookup completed. Only safe visible English is submitted.
+        if(!cteSource(entry))return raw;
+        if(!authoredDisplay.has(entry.raw))authoredDisplay.set(entry.raw,"en");
         value=readyText("en",entry.raw);
         if(!value||!cteSafe(value)||!validTranslation("en",entry.raw,value,true)||
            cteSignature(entry.raw)!==cteSignature(value)){
@@ -4322,7 +4377,9 @@ function hookCteConversion(proto,own){
         var shown=out;
         try{
             var speaker=this._iaNameSurface||typeof Window_NameBox!=="undefined"&&this instanceof Window_NameBox;
-            if(!identityDrawDepth)shown=cteResult(out,true,true,speaker);
+            var live=!!frame||typeof Window_Message!=="undefined"&&this instanceof Window_Message||
+                typeof Window_ChoiceList!=="undefined"&&this instanceof Window_ChoiceList;
+            if(!identityDrawDepth)shown=cteResult(out,true,true,speaker,live);
         }catch(_){cte.errors++;shown=out;}
         if(typeof shown!=="string"||(!shown.trim()&&out.trim()))shown=out;
         if(frame){frame.resolved=out;frame.shown=shown;}
@@ -4345,8 +4402,10 @@ function hookCte(){
             var args=Array.prototype.slice.call(arguments),frame=cte.frame&&cte.frame.win===this?cte.frame:null;
             if(!this._iaOwnSurface&&!inputFormActive()){
                 if(method==="drawTextEx"&&typeof args[0]!=="string")args[0]=frame?frame.raw:"";
-                if(method==="drawText"&&typeof args[0]==="string"&&!cte.depth&&!cte.paint&&!identityDrawDepth)
-                    args[0]=cteResult(args[0],true,false,!!this._iaNameSurface);
+                if(method==="drawText"&&typeof args[0]==="string"&&!cte.depth&&!cte.paint&&!identityDrawDepth){
+                    var original=args[0];args[0]=cteResult(original,true,false,!!this._iaNameSurface,!!frame);
+                    if(args[0]!==original)state.shown++;
+                }
             }
             cte.paint++;try{return native.apply(this,args);}finally{cte.paint--;}
         };
@@ -4358,8 +4417,9 @@ function hookCte(){
             var native=Bitmap.prototype[method];if(typeof native!=="function")return;
             Bitmap.prototype[method]=function(text){
                 if(cte.depth||cte.paint||identityDrawDepth||inputFormActive()||typeof text!=="string"||
-                   !/\s|[.!?]/.test(text)||/[\x1b\\]/.test(text))return native.apply(this,arguments);
-                var args=Array.prototype.slice.call(arguments);args[0]=cteResult(text,true,false,false);
+                   !/[A-Za-z]{2}/.test(text)||/[\x1b\\]/.test(text))return native.apply(this,arguments);
+                var args=Array.prototype.slice.call(arguments);args[0]=cteResult(text,true,false,false,false);
+                if(method==="drawText"&&args[0]!==text)state.shown++;
                 return native.apply(this,args);
             };
         });
@@ -4406,7 +4466,7 @@ function hookCte(){
                        frame.scene!==(typeof SceneManager!=="undefined"?SceneManager._scene:null)||
                        frame.generation!==(typeof $gameMessage!=="undefined"&&$gameMessage?$gameMessage._iaFirstGeneration||0:0)||
                        typeof frame.resolved!=="string")return;
-                    var ready=cteResult(frame.resolved,true,true,false);
+                    var ready=cteResult(frame.resolved,true,true,false,true);
                     if(ready!==frame.shown){frame.shown=ready;win.redrawItem(i);}
                 });
                 return out;
@@ -4419,13 +4479,13 @@ function hookCte(){
         var wait=Window_Message.prototype.updateWait;
         Window_Message.prototype.updateWait=function(){
             if(wait.apply(this,arguments))return true;
-            if(!cte.done||inputFormActive()||this.pause||this._textState||typeof this.isAnySubWindowActive==="function"&&this.isAnySubWindowActive())return false;
+            if(inputFormActive()||this.pause||this._textState||typeof this.isAnySubWindowActive==="function"&&this.isAnySubWindowActive())return false;
             var m=typeof $gameMessage!=="undefined"?$gameMessage:null;if(!m)return false;
             var raw=typeof m.allText==="function"?m.allText():"",choices=Array.isArray(m._choices)?m._choices:[];
             var missing=[raw].concat(choices).some(function(v){
-                var e=cteEntry(v,false);
-                if(!e||e.target||languageFor(e.raw)!=="en"||rejectedKeys.get("en\u0000"+e.raw)===Infinity)return false;
-                return cteResult(v,true,false,false)===v;
+                var e=cteEntry(v,false,true);
+                if(!e||e.target||!cteSource(e)||rejectedKeys.get("en\u0000"+e.raw)===Infinity)return false;
+                return cteResult(v,true,false,false,true)===v;
             });
             if(!missing){this._iaCteGate=null;return false;}
             var key=JSON.stringify([m._iaFirstGeneration||0,raw,choices]),g=this._iaCteGate,now=Date.now();
@@ -6594,7 +6654,9 @@ function hasQueuedPrefetch(){
 function nextPrefetch(){
     if(prefetchBusy||!state.connected||!cacheReadDone)return;
     var largeInventory=discovered.size>=1200;
-    if(largeInventory&&activeGameplayScene())return;
+    // CTE catalog work must not stop as soon as the player leaves the title.
+    // The existing single-job cap and foreground priority remain in force.
+    if(largeInventory&&activeGameplayScene()&&!cte.enabled)return;
     if(externalTables()&&diskReady&&diskQueue.length>=3000)return;
     if(!hasQueuedPrefetch())return;
     prefetchBusy=true;
@@ -6602,7 +6664,7 @@ function nextPrefetch(){
         var jobs=[];
         function release(){
             prefetchBusy=false;
-            setTimeout(nextPrefetch,discovered.size>=1200?120:(state.batch?15:45));
+            setTimeout(nextPrefetch,cte.enabled&&activeGameplayScene()?300:(discovered.size>=1200?120:(state.batch?15:45)));
         }
         function failed(item){
             if(item.status==="ready")return;
@@ -6767,6 +6829,62 @@ function hookTitleStart(){
         return out;
     };
 }
+// CTE game bindings may reset Input.keyMapper[121] to debug during boot.
+// Keep the original game mapping. A physical plain F10 toggles our own
+// diagnostic overlay; modified F10 and every other key remain native.
+var cteHud={keyHook:false,panel:null,visible:false};
+function cteHudRefresh(){
+    if(!cteHud.visible||!cteHud.panel)return;
+    cteHud.panel.textContent=[
+        "IA Traductora · RPG Maker "+ENGINE_ID,
+        "Español · "+BUILD_ID,
+        "Fase: "+state.phase+" · "+state.status,
+        "Solicitudes: "+state.requested+" · Recibidas: "+state.received+" · Mostradas: "+state.shown,
+        "Caché: "+diskStats.loaded+" cargadas · "+diskStats.saved+" guardadas",
+        "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+" · Omitidos: "+scanStats.skipped,
+        "CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos",
+        "Textos listos: "+scanStats.ready+"/"+discovered.size+" · Fallos: "+scanStats.rejected,
+        "Errores: "+state.errors+" · Avisos CTE: "+cte.errors,
+        "F10: cerrar"
+    ].join("\n");
+}
+function cteHudToggle(){
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    if(typeof document!=="undefined"&&document&&document.body&&typeof document.createElement==="function"){
+        if(!cteHud.panel){
+            var el=document.createElement("pre");
+            el.style.cssText="position:fixed;right:12px;top:12px;z-index:2147483647;max-width:92vw;max-height:88vh;overflow:hidden;white-space:pre-wrap;background:rgba(12,18,29,.94);color:#fff;border:1px solid #8194ad;border-radius:6px;padding:14px;margin:0;font:15px/1.55 sans-serif;pointer-events:none;box-sizing:border-box;";
+            el.style.display="none";document.body.appendChild(el);cteHud.panel=el;
+        }
+        cteHud.visible=!cteHud.visible;cteHud.panel.style.display=cteHud.visible?"block":"none";
+        if(scene&&scene._iaPanel)scene._iaPanel.visible=false;
+        cteHudRefresh();return true;
+    }
+    if(scene&&scene._iaPanel){
+        scene._iaPanel.visible=!scene._iaPanel.visible;
+        if(scene._iaMini)scene._iaMini.visible=!scene._iaPanel.visible;
+        if(scene._iaPanel.visible)scene._iaPanel.refresh();
+        return true;
+    }
+    return false;
+}
+function hookCteHud(){
+    if(!cteProfile()||cteHud.keyHook)return;
+    var host=typeof window!=="undefined"&&window&&typeof window.addEventListener==="function"?window:
+        typeof document!=="undefined"&&document&&typeof document.addEventListener==="function"?document:null;
+    if(!host)return;
+    host.addEventListener("keydown",function(event){
+        if(!event||event.repeat||event.shiftKey||event.altKey||event.ctrlKey||event.metaKey||
+           !(event.key==="F10"||event.code==="F10"||event.keyCode===121)||inputFormActive())return;
+        var target=event.target;
+        if(target&&(target.isContentEditable||/^(?:INPUT|TEXTAREA|SELECT)$/i.test(String(target.tagName||""))))return;
+        try{if(cteHudToggle()){
+            if(typeof event.preventDefault==="function")event.preventDefault();
+            if(typeof event.stopImmediatePropagation==="function")event.stopImmediatePropagation();
+        }}catch(_){state.errors++;}
+    },true);
+    cteHud.keyHook=true;
+}
 function setupHud(){
     if(typeof Window_Base==="undefined"||typeof Scene_Map==="undefined")return;
     function IAMini(){this.initialize.apply(this,arguments);}
@@ -6845,18 +6963,19 @@ function setupHud(){
             try{startFullScan();refreshConnection();}catch(_){state.errors++;}
         }
         try{collectMapText();if(externalTables())nextPrefetch();}catch(_){state.errors++;}
-        if(!inputFormActive()&&Input.isTriggered("ia-traductora")&&this._iaPanel){
+        if(!cteHud.keyHook&&!inputFormActive()&&Input.isTriggered("ia-traductora")&&this._iaPanel){
             this._iaPanel.visible=!this._iaPanel.visible;
             this._iaMini.visible=!this._iaPanel.visible;
         }
         if(this._iaPanel && ++this._iaPanel._tick%30===0&&this._iaPanel.visible)this._iaPanel.refresh();
     };
-    Input.keyMapper[121]="ia-traductora";
+    if(!cteProfile()||!Input.keyMapper[121])Input.keyMapper[121]="ia-traductora";
 }
 try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";setupHud();
     state.phase="RUTA";initPaths();detectRootCsv();detectTsv();detectIavraLocalization();detectRemNative();detectCte();
+    try{hookCteHud();}catch(_){state.errors++;}
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
     loadDisplayMacros();startPersistentCache();
@@ -6879,6 +6998,7 @@ try{
         // Independent of title, menu, map or a closed F10 panel.
         if(runtimeActivated)try{startFullScan();collectMapText();}catch(_){state.errors++;}
         queueFlush();nextPrefetch();
+        try{cteHudRefresh();}catch(_){state.errors++;}
     },750);
     state.phase="ACTIVO";
 }catch(_){
