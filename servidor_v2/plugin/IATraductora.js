@@ -498,7 +498,7 @@ function startPersistentCache(){
                 diskStats.errors++;finish(false);return;
             }
             diskNeedsSeparator=!!data&&data.charAt(data.length-1)!=="\n";
-            var lines=data.split("\n"),limit=Math.min(lines.length,externalTables()?300000:100000);
+            var lines=data.split("\n"),limit=lines.length;
             var at=0,loadedKeys=new Map();
             // Recover only explicit author-provided kana readings, then audit
             // prior results. Do not delete or rewrite the existing journal.
@@ -2631,13 +2631,13 @@ function authoredSource(text,declared){
 }
 function authoredRemember(source,text,priority){
     if(!source)return;
-    if(authoredDisplay.size<MAX_DISCOVERED||authoredDisplay.has(text))authoredDisplay.set(text,source);
+    authoredDisplay.set(text,source);
     addPrefetch(text,priority,source);
 }
 function authoredRead(plan,requestMissing){
     if(!plan)return null;
     if(typeof plan.fixed==="string")return plan.prefix+plan.fixed+plan.suffix;
-    if(!authoredDisplay.has(plan.body)&&authoredDisplay.size<MAX_DISCOVERED)authoredDisplay.set(plan.body,plan.source);
+    if(!authoredDisplay.has(plan.body))authoredDisplay.set(plan.body,plan.source);
     var translated=readyText(plan.source,plan.body);
     if(translated!==null&&validTranslation(plan.source,plan.body,translated,true))
         return plan.prefix+translated+plan.suffix;
@@ -2921,10 +2921,10 @@ function hookChoices(){
 }
 // Read-only full MV inventory. Never parse plugin source, save files, script
 // commands, variable values, filenames, or event conditions as dialogue.
-var prefetchedMap=null,discovered=new Map(),priorityQueue=[],prefetchQueue=[];
+var prefetchedMap=null,discovered=new Map(),priorityQueue=[],prefetchQueue=[],priorityQueueAt=0,prefetchQueueAt=0;
 var initialMapFile="",initialMapScanned=false,initialKeys=new Map(),collectInitial=false;
 var scanStats={files:0,totalFiles:0,ready:0,rejected:0,skipped:0,done:false,limited:false};
-var scanStarted=false,prefetchBusy=false,MAX_DISCOVERED=40000;
+var scanStarted=false,prefetchBusy=false;
 var inkStats={detected:false,files:0,candidates:0,excluded:0};
 var tableStats={files:0,candidates:0,root:false,rootDone:false,rootFiles:0,rootTotal:0,rootSkipped:0,authored:0};
 
@@ -2955,7 +2955,6 @@ function detectTsv(){
     var dir=path.join(content,"data"),file=path.join(dir,"Languages.tsv");
     if(!directoryUnder(content,dir)||!regularUnder(dir,file,4*1024*1024))return;
     tsv.detected=true;tsv.visu=tsvVisuEnabled();
-    MAX_DISCOVERED=Math.max(MAX_DISCOVERED,90000);
     MAX_CACHE_ENTRIES=Math.max(MAX_CACHE_ENTRIES,150000);
     CACHE_LIMIT=Math.max(CACHE_LIMIT,128*1024*1024);
 }
@@ -3461,7 +3460,7 @@ function registerQuestText(text){
        /^\s*(?:[=+@]|\d+\s*$|[\[{])/.test(text)||/\\(?:eval|script)\b/i.test(text))return;
     var source=languageFor(text);
     if(!source&&/^[A-Za-z][A-Za-z0-9 .,'!?:\-]{0,79}$/.test(text))source="en";
-    if(!source||questTexts.has(text)||questTexts.size>=6000)return;
+    if(!source||questTexts.has(text))return;
     questTexts.set(text,source);questStats.fields++;
     addPrefetch(text,false,source);
     // Titles may be drawn by a custom book directly without their color code.
@@ -3470,7 +3469,7 @@ function registerQuestText(text){
 }
 function questValues(value,depth){
     if(depth>5||value===null||value===undefined)return;
-    if(Array.isArray(value)){value.slice(0,250).forEach(function(v){questValues(v,depth+1);});return;}
+    if(Array.isArray(value)){value.forEach(function(v){questValues(v,depth+1);});return;}
     if(typeof value!=="string"||value.length>32768||!value.trim())return;
     if(/^\s*["[]/.test(value)){
         try{var parsed=JSON.parse(value);
@@ -3488,7 +3487,7 @@ function scanQuestParameters(done){
     $plugins.forEach(function(plugin){
         if(!plugin||!plugin.status||!/^YEP_(?:QuestJournal|X_MoreQuests\d+)$/.test(plugin.name)||!plugin.parameters)return;
         Object.keys(plugin.parameters).forEach(function(k){
-            if(/^Quest \d{1,5}$/.test(k)&&tasks.length<1000)tasks.push(plugin.parameters[k]);
+            if(/^Quest \d{1,5}$/.test(k))tasks.push(plugin.parameters[k]);
         });
         if(plugin.name==="YEP_QuestJournal"){
             questValues(plugin.parameters["Quest Command"],0);
@@ -3565,16 +3564,16 @@ function walkInkStory(data,done){
     if(!data||!integer(data.inkVersion)||data.inkVersion<18||data.inkVersion>21||!Array.isArray(data.root)){
         scanStats.skipped++;done();return;
     }
-    var stack=[{values:data.root,index:0,evalMode:false,tag:false}],visited=0;
+    var stack=[{values:data.root,index:0,evalMode:false,tag:false}];
     function addContainer(v,mode,tag){
         if(Array.isArray(v))stack.push({values:v,index:0,evalMode:mode,tag:tag});
     }
     function slice(){
         var budget=700;
-        while(stack.length&&budget--&&discovered.size<MAX_DISCOVERED&&visited<1500000){
+        while(stack.length&&budget--){
             var f=stack[stack.length-1];
             if(f.index>=f.values.length){stack.pop();continue;}
-            var v=f.values[f.index++];visited++;
+            var v=f.values[f.index++];
             if(v==="str"&&f.evalMode&&!f.tag){
                 // Only a simple literal string directly consumed by a visible
                 // choice point (flags 2/4). Never translate arbitrary eval values.
@@ -3622,8 +3621,7 @@ function walkInkStory(data,done){
                 });
             }
         }
-        if(stack.length&&discovered.size<MAX_DISCOVERED&&visited<1500000){setTimeout(slice,0);return;}
-        if(stack.length)scanStats.limited=true;
+        if(stack.length){setTimeout(slice,0);return;}
         inkStats.files++;scanStats.files++;done();
     }
     slice();
@@ -3659,7 +3657,6 @@ function csvRows(raw,maxRows){
         if(ch==="\r"||ch==="\n"){
             if(ch==="\r"&&raw.charAt(i+1)==="\n")i++;
             row.push(cell);rows.push(row);row=[];cell="";closed=false;
-            if(rows.length>(maxRows||25000))return null;
         }else cell+=ch;
     }
     if(quoted)return null;
@@ -3677,7 +3674,8 @@ function detectRootCsv(){
     // each file must still match an explicit display schema.
     tableStats.root=true;
     // Bounded larger inventory/cache only for the detected external tables.
-    MAX_DISCOVERED=90000;MAX_CACHE_ENTRIES=150000;CACHE_LIMIT=128*1024*1024;
+    // Keep the in-memory translation cache bounded; candidate discovery has no fixed count ceiling.
+    MAX_CACHE_ENTRIES=150000;CACHE_LIMIT=128*1024*1024;
     return true;
 }
 function csvNormalize(value){
@@ -3709,7 +3707,6 @@ function csvControlSignature(text){
     return protectedParts(text).filter(function(p){return p.locked;}).map(function(p){return p.value;}).join("\u0002");
 }
 function csvMark(source,text){
-    if(csvKnown.size>=250000&&!csvKnown.has(text)){scanStats.limited=true;return;}
     csvKnown.set(text,source);
     var key=csvRenderKey(text);
     if(key&&key!==text){
@@ -3724,8 +3721,7 @@ function csvSetUnique(map,key,value,equals){
     if(map.has(key)){
         var old=map.get(key);
         if(old!==null&&!equals(old,value))map.set(key,null);
-    }else if(map.size<150000)map.set(key,value);
-    else scanStats.limited=true;
+    }else map.set(key,value);
 }
 function csvSpanish(value){
     return typeof value==="string"&&!isJapanese(visibleProse(value))&&
@@ -3866,13 +3862,13 @@ function rootCsvSchema(relative,rows){
     return {type:"generic",id:id,start:1,width:h.length,groups:[[j,e,z]]};
 }
 function scanRootCsvFile(relative,raw,done){
-    var rows=csvRows(raw.replace(/^\uFEFF/,""),100000),schema=rows&&rootCsvSchema(relative,rows);
+    var rows=csvRows(raw.replace(/^\uFEFF/,"")),schema=rows&&rootCsvSchema(relative,rows);
     if(!schema){tableStats.rootSkipped++;scanStats.skipped++;done();return;}
     var at=schema.start,openText=false,mapId=0;
     var startMap=Number((initialMapFile.match(/\d+/)||["0"])[0]);
     function slice(){
         var end=Math.min(at+150,rows.length);
-        for(;at<end&&discovered.size<MAX_DISCOVERED;at++){
+        for(;at<end;at++){
             var r=rows[at];csvUiStats.rows++;
             if(r.length!==schema.width)continue;
             var key=(r[0]||"").trim(),priority=schema.type!=="sheet"&&schema.type!=="numeric";
@@ -3910,8 +3906,7 @@ function scanRootCsvFile(relative,raw,done){
             });
         }
         nextPrefetch();
-        if(at<rows.length&&discovered.size<MAX_DISCOVERED){setTimeout(slice,0);return;}
-        if(at<rows.length)scanStats.limited=true;
+        if(at<rows.length){setTimeout(slice,0);return;}
         tableStats.files++;tableStats.rootFiles++;scanStats.files++;done();
     }
     slice();
@@ -3920,8 +3915,7 @@ function scanRootCsv(done){
     if(!tableStats.root){done();return;}
     var base=path.join(content,"csv"),dirs=[{path:base,depth:0}],tasks=[];
     function enumerate(){
-        if(!dirs.length||tasks.length>=256){
-            if(dirs.length||tasks.length>=256)scanStats.limited=true;
+        if(!dirs.length){
             tableStats.rootTotal=tasks.length;scanStats.totalFiles+=tasks.length;
             // Main narrative and common events before generic databases.
             function order(v){
@@ -3938,20 +3932,18 @@ function scanRootCsv(done){
         var d=dirs.shift();
         fs.readdir(d.path,function(err,names){
             if(err){scanStats.skipped++;tableStats.rootSkipped++;enumerate();return;}
-            if(names.length>512)scanStats.limited=true;
-            names.sort().slice(0,512).forEach(function(n){
+            names.sort().forEach(function(n){
                 if(!/^[A-Za-z0-9_.-]{1,100}$/.test(n)||n==="."||n==="..")return;
                 var full=path.join(d.path,n);
-                if(/\.csv$/i.test(n)&&regularUnder(base,full,16*1024*1024)&&tasks.length<256)
+                if(/\.csv$/i.test(n)&&regularUnder(base,full,16*1024*1024))
                     tasks.push({file:full,relative:path.relative(base,full).replace(/\\/g,"/")});
-                else if(d.depth<4&&directoryUnder(base,full)&&dirs.length<128)dirs.push({path:full,depth:d.depth+1});
+                else if(directoryUnder(base,full))dirs.push({path:full,depth:d.depth+1});
             });
             enumerate();
         });
     }
     function next(){
-        if(!tasks.length||discovered.size>=MAX_DISCOVERED){
-            if(tasks.length)scanStats.limited=true;
+        if(!tasks.length){
             tableStats.rootDone=true;done();return;
         }
         var task=tasks.shift();
@@ -4048,13 +4040,12 @@ function scanLocaleCsv(raw,done){
     var at=0;
     function slice(){
         var end=Math.min(at+200,rows.length);
-        for(;at<end&&discovered.size<MAX_DISCOVERED;at++){
+        for(;at<end;at++){
             var row=rows[at],value=row[column];
             if(row.length!==header.length||!row[id]||typeof value!=="string"||/^\s*[=+@]/.test(value))continue;
             if(languageFor(value)){tableStats.candidates++;addPrefetch(value,false);}
         }
-        if(at<rows.length&&discovered.size<MAX_DISCOVERED){setTimeout(slice,0);return;}
-        if(at<rows.length)scanStats.limited=true;
+        if(at<rows.length){setTimeout(slice,0);return;}
         tableStats.files++;scanStats.files++;done();
     }
     slice();
@@ -4070,7 +4061,7 @@ function scanExtraSources(dataDir,done){
     function run(){
         scanStats.totalFiles+=tasks.length;
         function next(){
-            if(!tasks.length||discovered.size>=MAX_DISCOVERED){if(tasks.length)scanStats.limited=true;done();return;}
+            if(!tasks.length){done();return;}
             var t=tasks.shift();
             if(!regularUnder(t.base,t.file,t.type==="ink"?20*1024*1024:2*1024*1024)){
                 scanStats.skipped++;setTimeout(next,0);return;
@@ -4087,7 +4078,7 @@ function scanExtraSources(dataDir,done){
     }
     if(directoryUnder(dataDir,localeDir)){
         fs.readdir(localeDir,function(err,names){
-            if(!err)names.filter(function(n){return /^[A-Za-z0-9_.\-]{1,100}\.csv$/i.test(n);}).sort().slice(0,32).forEach(function(n){
+            if(!err)names.filter(function(n){return /^[A-Za-z0-9_.\-]{1,100}\.csv$/i.test(n);}).sort().forEach(function(n){
                 tasks.push({file:path.join(localeDir,n),type:"csv",base:localeDir});
             });else scanStats.skipped++;
             run();
@@ -4120,7 +4111,6 @@ function addPrefetch(text,priority,trustedLang){
         }
         return;
     }
-    if(discovered.size>=MAX_DISCOVERED){scanStats.limited=true;return;}
     item={source:source,text:text,status:"queued",priority:!!priority};
     discovered.set(key,item);
     if((!externalTables()||cacheReadDone)&&readyText(source,text)!==null){markPrefetchReady(item);return;}
@@ -4308,16 +4298,15 @@ function scanCommonEventsChunked(data,done){
                 var entry=deferred[deferredAt++];
                 priorityCommon(entry[0],entry[1]);worked++;
             }
-            while(at<data.length&&worked<12&&Date.now()-started<7&&discovered.size<MAX_DISCOVERED){
+            while(at<data.length&&worked<12&&Date.now()-started<7){
                 var row=data[at++];
                 if(row&&typeof row==="object")scanCommands(row.list,false);
                 worked++;
             }
         }catch(_){state.errors++;}
-        if(deferredAt<deferred.length||(at<data.length&&discovered.size<MAX_DISCOVERED)){
+        if(deferredAt<deferred.length||at<data.length){
             setTimeout(slice,0);return;
         }
-        if(at<data.length)scanStats.limited=true;
         done();
     }
     slice();
@@ -4347,9 +4336,8 @@ function startFullScan(){
         });
         scanStats.totalFiles=files.length+(tsv.detected?1:0);
         inkStats.detected=directoryUnder(dataDir,path.join(dataDir,"ink"))&&regularUnder(path.join(dataDir,"ink"),path.join(dataDir,"ink","main.json"),20*1024*1024);
-        if(files.length>5000){files=files.slice(0,5000);scanStats.limited=true;}
         function step(){
-            if(!files.length||discovered.size>=MAX_DISCOVERED){
+            if(!files.length){
                 var finish=function(){scanQuestParameters(function(){scanExtraSources(dataDir,function(){scanStats.done=true;nextPrefetch();});});};
                 if(tableStats.root&&!tableStats.rootDone){scanRootCsv(finish);return;}
                 finish();return;
@@ -4439,12 +4427,31 @@ function activeGameplayScene(){
         (typeof Scene_Map!=="undefined"&&scene instanceof Scene_Map)||
         (typeof Scene_Battle!=="undefined"&&scene instanceof Scene_Battle));
 }
+function takePriorityPrefetch(){
+    while(priorityQueueAt<priorityQueue.length){
+        var item=priorityQueue[priorityQueueAt++];
+        if(priorityQueueAt>=priorityQueue.length){priorityQueue=[];priorityQueueAt=0;}
+        if(item&&item.status==="queued")return item;
+    }
+    priorityQueue=[];priorityQueueAt=0;return null;
+}
+function takeBackgroundPrefetch(){
+    while(prefetchQueueAt<prefetchQueue.length){
+        var item=prefetchQueue[prefetchQueueAt++];
+        if(prefetchQueueAt>=prefetchQueue.length){prefetchQueue=[];prefetchQueueAt=0;}
+        if(item&&item.status==="queued")return item;
+    }
+    prefetchQueue=[];prefetchQueueAt=0;return null;
+}
+function hasQueuedPrefetch(){
+    return priorityQueueAt<priorityQueue.length||prefetchQueueAt<prefetchQueue.length;
+}
 function nextPrefetch(){
     if(prefetchBusy||!state.connected||!cacheReadDone)return;
     var largeInventory=discovered.size>=1200;
     if(largeInventory&&activeGameplayScene())return;
     if(externalTables()&&diskReady&&diskQueue.length>=3000)return;
-    if(!priorityQueue.length&&!prefetchQueue.length)return;
+    if(!hasQueuedPrefetch())return;
     prefetchBusy=true;
     setTimeout(function(){
         var jobs=[];
@@ -4461,9 +4468,9 @@ function nextPrefetch(){
         try{
             if(!state.connected){release();return;}
             var cap=state.batch?(discovered.size>=1200?1:4):1,budget=256;
-            while(jobs.length<cap&&budget--&&(priorityQueue.length||prefetchQueue.length)){
-                var item=priorityQueue.length?priorityQueue.shift():prefetchQueue.shift();
-                if(item.status!=="queued")continue;
+            while(jobs.length<cap&&budget--){
+                var item=takePriorityPrefetch()||takeBackgroundPrefetch();
+                if(!item)break;
                 item.status="working";jobs.push(item);
             }
             if(!jobs.length){release();return;}
@@ -4657,7 +4664,7 @@ function setupHud(){
             "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+"   Omitidos: "+scanStats.skipped+(inkStats.detected?" · Ink":"") ,
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
-            "Errores: "+state.errors+"   "+(scanStats.limited?"Límite de escaneo":scanStats.done?"Inventario terminado":"Inventario en curso"),
+            "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario completo":"Inventario en curso"),
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
             (scriptProfile||enabledTextPicture())?"Textos especiales: "+scriptStats.shown+" · Inventario: "+authoredDisplay.size:
