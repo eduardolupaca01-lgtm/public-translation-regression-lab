@@ -14,7 +14,7 @@ function fixture(translationDelay=0,options={}){
     const source=fs.readFileSync(
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
     const root=options.root||path.join("/tmp","servidor-qa-juego-日本語");
-    const content=options.mz?root:path.join(root,"www");
+    const content=options.mz||options.noWww?root:path.join(root,"www");
     const descriptor=path.join(content,"data","IATraductora","bridge.json");
     if(options.mz){
         for(const n of ["rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows"])read[path.join(content,"js",n+".js")]="// MZ synthetic fixture";
@@ -1957,9 +1957,77 @@ async function testShortWakeUpLineIsRecognized(){
     assert.equal(win._textState.text,translated,"the short wake-up line is translated on first view");
     assert.ok(f.posts.some(function(p){return p.text===raw;}),"the short English wake-up line is sent to the translator");
 }
+async function testShortWakeUpLineWithActorVariableIsRecognized(){
+    const raw="Hey! \\n[21] wake up!";
+    const translated="¡Oye! \\n[21] ¡despierta!";
+    const f=fixture(35,{responses:{"Hey!":"¡Oye!","wake up!":"¡despierta!"},configure:function(c){
+        const p=c.Window_Message.prototype;
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        p.startMessage=function(){
+            this.originalStarts++;
+            this._textState={text:c.$gameMessage.allText(),index:0};
+            this.pause=false;
+        };
+        p.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.canStart())this.startMessage();
+        };
+    }});
+    await wait(25);
+    const c=f.context,m=f.$gameMessage;
+    c.SceneManager._scene=new c.Scene_Map();
+    m.add(raw);
+    const win=new c.Window_Message();
+    win.update();
+    for(let i=0;i<24&&win.originalStarts===0;i++){await wait(40);win.update();}
+    assert.equal(win.originalStarts,1,"the actor-variable wake-up line starts after translation");
+    assert.equal(win._textState.text,translated,"the actor variable is preserved while both English fragments are translated");
+    assert.ok(f.posts.some(function(p){return p.text==="Hey!";}),"the greeting fragment is translated");
+    assert.ok(f.posts.some(function(p){return p.text==="wake up!";}),"the wake-up fragment is translated");
+    assert.ok(f.posts.every(function(p){return !p.text.includes("\\n[21]");}),"the actor control code is never sent to the translator");
+}
+
+async function testUnresolvedIavraReferencesNeverReachTranslatorOrReuseStaleCache(){
+    const root=path.join("/tmp","servidor-qa-iavra-unresolved-日本語");
+    const cacheDir=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const cacheFile=path.join(cacheDir,"translations-ja-en-es-v2.jsonl");
+    const raw="#{start.intro_part_one.0}";
+    const stale="«start.intro_part_one.0»";
+    const record={schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:stale,composed:false};
+    const journal=JSON.stringify(record)+"\\n";
+    const fsState={files:{[cacheFile]:journal},dirs:{[cacheDir]:true}};
+    const f=fixture(20,{root,noWww:true,fsState,configure:function(c){
+        const p=c.Window_Message.prototype;
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        p.startMessage=function(){
+            this.originalStarts++;
+            this._textState={text:c.$gameMessage.allText(),index:0};
+            this.pause=false;
+        };
+        p.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.canStart())this.startMessage();
+        };
+    }});
+    await wait(55);
+    const c=f.context,m=f.$gameMessage;
+    c.SceneManager._scene=new c.Scene_Map();
+    m.add(raw);
+    const win=new c.Window_Message();
+    win.update();
+    for(let i=0;i<12&&win.originalStarts===0;i++){await wait(40);win.update();}
+    assert.equal(win.originalStarts,1,"an unresolved external key does not block the game");
+    assert.equal(win._textState.text,raw,"a stale key-to-key cache result is rejected");
+    assert.ok(!f.posts.some(function(p){return p.text===raw||p.text===stale;}),
+        "unresolved localization keys are never sent to the neural translator");
+    assert.equal(fsState.files[cacheFile],journal,"the old cache journal is not rewritten");
+}
+
 async function testIavraExternalJsonCatalogAndKeyFallback(){
     const root=path.join("/tmp","servidor-qa-juego-日本語");
-    const content=path.join(root,"www");
+    const content=root;
     const dataDir=path.join(content,"data"),systemDir=path.join(content,"System");
     const enPath=path.join(systemDir,"en.json"),jpPath=path.join(systemDir,"jp.json");
     const japanese="物語は朝日が昇るときに始まります。";
@@ -1986,7 +2054,7 @@ async function testIavraExternalJsonCatalogAndKeyFallback(){
         parameters:{"File Path":"System/{lang}.json","Languages":"en, jp","Escape Code":"#{{key}}"}
     };
     const f=fixture(120,{
-        root,fsState,plugins:[plugin],
+        root,noWww:true,fsState,plugins:[plugin],
         responses:{
             [japanese]:"La historia comienza cuando sale el sol.",
             [englishFallback]:"El siguiente capítulo comienza después de la tormenta."
@@ -2035,6 +2103,15 @@ async function testIavraExternalJsonCatalogAndKeyFallback(){
         "the names subtree is excluded from translation");
     assert.equal(fsState.files[enPath],enRaw,"the English localization catalog is read-only");
     assert.equal(fsState.files[jpPath],jpRaw,"the Japanese localization catalog is read-only");
+    m.clear();
+    const unknownKey="«missing.external.branch.0»";
+    m.add(unknownKey);
+    const third=new c.Window_Message();
+    third.update();
+    for(let i=0;i<30&&third.originalStarts===0;i++){await wait(40);third.update();}
+    assert.equal(third.originalStarts,1,"an unknown external key does not hold the message window");
+    assert.equal(third._textState.text,unknownKey,"an unknown external key is left untouched");
+    assert.ok(!f.posts.some(function(p){return p.text===unknownKey;}),"an unknown external key is not sent to the translator");
 }
 
 async function testLargeGamePausesBackgroundPrefetch(){
@@ -2596,6 +2673,8 @@ async function testR8GeneralDisplaySurfaces(){
     await testYEPFormattingCodesDoNotHideWords();
     await testSceneRevisitUsesCompletedTranslation();
     await testShortWakeUpLineIsRecognized();
+    await testShortWakeUpLineWithActorVariableIsRecognized();
+    await testUnresolvedIavraReferencesNeverReachTranslatorOrReuseStaleCache();
     await testIavraExternalJsonCatalogAndKeyFallback();
     await testLargeGamePausesBackgroundPrefetch();
     await testLargeCommonEventsJsonIsParsedIncrementally();
