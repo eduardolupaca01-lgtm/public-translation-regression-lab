@@ -376,3 +376,36 @@ func TestMZDetectionAndInstallation(t *testing.T){
   if _,_,err=detectGame(exe);err==nil{t.Fatal("mixed engines must be rejected")}
  }
 }
+
+func TestMZCompressedNativeDetectionAndInstallation(t *testing.T){
+ for _,wrapped:=range []bool{false,true}{
+  root:=filepath.Join(t.TempDir(),"RPG MZ compressed 日本語")
+  content:=root;if wrapped{content=filepath.Join(root,"www")}
+  js:=filepath.Join(content,"js");data:=filepath.Join(content,"data")
+  if err:=os.MkdirAll(filepath.Join(js,"plugins"),0700);err!=nil{t.Fatal(err)}
+  if err:=os.MkdirAll(data,0700);err!=nil{t.Fatal(err)}
+  put:=func(p,v string){t.Helper();if err:=os.WriteFile(p,[]byte(v),0600);err!=nil{t.Fatal(err)}}
+  for _,n:=range []string{"rmmz_core.js","rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"}{put(filepath.Join(js,n),"// synthetic MZ")}
+  for _,n:=range []string{"POR_DatabaseEncoder.js","lz-string.min.js"}{put(filepath.Join(js,"plugins",n),"// synthetic native adapter")}
+  for _,n:=range []string{"System.jsono","Actors.jsono","CommonEvents.jsono","MapInfos.jsono"}{put(filepath.Join(data,n),"N4XyA===")}
+  registry:=filepath.Join(js,"plugins.js");exe:=filepath.Join(root,"Game.exe")
+  put(exe,"fixture");put(registry,"var $plugins = [];")
+  if _,_,err:=detectGame(exe);err==nil{t.Fatal("extension alone must not be accepted")}
+  original:="var $plugins = [{\"name\":\"lz-string.min\",\"status\":true,\"parameters\":{}},{\"name\":\"POR_DatabaseEncoder\",\"status\":true,\"parameters\":{}}];"
+  put(registry,original)
+  gotRoot,gotContent,err:=detectGame(exe)
+  if err!=nil||gotRoot!=root||gotContent!=content||engineAt(content)!="MZ"{t.Fatalf("compressed native MZ not detected: %v",err)}
+  pkg,err:=readPackage(fakePackage(t));if err!=nil{t.Fatal(err)}
+  if err=Install(exe,pkg);err!=nil{t.Fatal(err)}
+  if _,err=installedPackageIdentity(exe,pkg);err!=nil{t.Fatal(err)}
+  if ordinary(filepath.Join(data,"System.json")){t.Fatal("installer must not create a plaintext game database")}
+  for _,n:=range []string{"System.jsono","Actors.jsono","CommonEvents.jsono","MapInfos.jsono"}{
+   b,e:=os.ReadFile(filepath.Join(data,n));if e!=nil||string(b)!="N4XyA==="{t.Fatal("compressed input modified")}
+  }
+  if err=RecoverGame(exe);err!=nil{t.Fatal(err)}
+  b,err:=os.ReadFile(registry);if err!=nil||string(b)!=original{t.Fatal("original registry not restored")}
+  pkg.Close()
+  put(filepath.Join(data,"System.jsono"),"invalid data")
+  if _,_,err=detectGame(exe);err==nil{t.Fatal("invalid compressed marker accepted")}
+ }
+}

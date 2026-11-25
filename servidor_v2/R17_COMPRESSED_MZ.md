@@ -1,0 +1,8 @@
+# R17 — native compressed MZ compatibility
+
+R16 remains the base; this adds a distinct runtime profile inside the RPG installer, without changing other application modules. The checked input shape is native LZString/Base64 .jsono, not cryptographic encryption or a new engine.
+
+- Installer recognizes only MZ markers plus active static POR_DatabaseEncoder and lz-string.min registry entries, matching files and bounded compressed database markers. The JS runtime additionally checks the existing native LZString API, and reads the expected compressed source instead of stale plaintext. No installer execution of author scripts; no original database or catalog is rewritten.
+- Iavra MZ NeomaStudio: handle comma-separated explicit catalog paths, native .jsono extension, Japanese/English source pairs, single-brace lookup keys and priority for current map. Preserve speaker identity keys, do not send identifiers to models, respect the native locale and existing fallback behavior. Chinese model support is not added; existing English/Japanese OPUS is used.
+- TSR_MapPopups/text: translate the explicit text field with a bounded presentation gate, preserving target, color, duration, and position. Item/gold/damage commands are untouched. Existing HUD, dialogue, choice, cache and first-view adapters remain enabled.
+- Go tests cover root and www compressed install, recover, inactive adapter rejection and invalid marker rejection. JS fixture simulates the native decoder API and verifies multi-file inventory, read-only inputs, language switching and native first-view behavior. Full actual game runtime has not been exercised. Uploaded data and third-party scripts are not included.

@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R16-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R17-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -20,6 +20,7 @@ try{
 }catch(_){return;}
 if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
+var porCompressed=false;
 var remNative={detected:false,images:false,configured:false,spanish:new Set(),fallback:new Map()};
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
@@ -34,13 +35,35 @@ var diskStats={loaded:0,saved:0,rejected:0,errors:0};
 var CACHE_SCHEMA="ia-traductora-cache-v2",CACHE_LIMIT=64*1024*1024,MAX_CACHE_ENTRIES=50000;
 // NW.js versions resolve index.html and Game.exe differently. Detect only an
 // actual MV root by checking its original files; never trust a guessed path.
+function porCompressedAt(folder){
+    if(!isMZ||!pluginEnabled(/^POR_DatabaseEncoder$/)||!pluginEnabled(/^lz-string\.min$/)||
+       typeof LZString==="undefined"||typeof LZString.decompressFromBase64!=="function")return false;
+    if(typeof Utils.isOptionValid==="function"&&Utils.isOptionValid("test"))return false;
+    var js=path.join(folder,"js"),data=path.join(folder,"data");
+    if(!directoryUnder(folder,js)||!directoryUnder(folder,data)||
+       !directoryUnder(folder,path.join(js,"plugins")))return false;
+    return ["POR_DatabaseEncoder.js","lz-string.min.js"].every(function(n){
+        return regularUnder(js,path.join(js,"plugins",n),2*1024*1024);
+    })&&["System.jsono","Actors.jsono","CommonEvents.jsono","MapInfos.jsono"].every(function(n){
+        return regularUnder(data,path.join(data,n),2*1024*1024);
+    });
+}
+// Use the native library already loaded by the game. No decoding executable,
+// no original file writes, and no unconditional acceptance of unknown formats.
+function porJsonText(raw){
+    if(!porCompressed||typeof raw!=="string"||raw.length<4||raw.length>2*1024*1024||
+       raw.length%4!==0||!/^[A-Za-z0-9+/]+={0,3}$/.test(raw))throw Error("IA_POR_FORMAT");
+    var plain=LZString.decompressFromBase64(raw);
+    if(typeof plain!=="string"||!plain||plain.length>16*1024*1024)throw Error("IA_POR_JSON");
+    return plain.replace(/^\uFEFF/,"");
+}
 function engineAt(folder){
     var js=path.join(folder,"js"),mv=ordinary(path.join(js,"rpg_core.js")),mz=ordinary(path.join(js,"rmmz_core.js"));
     if(mv&&mz)return "AMBIGUOUS";
     if(!ordinary(path.join(js,"plugins.js")))return "";
     if(mz){
         if(!["rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"].every(function(n){return ordinary(path.join(js,n));})||
-           !ordinary(path.join(folder,"data","System.json")))return "AMBIGUOUS";
+           (!ordinary(path.join(folder,"data","System.json"))&&!porCompressedAt(folder)))return "AMBIGUOUS";
         return "MZ";
     }
     return mv?"MV":"";
@@ -104,7 +127,7 @@ function owner(){
 }
 function initPaths(){
     var found=resolveMVGame();
-    game=found.root;content=found.content;
+    game=found.root;content=found.content;porCompressed=porCompressedAt(content);
     sidecar=path.join(game,"IA Traductora");
     worker=path.join(sidecar,".local","Rpg","engine","IATraductora.exe");
     descriptorFile=path.join(content,"data","IATraductora","bridge.json");
@@ -3952,6 +3975,12 @@ function scanUltraHud(data){
 }
 function notificationPlan(params){
     if(!isMZ||!Array.isArray(params)||!params[3]||typeof params[3]!=="object"||Array.isArray(params[3]))return null;
+    if(params[0]==="TSR_MapPopups"&&params[1]==="text"&&pluginEnabled(/^TSR_MapPopups$/)){
+        var rawPopup=params[3].text,entry=iavraResolveText(rawPopup);
+        var popup=entry?{source:entry.source,body:entry.text,prefix:"",suffix:""}:explicitUiPlan(rawPopup);
+        if(popup){popup.field="text";popup.tsr=true;}
+        return popup;
+    }
     if(params[0]==="Hendrix_Pictures_UI_Creator"&&params[1]==="ShowText"&&pluginEnabled(/^Hendrix_Pictures_UI_Creator$/)){
         if(params[3].textVocabulary)return null;
         var picture=explicitUiPlan(params[3].text);
@@ -3973,7 +4002,7 @@ function notificationPlan(params){
 }
 var notificationDispatchDepth=0;
 function hookNotificationMZ(){
-    if(!isMZ||!pluginEnabled(/^(?:LL_InfoPopupWIndow|Hendrix_Pictures_UI_Creator|VisuMZ_4_GabWindow)$/))return;
+    if(!isMZ||!pluginEnabled(/^(?:LL_InfoPopupWIndow|Hendrix_Pictures_UI_Creator|VisuMZ_4_GabWindow|TSR_MapPopups)$/))return;
     if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&
        typeof Game_Interpreter.prototype.command357==="function"){
         var p=Game_Interpreter.prototype,native357=p.command357;
@@ -3990,7 +4019,7 @@ function hookNotificationMZ(){
                 if(!g||g.list!==this._list||g.index!==this._index||g.scene!==scene||g.params!==params||g.raw!==raw)
                     g=this._iaNoticeGate={list:this._list,index:this._index,scene:scene,params:params,raw:raw,started:now};
                 var permanentlyRejected=rejectedKeys.get(plan.source+"\u0000"+raw)===Infinity;
-                if(!permanentlyRejected&&now-g.started<(state.connected?FIRST_VIEW_LIMIT:FIRST_VIEW_OFFLINE))return false;
+                if(!permanentlyRejected&&now-g.started<(plan.tsr?Math.min(900,state.connected?FIRST_VIEW_LIMIT:FIRST_VIEW_OFFLINE):(state.connected?FIRST_VIEW_LIMIT:FIRST_VIEW_OFFLINE)))return false;
             }
             this._iaNoticeGate=null;
             if(shown===null)return native357.apply(this,arguments);
@@ -4283,7 +4312,7 @@ var tsv={detected:false,valid:false,done:false,loading:false,rows:0,conflicts:0,
 // game's own File Path/Languages settings; it never crawls arbitrary folders,
 // rewrites a catalog, changes the active language, or translates identity keys.
 var iavra={
-    detected:false,done:true,loading:false,template:"",languages:[],defaultLanguage:"en",
+    detected:false,done:true,loading:false,template:"",templates:[],por:false,languages:[],defaultLanguage:"en",
     prefix:"#{",suffix:"}",catalogs:{en:new Map(),ja:new Map()},textSources:new Map(),
     files:0,strings:0,skipped:0,shown:0
 };
@@ -4311,14 +4340,19 @@ function detectIavraLocalization(){
         var p=$plugins[i];
         if(!p||!p.status)continue;
         if(/<Iavra Localization Core>/i.test(String(p.description||""))||
-           /Iavra.*Localization.*Core/i.test(String(p.name||""))){plugin=p;break;}
+           /Iavra.*Localization.*Core/i.test(String(p.name||""))||
+           porCompressed&&p.name==="Iavra_MZ_Localization_byNeomaStudio"){plugin=p;break;}
     }
     if(!plugin)return false;
     var params=plugin.parameters||{},template=String(params["File Path"]||"").trim();
     var folder=String(params["Localization Folder"]||"").trim();
     if(folder)template=folder.replace(/\\/g,"/").replace(/\/+$/,"")+"/"+template.replace(/^[/\\]+/,"");
     template=template.replace(/\\/g,"/");
-    if(template.split("{lang}").length!==2)return false;
+    var por=porCompressed&&plugin.name==="Iavra_MZ_Localization_byNeomaStudio";
+    var templates=por?template.split(",").map(function(v){return v.trim();}):[template];
+    if(!templates.length||templates.length>16||templates.some(function(v){
+        return v.split("{lang}").length!==2||(por&&!/^data\/lang_[A-Za-z0-9_]{1,40}_\{lang\}\.json$/.test(v));
+    })||new Set(templates).size!==templates.length)return false;
     var rawLanguages=String(params["Languages"]||"en").trim(),languages=[];
     if(rawLanguages.charAt(0)==="["){
         try{var parsed=JSON.parse(rawLanguages);if(Array.isArray(parsed))languages=parsed.map(String);}catch(_){}
@@ -4336,14 +4370,15 @@ function detectIavraLocalization(){
     if(at<0||escape.indexOf("{key}",at+5)>=0)return false;
     var prefix=escape.slice(0,at),suffix=escape.slice(at+5);
     if(!prefix||!suffix||prefix.length>30||suffix.length>30||/[\r\n]/.test(prefix+suffix))return false;
-    iavra.detected=true;iavra.done=false;iavra.template=template;iavra.languages=entries;
+    iavra.detected=true;iavra.done=false;iavra.template=template;iavra.templates=templates;iavra.por=por;iavra.languages=entries;
     iavra.defaultLanguage=iavraSourceForCode(languages[0])||entries[0].source;
     iavra.prefix=prefix;iavra.suffix=suffix;
     return true;
 }
-function iavraFile(code){
-    if(!content||!iavra.template)return null;
-    var relative=iavra.template.replace("{lang}",String(code)).replace(/\\/g,"/");
+function iavraFile(code,template){
+    if(!content||!template)return null;
+    var relative=template.replace("{lang}",String(code)).replace(/\\/g,"/");
+    if(iavra.por)relative+="o";
     if(!relative||relative.charAt(0)==="/"||/^[A-Za-z]:/.test(relative)||relative.indexOf("\u0000")>=0)return null;
     var parts=relative.split("/");
     if(parts.length<1||parts.length>12||parts.some(function(s){
@@ -4356,7 +4391,7 @@ function iavraFile(code){
             if(!directoryUnder(content,current))return null;
         }
         var file=path.join.apply(path,[content].concat(parts));
-        if(!regularUnder(content,file,16*1024*1024))return null;
+        if(!regularUnder(content,file,iavra.por?2*1024*1024:16*1024*1024))return null;
         return file;
     }catch(_){return null;}
 }
@@ -4382,6 +4417,11 @@ function iavraIndexCatalog(data,source){
     function walk(value,prefix,depth){
         if(++nodes>50000||depth>12)return;
         if(typeof value==="string"){
+            // In this exact localization dialect nNN keys are speaker identities.
+            if(iavra.por&&/^n\d{1,6}$/.test(prefix)){
+                if(value.trim()&&value.length<=100){actorNames[value]=true;actorNames[iavra.prefix+prefix+iavra.suffix]=true;}
+                return;
+            }
             if(prefix&&prefix.length<=300&&iavraCatalogText(source,value)){
                 map.set(prefix,value);iavraRememberText(value,source);iavra.strings++;count++;
                 addPrefetch(value,false,source);
@@ -4407,21 +4447,22 @@ function loadIavraCatalogs(done){
     if(iavra.done){if(typeof done==="function")done();return;}
     if(iavra.loading)return;
     iavra.loading=true;
-    var at=0;
+    var at=0,tasks=[];
+    iavra.languages.forEach(function(entry){iavra.templates.forEach(function(template){tasks.push({entry:entry,template:template});});});
     function finish(){
         iavra.loading=false;iavra.done=true;
         if(typeof done==="function")done();
     }
     function next(){
-        if(at>=iavra.languages.length){finish();return;}
-        var entry=iavra.languages[at++],file=iavraFile(entry.code);
+        if(at>=tasks.length){finish();return;}
+        var task=tasks[at++],entry=task.entry,file=iavraFile(entry.code,task.template);
         if(!file){iavra.skipped++;setTimeout(next,0);return;}
         fs.readFile(file,"utf8",function(err,raw){
             if(err||typeof raw!=="string"||raw.length>16*1024*1024){
                 iavra.skipped++;setTimeout(next,0);return;
             }
             try{
-                var data=JSON.parse(raw.replace(/^\uFEFF/,""));
+                var data=JSON.parse(iavra.por?porJsonText(raw):raw.replace(/^\uFEFF/,""));
                 if(!data||typeof data!=="object"||Array.isArray(data))throw Error("invalid localization catalog");
                 if(!iavraIndexCatalog(data,entry.source))iavra.skipped++;
                 iavra.files++;
@@ -5866,6 +5907,11 @@ function scanExtraSources(dataDir,done){
 function addPrefetch(text,priority,trustedLang){
     if(typeof text!=="string"||!text||remNativeSpanishText(text)||remNative.detected&&externalLocalizationReference(text))return;
     if(tsvRef(text)){if(priority)tsvPrioritize(text);return;}
+    if(iavra.por&&iavraHasReference(text)){
+        var entry=iavraResolveText(text);
+        if(entry&&!actorNames[entry.text])addPrefetch(entry.text,priority,entry.source);
+        return;
+    }
     if(tsvExcluded(text))return;
     learnReadings(text);
     var catalogSource=iavra.textSources.has(text)?iavra.textSources.get(text):null;
@@ -6109,7 +6155,9 @@ function startFullScan(){
         var order=["System.json","Actors.json","CommonEvents.json","Items.json",
             "Weapons.json","Armors.json","Skills.json","States.json","Classes.json",
             "Enemies.json","Troops.json"];
-        var files=names.filter(function(n){
+        // Logical filenames keep the existing map/database scanner contracts.
+        // Native POR always reads the compressed copy in deployed mode.
+        var files=names.filter(function(n){return porCompressed?/\.jsono$/.test(n):/\.json$/.test(n);}).map(function(n){return porCompressed?n.slice(0,-1):n;}).filter(function(n){
             return order.indexOf(n)>=0||/^Map\d{3,6}\.json$/.test(n);
         }).sort(function(a,b){
             var i=order.indexOf(a),j=order.indexOf(b);
@@ -6124,10 +6172,10 @@ function startFullScan(){
                 if(tableStats.root&&!tableStats.rootDone){scanRootCsv(finish);return;}
                 finish();return;
             }
-            var name=files[fileAt++],file=path.join(dataDir,name);
+            var name=files[fileAt++],file=path.join(dataDir,name+(porCompressed?"o":""));
             try{
                 var st=fs.lstatSync(file);
-                if(!st.isFile()||st.isSymbolicLink()||st.size>16*1024*1024)
+                if(!st.isFile()||st.isSymbolicLink()||st.size>(porCompressed?2*1024*1024:16*1024*1024))
                     throw Error("unsafe or oversized MV data");
             }catch(_){scanStats.skipped++;setTimeout(step,0);return;}
             fs.readFile(file,"utf8",function(err,raw){
@@ -6148,7 +6196,7 @@ function startFullScan(){
                     return;
                 }
                 try{
-                    var data=JSON.parse(raw.replace(/^\uFEFF/,""));
+                    var data=JSON.parse(porCompressed?porJsonText(raw):raw.replace(/^\uFEFF/,""));
                     if(name==="System.json"&&data&&integer(data.startMapId)&&data.startMapId>0){
                         var first="Map"+("000"+data.startMapId).slice(-Math.max(3,String(data.startMapId).length))+".json";
                         initialMapFile=first;
@@ -6448,7 +6496,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
-            iavra.detected?"JSON externo: "+iavra.files+" archivos · "+iavra.strings+" textos · "+iavra.shown+" mostrados":
+            iavra.detected?(iavra.por?"JSONO externo: ":"JSON externo: ")+iavra.files+" archivos · "+iavra.strings+" textos · "+iavra.shown+" mostrados":
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
             (scriptProfile||enabledTextPicture())?"Textos especiales: "+scriptStats.shown+" · Inventario: "+authoredDisplay.size:

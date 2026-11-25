@@ -105,13 +105,47 @@ func readZip(item *zip.File,limit int64)([]byte,error){
  }
  return b,nil
 }
+// Recognize a native MZ compressed database, not an arbitrary .jsono file.
+func porCompressedDatabase(content string) bool {
+ js:=filepath.Join(content,"js")
+ data:=filepath.Join(content,"data")
+ for _,dir:=range []string{content,js,filepath.Join(js,"plugins"),data}{
+  st,err:=os.Lstat(dir);if err!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{return false}
+ }
+ for _,n:=range []string{"POR_DatabaseEncoder.js","lz-string.min.js"}{
+  if !ordinary(filepath.Join(js,"plugins",n)){return false}
+ }
+ for _,n:=range []string{"System.jsono","Actors.jsono","CommonEvents.jsono","MapInfos.jsono"}{
+  file:=filepath.Join(data,n);if !ordinary(file){return false}
+  st,err:=os.Stat(file);if err!=nil||st.Size()<4||st.Size()>2*1024*1024{return false}
+ }
+ registry:=filepath.Join(js,"plugins.js")
+ if !ordinary(registry){return false}
+ st,err:=os.Stat(registry);if err!=nil||st.Size()>2*1024*1024{return false}
+ raw,err:=os.ReadFile(registry);if err!=nil{return false}
+ _,entries,err:=parseRegistry(raw);if err!=nil{return false}
+ active:=map[string]bool{}
+ for _,entry:=range entries{
+  var name string;var status bool
+  if json.Unmarshal(entry["name"],&name)==nil&&json.Unmarshal(entry["status"],&status)==nil&&status{active[name]=true}
+ }
+ if !active["POR_DatabaseEncoder"]||!active["lz-string.min"]{return false}
+ raw,err=os.ReadFile(filepath.Join(data,"System.jsono"))
+ if err!=nil||len(raw)%4!=0{return false}
+ body:=bytes.TrimRight(raw,"=")
+ if len(body)==0||len(raw)-len(body)>3{return false}
+ for _,c:=range body{if !((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='+'||c=='/'){return false}}
+ return true
+}
 // Detect deployed engines by original file markers, without running game code.
 func engineAt(content string) string {
  js:=filepath.Join(content,"js")
  mv:=ordinary(filepath.Join(js,"rpg_core.js"))
  mz:=ordinary(filepath.Join(js,"rmmz_core.js"))
  if mv&&mz{return "AMBIGUOUS"}
- if !ordinary(filepath.Join(js,"plugins.js"))||!ordinary(filepath.Join(content,"data","System.json")){return ""}
+ if !ordinary(filepath.Join(js,"plugins.js")){return ""}
+ plain:=ordinary(filepath.Join(content,"data","System.json"))
+ if !plain&&!(mz&&porCompressedDatabase(content)){return ""}
  if mz {
   for _,n:=range []string{"rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"}{
    if !ordinary(filepath.Join(js,n)){return "AMBIGUOUS"}

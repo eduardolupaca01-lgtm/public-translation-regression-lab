@@ -18,7 +18,7 @@ function fixture(translationDelay=0,options={}){
     const descriptor=path.join(content,"data","IATraductora","bridge.json");
     if(options.mz){
         for(const n of ["rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows"])read[path.join(content,"js",n+".js")]="// MZ synthetic fixture";
-        read[path.join(content,"data","System.json")]=read[path.join(content,"data","System.json")]||"{}";
+        if(!options.compressed)read[path.join(content,"data","System.json")]=read[path.join(content,"data","System.json")]||"{}";
         dirs[path.join(content,"data")]=true;
     }else read[path.join(content,"js","rpg_core.js")]="// mock rpg core";
     read[path.join(content,"js","plugins.js")]="var $plugins = [];";
@@ -2533,6 +2533,90 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR17CompressedNativeMZ(){
+    const root=path.join("/tmp","servidor-qa-por-日本語"),data=path.join(root,"data"),js=path.join(root,"js"),pluginsDir=path.join(js,"plugins");
+    const state={files:{},dirs:{[data]:true,[js]:true,[pluginsDir]:true}};
+    const dialogue="The garden is open.",dialogueEs="El jardín está abierto.";
+    const choice="Open the wooden gate.",choiceEs="Abre la puerta de madera.";
+    const item="Silver Lantern",itemEs="Farol de plata";
+    const notice="You found the ancient key.",noticeEs="Has encontrado la llave antigua.";
+    const jp="橋を渡ってください。",jpEs="Cruza el puente.";
+    const originals={},decoded={},calls=[];
+    function encoded(filename,doc){
+        // Unique base64-shaped fixture marker. Only the native API shim
+        // recognizes these markers, proving that the translator invokes it.
+        const raw=Buffer.from("R17:"+filename).toString("base64");
+        originals[path.join(data,filename)]=raw;state.files[path.join(data,filename)]=raw;decoded[raw]=JSON.stringify(doc);
+    }
+    encoded("System.jsono",{locale:"en_US",startMapId:1,gameTitle:"Synthetic"});
+    encoded("Actors.jsono",[null,{id:1,name:"{n1}",nickname:"",profile:"",note:""}]);
+    encoded("CommonEvents.jsono",[null]);
+    encoded("MapInfos.jsono",[null,{id:1,name:"Map"}]);
+    encoded("Map001.jsono",{events:[null,{pages:[{list:[
+        {code:101,parameters:["",0,0,2,"{n1}"]},{code:401,parameters:["{line1}"]},
+        {code:102,parameters:[["{choice1}"],0,0,2,0]},
+        {code:357,parameters:["TSR_MapPopups","text","",{text:notice,target:"0",color:"2",duration:"60",posX:"0",posY:"0"}]}
+    ]}]}]});
+    encoded("lang_g_en.jsono",{n1:"Alice",choice1:choice});
+    encoded("lang_h_en.jsono",{line1:dialogue});
+    encoded("lang_items_en.jsono",{item1:item});
+    encoded("lang_g_jp.jsono",{n1:"アリス",choice1:"木の門を開ける。"});
+    encoded("lang_h_jp.jsono",{line1:jp});
+    encoded("lang_items_jp.jsono",{item1:"銀のランタン"});
+    // An invalid extra map is skipped without stopping the rest.
+    state.files[path.join(data,"Map999.jsono")]="!!!!";
+    const plugins=[
+        {name:"lz-string.min",status:true,parameters:{}},
+        {name:"POR_DatabaseEncoder",status:true,parameters:{}},
+        {name:"Iavra_MZ_Localization_byNeomaStudio",status:true,parameters:{
+            "Escape Code":"{{key}}","Languages":"jp, en, zh","File Path":"data/lang_g_{lang}.json,data/lang_h_{lang}.json,data/lang_items_{lang}.json"}},
+        {name:"TSR_MapPopups",status:true,parameters:{}}
+    ];
+    for(const n of ["POR_DatabaseEncoder.js","lz-string.min.js"])state.files[path.join(pluginsDir,n)]="// native fixture";
+    const f=fixture(50,{root,mz:true,compressed:true,fsState:state,plugins,testHooks:true,responses:{
+        [dialogue]:dialogueEs,[choice]:choiceEs,[item]:itemEs,[notice]:noticeEs,[jp]:jpEs
+    },configure(c){
+        c.LZString={decompressFromBase64(raw){calls.push(raw);return decoded[raw]||null;}};
+        c.IAVRA={MasterLocalization:{I18N:{language:"en"}}};
+        const p=c.Window_Message.prototype;
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        p.startMessage=function(){this.originalStarts++;this._textState={text:c.$gameMessage.allText(),index:0};this.pause=false;};
+        p.update=function(){if(this.updateWait())return;if(this.canStart())this.startMessage();};
+        function Interpreter(){this.calls=[];}
+        Interpreter.prototype.command357=function(params){this.calls.push(params);return true;};
+        c.Game_Interpreter=Interpreter;
+    }});
+    const c=f.context;
+    c.SceneManager._scene=new c.Scene_Map();new c.Scene_Title().start();
+    async function until(predicate){
+        const end=Date.now()+5000;while(Date.now()<end){if(predicate())return;await wait(30);}
+        assert.fail("R17 compressed native test timeout");
+    }
+    await until(()=>c.window.__IA_TRADUCTORA_TEST__.done());
+    await until(()=>[dialogue,choice,item,notice,jp].every(raw=>f.posts.some(p=>p.text===raw)));
+    assert.ok(calls.length>=10,"compressed database and every configured EN/JP catalog use the native decoder");
+    assert.ok(calls.includes(originals[path.join(data,"lang_items_en.jsono")]));
+    assert.ok(!f.posts.some(p=>/^\{[\w.]+\}$/.test(p.text)||p.text==="Alice"||p.text==="アリス"||/^R17:/.test(p.text)));
+    const key="{line1}";f.$gameMessage._texts=[key];
+    const first=new c.Window_Message();
+    await until(()=>{first.update();return first.originalStarts===1;});
+    assert.equal(first._textState.text,dialogueEs);assert.equal(f.$gameMessage.allText(),key);
+    const w=new c.Window_Base(new c.Rectangle(0,0,600,200));
+    await until(()=>w.convertEscapeCharacters("{choice1}")===choiceEs);
+    await until(()=>w.convertEscapeCharacters("{item1}")===itemEs);
+    const it=new c.Game_Interpreter(),params=["TSR_MapPopups","text","",{text:notice,target:"0",color:"2",duration:"60",posX:"0",posY:"0"}];
+    const saved=JSON.stringify(params);
+    await until(()=>it.command357(params)===true);
+    assert.equal(it.calls.length,1);assert.equal(it.calls[0][3].text,noticeEs);
+    for(const k of Object.keys(params[3]))if(k!=="text")assert.equal(it.calls[0][3][k],params[3][k]);
+    assert.equal(JSON.stringify(params),saved);
+    c.IAVRA.MasterLocalization.I18N.language="jp";
+    f.$gameMessage._texts=[key];const second=new c.Window_Message();
+    await until(()=>{second.update();return second.originalStarts===1;});
+    assert.equal(second._textState.text,jpEs);assert.equal(f.$gameMessage.allText(),key);
+    for(const [filename,raw] of Object.entries(originals))assert.equal(state.files[filename],raw,"no catalog or database changes");
+    assert.ok(!Object.hasOwn(state.files,path.join(data,"System.json")));
+}
 async function testR16HexChoicesAndChauPopup(){
     const root=path.join("/tmp","servidor-qa-juego-日本語"),data=path.join(root,"www","data"),
         folder=path.join(root,"IA Traductora",".local","Rpg","cache");
@@ -3157,6 +3241,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR17CompressedNativeMZ();
     await testR16HexChoicesAndChauPopup();
     await testR15NativeLocaleAndFallback();
     await testR14VisuQuestAndStatusMetadata();
