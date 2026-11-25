@@ -1881,7 +1881,7 @@ async function testLargeGamePausesBackgroundPrefetch(){
 async function testLargeCommonEventsJsonIsParsedIncrementally(){
     const data=path.join("/tmp","servidor-qa-common-events-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
-    const events=[null],longText=("Please open the extraordinarily complicated wooden gate while the guards carefully watch the northern courtyard and wait for our signal. ").repeat(6);
+    const events=[null],longText=("Please open the extraordinarily complicated wooden gate while the guards carefully watch the northern courtyard and wait for our signal. ").repeat(4);
     for(let i=0;i<1978;i++){
         const list=[];
         for(let j=0;j<10;j++)list.push({code:401,parameters:[longText]});
@@ -1900,18 +1900,52 @@ async function testLargeCommonEventsJsonIsParsedIncrementally(){
     f.context.SceneManager._scene=new f.context.Scene_Map();
     let heartbeats=0;
     const heartbeat=setInterval(()=>heartbeats++,1);
+    assert.ok(raw.length<16*1024*1024,
+        "large CommonEvents fixture must stay within the per-file safety limit");
     const deadline=Date.now()+15000;
     try{
-        while(!f.posts.some(p=>p.text===finalText)&&Date.now()<deadline)await wait(10);
+        while(!f.context.scanStats.done&&Date.now()<deadline)await wait(10);
     }finally{clearInterval(heartbeat);}
-    assert.ok(f.posts.some(p=>p.text===finalText),
-        "last CommonEvents entry must be parsed and inventoried");
+    assert.ok(f.context.scanStats.done,"large CommonEvents inventory must finish");
+    assert.ok(f.context.discovered.has("en\\u0000"+finalText),
+        "last CommonEvents entry must be parsed and inventoried even while bulk prefetch is paused");
     assert.ok(f.jsonParseSizes.length>=events.length,
         "CommonEvents entries must be parsed individually, not as one giant array");
     assert.ok(Math.max.apply(null,f.jsonParseSizes)<100000,
         "no synchronous JSON.parse may receive the whole 10+ MB common-event file");
     assert.ok(heartbeats>2,
         "incremental CommonEvents parsing must yield to the render/event loop");
+}
+async function testInventoryHasNoFortyThousandTextCeiling(){
+    const data=path.join("/tmp","servidor-qa-unlimited-inventory-日本語","www","data");
+    const state={files:{},dirs:{[data]:true}};
+    const events=[null],count=40025;
+    let lastText="";
+    for(let i=0;i<count;i++){
+        const suffix=String(i+1).padStart(5,"0");
+        const text="Please open the hidden gate number "+suffix+" now.";
+        if(i===count-1)lastText=text;
+        events.push({id:i+1,name:"Common event "+(i+1),trigger:0,
+            list:[{code:401,parameters:[text]}]});
+    }
+    const raw=JSON.stringify(events);
+    assert.ok(raw.length<16*1024*1024,
+        "40,025 distinct texts must fit inside the supported per-file safety limit");
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null]});
+    state.files[path.join(data,"CommonEvents.json")]=raw;
+    const f=fixture(0,{fsState:state,batch:true});
+    const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();
+    f.context.SceneManager._scene=new f.context.Scene_Map();
+    const deadline=Date.now()+45000;
+    while(!f.context.scanStats.done&&Date.now()<deadline)await wait(10);
+    assert.ok(f.context.scanStats.done,"full inventory must finish without a candidate-count cutoff");
+    assert.ok(f.context.discovered.size>40000,
+        "the inventory must exceed the former 40,000-text ceiling");
+    assert.ok(f.context.discovered.has("en\\u0000"+lastText),
+        "the final unique event text must be present after the former cutoff");
+    assert.equal(f.context.scanStats.limited,false,
+        "a large number of valid texts must not be reported as a truncated inventory");
 }
 async function testR6FirstViewNativeGate(mz){
     const text="Where are you going?",choice="Please open the door.",cold="Please close the window.";
@@ -2320,6 +2354,7 @@ async function testR8GeneralDisplaySurfaces(){
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testLargeGamePausesBackgroundPrefetch();
     await testLargeCommonEventsJsonIsParsedIncrementally();
+    await testInventoryHasNoFortyThousandTextCeiling();
     await testR3PatchRepairsStandardNoticeAndKeepsColor();
     await testR3P2NoticeVariantsOnFirstNativeDraw();
     await testR4EnglishFormatContextAndStaleCache();
