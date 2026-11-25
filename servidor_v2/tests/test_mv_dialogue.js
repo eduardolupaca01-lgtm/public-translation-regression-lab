@@ -172,7 +172,7 @@ function fixture(translationDelay=0,options={}){
         Window_Message.prototype.textColor=function(i){return "color-"+i;};
         Window_Message.prototype.newPage=function(){this.pages=(this.pages||0)+1;};
         Window_Message.prototype.finishPage=function(){
-            this.contents.drawText(this._textState.text,168,0,720,32);
+            if(this.contents&&this._textState)this.contents.drawText(this._textState.text,168,0,720,32);
             this._textState=null;this.pause=true;
         };
         Window_Message.prototype.isAnySubWindowActive=function(){return !!this.choiceActive;};
