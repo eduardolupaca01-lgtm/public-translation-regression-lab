@@ -2236,7 +2236,7 @@ function hookNativeSurface(){
             bitmapPollScheduled=false;
             var now=Date.now();
             bitmapJobs.slice().forEach(function(job){
-                if(!job.valid||!job.bitmap||job.bitmap.width!==job.width||job.bitmap.height!==job.height||
+                if(!job.valid||!job.bitmap||job.bitmap._iaOwnerWindow||job.bitmap.width!==job.width||job.bitmap.height!==job.height||
                    inputFormActive()||job.formEpoch!==formEpoch||
                    (typeof SceneManager!=="undefined"&&SceneManager._scene!==job.scene)){
                     disposeBitmapJob(job);return;
@@ -2506,7 +2506,8 @@ function hookNativeSurface(){
             finally{bitmapNativeDepth--;}
         }
         Bitmap.prototype.drawText=function(){
-            if(bitmapReplayDepth||inputFormActive())return callBitmapDraw(this,arguments);
+            if(bitmapReplayDepth||inputFormActive()||
+               (typeof Window_Message!=="undefined"&&this._iaOwnerWindow instanceof Window_Message))return callBitmapDraw(this,arguments);
             var args=Array.prototype.slice.call(arguments),raw=typeof args[0]==="string"?args[0]:null;
             var direct=!!(raw&&!surfaceDepth&&!identityDrawDepth&&!this._iaOwnerWindow),job=null,source=null,group=null;
             if(!bitmapReplayDepth&&this._iaDrawJobs)invalidateBitmapJobs(this,bitmapTextRect(this,args),false);
@@ -2647,11 +2648,13 @@ function snapshotMessage(win,ticket){
         var pad=typeof win.itemPadding==="function"?Number(win.itemPadding()):0;
         if(!isFinite(pad)||pad<0||pad>64)return;
         rightPad=pad;
-        if(typeof ts._baseX==="number"&&isFinite(ts._baseX))x=ts._baseX;
-        // Explicit NEV controls calculate their base from itemPadding, not
-        // the original English line's offset. Never move into a face area.
-        if(original.alignment&&typeof ticket.message.faceName==="function"&&!ticket.message.faceName()&&
-           typeof win.itemPadding==="function"&&typeof ts._baseX==="number")x=pad;
+        var faceKnown=typeof ticket.message.faceName==="function",hasFace=faceKnown&&!!ticket.message.faceName();
+        var baseX=typeof ts._baseX==="number"&&isFinite(ts._baseX)?ts._baseX:x;
+        // createTextState runs before MZ applies the portrait margin.
+        // Do not clear the face if an author's alignment starts inside it.
+        if(hasFace&&baseX<x&&original.alignment)return;
+        x=Math.max(x,baseX);
+        if(original.alignment&&faceKnown&&!hasFace&&typeof win.itemPadding==="function")x=pad;
     }
     if(!isFinite(x)||!isFinite(y)||!isFinite(h)||x<0||y<0||h<8||h>128||
        x>=b.width||y>=b.height)return;
@@ -3314,6 +3317,9 @@ function hookAuthoredMZ(){
     };
 }
 
+function bindNativeMessageBitmap(win){
+    try{if(win&&win.contents&&typeof win.contents==="object")win.contents._iaOwnerWindow=win;}catch(_){}
+}
 function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var proto=Window_Message.prototype,original=proto.startMessage;
@@ -3331,7 +3337,7 @@ function hookMessages(){
     }
     proto.startMessage=function(){
         hideLate(this);this._iaSourceMessage=null;
-        if(inputFormActive()){identityDrawDepth++;try{return original.apply(this,arguments);}finally{identityDrawDepth--;}}
+        if(inputFormActive()){identityDrawDepth++;try{return original.apply(this,arguments);}finally{identityDrawDepth--;bindNativeMessageBitmap(this);}}
         var projection=null;
         try{
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
@@ -3399,7 +3405,7 @@ function hookMessages(){
         var out,previousProjection=tsvProjection;
         tsvProjection=projection;
         try{out=original.apply(this,arguments);}
-        finally{tsvProjection=previousProjection;}
+        finally{tsvProjection=previousProjection;bindNativeMessageBitmap(this);}
         if(projection&&projection.used){
             if(projection.iavra){if(projection.translated){state.shown++;iavra.shown++;}}
             else{state.shown++;if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
@@ -3411,11 +3417,13 @@ function hookMessages(){
     var newPage=proto.newPage;
     if(typeof newPage==="function")proto.newPage=function(){
         var t=this._iaLateTicket;if(t)t.pages++;
-        return newPage.apply(this,arguments);
+        bindNativeMessageBitmap(this);
+        try{return newPage.apply(this,arguments);}finally{bindNativeMessageBitmap(this);}
     };
     var update=proto.update;
     if(typeof update==="function")proto.update=function(){
         // Apply before native input consumes a final pause. No new window.
+        bindNativeMessageBitmap(this);
         var ticket=this._iaLateTicket;
         if(ticket&&ticket.tsv&&!ticket.drawn){
             try{tsvRefreshTicket(this,ticket);}catch(_){state.errors++;}

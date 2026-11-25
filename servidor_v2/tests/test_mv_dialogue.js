@@ -2543,7 +2543,7 @@ async function testR11NevDialogUiAlignmentLateRedraw(){
         await wait(30);
         const c=f.context;c.SceneManager._scene=new c.Scene_Map();
         const m=new c.Window_Message();f.$gameMessage._texts=[raw];m.startMessage();
-        if(m.contents)m.contents._iaOwnerWindow=m;
+        assert.equal(m.contents._iaOwnerWindow,m,"the native message owns its Bitmap without a fixture workaround");
         assert.equal(m.originalStarts,1);
         m.finishPage();
         const deadline=Date.now()+3000;
