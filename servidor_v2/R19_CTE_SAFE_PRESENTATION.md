@@ -1,0 +1,8 @@
+# R19 — safe presentation for the native CTE JSON dialect
+
+R18 remains the base. No user game, cache, models or third-party script is included.
+
+- Detect the explicit MZ CustomTranslationEngine profile and EN/ES language catalog directories. Index bounded read-only proven display fields from map/common/troop, speaker captions, quest, compendium, plugin label and database language files. Pair native catalog entries by path, never by shifted choice indices; skip conflicting mappings, conditional expressions and custom executable control codes. Preserve existing Spanish and use OPUS only for eligible English text without a safe pair.
+- This profile uses an isolated presentation adapter, not the older message mutation, asynchronous native choice-start, full choice-list relayout or destructive late bitmap replay paths. Resolve native conversion first; preserve original event/choice arrays. Scope missing-string recovery to native choice paint, use a proven same-index source where possible, and do not swallow unrelated native exceptions. A short bounded message wait and still-current row repaint do not change branches.
+- Tests use independently authored synthetic text, native conversion, an undefined draw, a native missing-string error, a truncated choice catalog, and a missing Spanish entry. Verify original choice indices, flags, original message data and catalog preservation. Other games retain their earlier adapters and tests.
+- Original JavaScript plugins and full runtime were not supplied; this specifically mitigates the observed error path, not a claim that all author-side localization problems are fixed. Native conditional strings and unknown/custom surfaces remain unmodified.

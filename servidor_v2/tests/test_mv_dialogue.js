@@ -2533,6 +2533,92 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR19CteNativeChoicesAndCatalogs(){
+    const root=path.join("/tmp","servidor-qa-cte-日本語"),data=path.join(root,"data"),
+        languages=path.join(root,"languages"),en=path.join(languages,"EN"),es=path.join(languages,"ES");
+    const state={files:{},dirs:{[data]:true,[languages]:true,[en]:true,[es]:true}};
+    const raw="Open the wooden gate.",tr="Abre la puerta de madera.",missing="Please bring the silver lantern.",
+        translated="Por favor, trae el farol de plata.",quest="Find the lost key.",questEs="Encuentra la llave perdida.",
+        normal="The garden is open.",normalEs="El jardín está abierto.";
+    const condition="@if V[1] == 1\nOne key.\n@else\nMany keys.";
+    const docs={
+        "Actors.json":{ "actor-1":{name:"Alice"} },
+        "AllCommons.json":{"common-27":{"choice-1":raw+"\nWait here.","message-1":normal,"message-2":missing,"message-3":condition,"choice-2":"Look at the fountain.\nVisit the old bridge."}},
+        "Map001.json":{events:{"1":{pages:{"0":{"message-1":"The garden is open."}}}}},
+        "Quests.json":{"0":{"title_cte":quest,"objectives_cte":{"0":"Open the wooden gate."}}},
+        "AllPlugins.json":{plugins:{sample:{command_cte:"Options",formatFunc_cte:"return something;"}}}
+    };
+    const esDocs={
+        "Actors.json":{"actor-1":{name:"Alice"}},
+        "AllCommons.json":{"common-27":{"choice-1":tr+"\nEspera aquí.","message-1":normalEs,"message-2":"","message-3":condition,"choice-2":"Mira la fuente."}},
+        "Map001.json":{events:{"1":{pages:{"0":{"message-1":normalEs}}}}},
+        "Quests.json":{"0":{"title_cte":questEs,"objectives_cte":{"0":tr}}},
+        "AllPlugins.json":{plugins:{sample:{command_cte:"Opciones",formatFunc_cte:"return another;"}}}
+    };
+    state.files[path.join(languages,"Languages.json")]=JSON.stringify({codes:{EN:1,ES:.8}});
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    for(const [name,doc] of Object.entries(docs))state.files[path.join(en,name)]=JSON.stringify(doc);
+    for(const [name,doc] of Object.entries(esDocs))state.files[path.join(es,name)]=JSON.stringify(doc);
+    const snapshots=JSON.stringify(Object.entries(state.files).filter(([name])=>name.startsWith(languages)));
+    const f=fixture(100,{root,mz:true,fsState:state,testHooks:true,
+        plugins:[{name:"thirdparty/CustomTranslationEngine",status:true,parameters:{}},{name:"auramz/choices",status:true,parameters:{}}],
+        responses:{[missing]:translated},configure(c){
+            c.Window_Base.prototype.convertEscapeCharacters=function(value){
+                // Native lookup must see the original authored value.
+                if(value===raw||value===normal||value===missing||value==="Wait here."||value===quest||value===normalEs)
+                    return value.replace(/\\/g,"\x1b");
+                if(value==="BROKEN_NATIVE_CHOICE")return undefined.replace(/x/g,"");
+                return value.replace(/\\/g,"\x1b");
+            };
+            c.Window_Base.prototype.drawTextEx=function(v){this.lastTextEx=this.convertEscapeCharacters(v);return this.lastTextEx.length;};
+            c.Window_Message.prototype.startMessage=function(){this.originalStarts++;this.nativeRaw=c.$gameMessage.allText();this.painted=c.Window_Base.prototype.convertEscapeCharacters.call(this,this.nativeRaw);};
+            function Choice(){this.active=true;this.openness=255;this._list=[];this._index=1;this.painted=[];this.starts=0;}
+            Choice.prototype=Object.create(c.Window_Base.prototype);Choice.prototype.constructor=Choice;
+            Choice.prototype.start=function(){
+                this.starts++;
+                this._list=c.$gameMessage._choices.map((name,i)=>({name,symbol:"choice",enabled:i===0,ext:i+10}));
+                this._list.forEach((_,i)=>this.drawItem(i));
+            };
+            Choice.prototype.drawItem=function(i){
+                this.drawTextEx(this.invalid===i?undefined:this._list[i].name,0,0);
+                this.painted[i]=this.lastTextEx;
+            };
+            Choice.prototype.redrawItem=function(i){this.drawItem(i);};
+            Choice.prototype.update=function(){};
+            Choice.prototype.updatePlacement=function(){throw Error("native list must not be rebuilt");};
+            c.Window_ChoiceList=Choice;
+        }});
+    const c=f.context;
+    const end=Date.now()+5000;
+    while(!c.window.__IA_TRADUCTORA_TEST__.done()&&Date.now()<end)await wait(20);
+    assert.ok(c.window.__IA_TRADUCTORA_TEST__.done());
+    c.SceneManager._scene=new c.Scene_Map();
+    const win=new c.Window_ChoiceList();
+    c.$gameMessage.setChoices([raw,"Wait here."]);win.start();
+    assert.equal(win.starts,1);assert.equal(win.painted[0],tr);assert.equal(win.painted[1],"Espera aquí.");
+    assert.equal(win._list[0].name,raw);assert.equal(win._list[1].ext,11);assert.equal(win._list[1].enabled,false);
+    assert.equal(win._index,1);assert.equal(c.$gameMessage._choices[0],raw);
+    win.invalid=0;win.drawItem(0);assert.equal(win.painted[0],tr,"undefined draw must recover the original current row");
+    win.invalid=-1;win._list[0].name="BROKEN_NATIVE_CHOICE";win.drawItem(0);
+    assert.equal(win.painted[0],"BROKEN_NATIVE_CHOICE","native missing-string exception preserves nonblank source");
+    win._list[0].name=raw;
+    c.$gameMessage._texts=[normal];const msg=new c.Window_Message();msg.startMessage();
+    assert.equal(msg.nativeRaw,normal);assert.equal(msg.painted,normalEs);assert.equal(c.$gameMessage.allText(),normal);
+    const w=new c.Window_Base(new c.Rectangle(0,0,600,200));
+    w.drawTextEx(quest,0,0);assert.equal(w.lastTextEx,questEs);
+    w.drawTextEx(normalEs,0,0);assert.equal(w.lastTextEx,normalEs);
+    w.drawTextEx(condition,0,0);assert.equal(w.lastTextEx,condition);
+    assert.ok(w.convertEscapeCharacters("Visit the old bridge.").trim());
+    const until=Date.now()+4000;
+    while(w.convertEscapeCharacters(missing)!==translated&&Date.now()<until)await wait(25);
+    assert.equal(w.convertEscapeCharacters(missing),translated);
+    assert.ok(f.posts.some(p=>p.text===missing));
+    assert.ok(!f.posts.some(p=>p.text===raw||p.text===normalEs||p.text===condition||p.text==="return something;"||p.text==="Alice"));
+    const b=new c.Bitmap(500,60);b.drawText(normal,0,0,400,30);assert.equal(b.lastText,normalEs);
+    assert.equal(b.clears||0,0,"no late bitmap clearing");
+    assert.equal(JSON.stringify(Object.entries(state.files).filter(([name])=>name.startsWith(languages))),snapshots);
+    c.$gameMessage.clear();win.active=false;for(let i=0;i<12;i++)win.update();assert.equal(win.starts,1);
+}
 async function testR17CompressedNativeMZ(){
     const root=path.join("/tmp","servidor-qa-por-日本語"),data=path.join(root,"data"),js=path.join(root,"js"),pluginsDir=path.join(js,"plugins");
     const state={files:{},dirs:{[data]:true,[js]:true,[pluginsDir]:true}};
@@ -3247,6 +3333,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR19CteNativeChoicesAndCatalogs();
     await testR17CompressedNativeMZ();
     await testR16HexChoicesAndChauPopup();
     await testR15NativeLocaleAndFallback();
