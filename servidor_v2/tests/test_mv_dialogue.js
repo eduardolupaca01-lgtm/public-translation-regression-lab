@@ -2578,6 +2578,12 @@ async function testR17CompressedNativeMZ(){
     },configure(c){
         c.LZString={decompressFromBase64(raw){calls.push(raw);return decoded[raw]||null;}};
         c.IAVRA={MasterLocalization:{I18N:{language:"en"}}};
+        c.Window_Base.prototype.convertEscapeCharacters=function(raw){
+            const en={n1:"Alice",line1:dialogue,choice1:choice,item1:item};
+            const ja={n1:"アリス",line1:jp,choice1:"木の門を開ける。",item1:"銀のランタン"};
+            const table=c.IAVRA.MasterLocalization.I18N.language==="jp"?ja:en;
+            return raw.replace(/\{([\w.]+)\}/g,(token,key)=>Object.prototype.hasOwnProperty.call(table,key)?table[key]:token);
+        };
         const p=c.Window_Message.prototype;
         p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
         p.startMessage=function(){this.originalStarts++;this._textState={text:c.$gameMessage.allText(),index:0};this.pause=false;};
