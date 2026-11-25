@@ -365,7 +365,7 @@ function numbersIn(text){
 // stock syntax even if the plugin/catalog is not ready, plus configured variants.
 function externalLocalizationReference(text){
     if(typeof text!=="string")return false;
-    if(/#\\{[A-Za-z0-9_.-]{1,300}\\}|«[A-Za-z0-9_.-]{1,300}»/.test(text))return true;
+    if(/#\{[A-Za-z0-9_.-]{1,300}\}|«[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+»/.test(text))return true;
     return typeof iavra!=="undefined"&&!!iavra&&iavra.detected&&iavraHasReference(text);
 }
 function validTranslation(source,original,result,composed){
@@ -3241,7 +3241,7 @@ function iavraActiveSource(){
 }
 function iavraReferencePattern(){
     return new RegExp(iavraEscapeRegex(iavra.prefix)+"([A-Za-z0-9_.-]{1,300})"+
-        iavraEscapeRegex(iavra.suffix)+"|«([A-Za-z0-9_.-]{1,300})»","g");
+        iavraEscapeRegex(iavra.suffix)+"|«([A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)+)»","g");
 }
 function iavraKeyValid(key){
     return typeof key==="string"&&key.length<=300&&
