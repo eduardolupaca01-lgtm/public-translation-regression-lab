@@ -511,6 +511,7 @@ function startPersistentCache(){
     cacheFile=path.join(cacheDir,"translations-ja-en-es-v2.jsonl");
     function finish(ok){
         cacheReadDone=true;diskReady=ok;
+        if(cte.enabled)startCteScan();
         if(externalTables()){
             // Early visible requests can precede the disk read. Reconcile
             // restored exact keys, then inventory against the full cache.
@@ -6810,6 +6811,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
+            cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.errors+" avisos":
             iavra.detected?(iavra.por?"JSONO externo: ":"JSON externo: ")+iavra.files+" archivos · "+iavra.strings+" textos · "+iavra.shown+" mostrados":
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
