@@ -2159,13 +2159,17 @@ function hookNativeSurface(){
             var b=job.bitmap,r=job.rect;
             if(b.width!==job.width||b.height!==job.height||
                typeof b.clearRect!=="function"||typeof b.blt!=="function")return;
+            var opacity=b.paintOpacity;
             bitmapReplayDepth++;
             try{
                 b.paintOpacity=255;
                 b.clearRect(r.x,r.y,r.w,r.h);
                 b.blt(job.backup,0,0,r.w,r.h,r.x,r.y);
             }catch(_){state.errors++;}
-            finally{bitmapReplayDepth--;}
+            finally{
+                if(opacity!==undefined)b.paintOpacity=opacity;
+                bitmapReplayDepth--;
+            }
         }
         function invalidateBitmapJobs(bitmap,rect,restore){
             if(bitmapReplayDepth||!bitmap||!bitmap._iaDrawJobs)return;
