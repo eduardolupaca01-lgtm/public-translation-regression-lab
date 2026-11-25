@@ -1,0 +1,8 @@
+# R16 — literal hex-colour choices and MV popup rendering
+
+R15 remains the base. No supplied game source, images, data, cache, or actual narrative is redistributed.
+
+- Recognize explicit hex-colour choice runs only with the matching active MV presentation plugins. Separate authored literal action/quote envelopes from genuine native controls, preserve colour tokens and delimiters, protect unknown tags and identity fields, translate verified display segments, and bypass old incomplete composite cache entries. Known stat captions preserve numerical values.
+- The original message and choice lists keep their text and branch metadata. Project only during native measure/draw, and redraw a still-current active row without calling native start or rebuilding its command list. Use a single bounded first-view gate for the dialect.
+- Inventory simple_popup payloads from the verified command grammar, then resolve translation in Sprite_Popup.setText before native sizing and per-character paint. Keep all command target, timing, size, colour and variable escape values unchanged. A short bounded wait for static popup requests affects only visual creation, not the interpreter; variable-dependent and crowded queues never wait.
+- Synthetic fixtures exercise stale composite cache, choice label/index/enabled invariants, native popup sizing boundary, resource amount and stale-window cancellation. Full game acceptance, and the exact reported intermittent glitch, still require the real runtime. Unrecognized tags, other third-party drawing APIs and rejected translations remain conservative fail-open.

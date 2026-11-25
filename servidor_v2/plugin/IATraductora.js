@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R15-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R16-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -842,6 +842,10 @@ function translatePreservingControls(source,text,skipPlan,priority){
     var key=source+"\u0000"+text;
     var ready=readyText(source,text);
     if(ready!==null)return Promise.resolve(ready);
+    if(typeof hexChoicePlans!=="undefined"&&hexChoicePlans.has(text)){
+        var hp=hexChoicePlans.get(text);
+        return Promise.all(hp.parts.map(function(p){return p.source?translatePreservingControls(p.source,p.body,false,priority):Promise.resolve(null);})).then(function(){var h=hexChoiceRead(text,false);return h?h.shown:null;});
+    }
     var completePlan=tsvEnglishPlan(source,text);
     if(completePlan)return tsvPlanTranslate(source,text,completePlan,priority);
     var plan=source==="en"&&!skipPlan?englishFormatPlan(text):null;
@@ -1152,6 +1156,7 @@ function hasJapaneseProse(text){
     });
 }
 function readyText(source,text){
+    if(typeof hexChoicePlans!=="undefined"&&hexChoicePlans.has(text)){var h=hexChoiceRead(text,false);return h?h.shown:null;}
     var exact=cachedPart(source,text),tsvPlan=tsvEnglishPlan(source,text);
     if(tsvPlan&&(!exact||tsvCoverageSuspect(text,exact,tsvPlan))){
         // Keep the original journal; only replace the in-memory result
@@ -2917,8 +2922,183 @@ function firstViewRequest(source,text){
     });
     nextPrefetch();
 }
+// R16: the verified MV hex-colour choice dialect uses literal angle
+// brackets for visible actions. Do not weaken the global escape parser.
+// Inventory and compose only authored choice display segments.
+var hexChoicePlans=new Map(),chauPopupPlans=new Map();
+function hexChoiceEnabled(){
+    return !isMZ&&pluginEnabled(/^YEP_X_ExtMesPack1$/)&&pluginEnabled(/^OssraWindowChoiceList$/);
+}
+function hexChoiceTag(raw){
+    var labels={"STRENGTH":"FUERZA","DEXTERITY":"DESTREZA","INTELLECT":"INTELECTO",
+        "SKIP INTRO":"OMITIR INTRO","INTRO SKIP":"OMITIR INTRO","EXIT CABIN":"SALIR DE LA CABAÑA",
+        "CABIN EXIT":"SALIR DE LA CABAÑA","QUIT GAME":"SALIR DEL JUEGO","LEAVE/END":"SALIR/TERMINAR",
+        "TRICKSTER":"EMBAUCADOR","DIPLOMAT":"DIPLOMÁTICO","BROKER":"NEGOCIADOR",
+        "MADMAN":"LOCO","WARLORD":"SEÑOR DE LA GUERRA","SOLDIER":"SOLDADO","DRUNKARD":"BORRACHO",
+        "CRUSADER":"CRUZADO","MERCENARY":"MERCENARIO","ROMANCE":"ROMANCE"};
+    if(Object.prototype.hasOwnProperty.call(labels,raw))return labels[raw];
+    var m=/^([A-Z ]+)(:[ \t]*(?:[+-]\d{1,8}|DC\?\?))$/.exec(raw);
+    if(m&&Object.prototype.hasOwnProperty.call(labels,m[1]))return labels[m[1]]+m[2];
+    m=/^(Gold|Rank|Companion|Weapon Skill|Monster Lore)(?=[: (])/.exec(raw);
+    if(m){
+        var terms={Gold:"Oro",Rank:"Rango",Companion:"Compañero", "Weapon Skill":"Habilidad con armas","Monster Lore":"Conocimiento de monstruos"};
+        return terms[m[1]]+raw.slice(m[1].length);
+    }
+    return raw;
+}
+function hexChoiceSegment(value){
+    var lead=(value.match(/^[ \t]*/)||[""])[0],tail=(value.match(/[ \t]*$/)||[""])[0];
+    if(lead.length+tail.length>=value.length)return {raw:value};
+    var body=value.slice(lead.length,value.length-tail.length),prefix=lead,suffix=tail;
+    if(/^\d{1,3}[:.]$/.test(body))return {raw:value};
+    var m=/^\[([^\[\]<>]{1,140})\]$/.exec(body);
+    if(m)return {raw:value,fixed:prefix+"["+hexChoiceTag(m[1])+"]"+suffix};
+    if(body.charAt(0)==="<"&&body.charAt(body.length-1)===">"){
+        body=body.slice(1,-1);prefix+="<";suffix=">"+suffix;
+        // Real conditional/formatting tags and unknown nested tags remain
+        // literal; a bare coloured action is not treated as a notetag.
+        if(/^(?:\/|wordwrap\b|br\b|if\b|else\b|switch\b|show\b|hide\b|eval\b|script\b|c:)/i.test(body)||
+           !/[A-Za-z]{2}[ \t]+[A-Za-z]{2}/.test(body))return {raw:value};
+    }else if(body.charAt(0)==='"'&&body.charAt(body.length-1)==='"'){
+        body=body.slice(1,-1);prefix+='"';suffix='"'+suffix;
+    }
+    if(!body.trim()||actorNames[body]||/[<>{}\r\n\u0000\uFFFD]/.test(body)||
+       /[áéíóúüñ¿¡]/i.test(body)||csvExecutableSyntax(body)||
+       /(?:\\|\x1b)(?!(?:[nvpic]\[\d{1,6}\]))/i.test(body))return {raw:value};
+    var source=authoredSource(body,true);
+    return source==="en"?{raw:value,body:body,source:source,prefix:prefix,suffix:suffix}:{raw:value};
+}
+function hexChoiceRemember(raw,priority){
+    if(!hexChoiceEnabled()||typeof raw!=="string"||raw.length>1800||
+       !/^(?:\\|\x1b)hc\[[a-f0-9]{6}\]/i.test(raw))return null;
+    if(hexChoicePlans.has(raw))return hexChoicePlans.get(raw);
+    if(hexChoicePlans.size>=10000)return null;
+    var chunks=raw.split(/((?:\\|\x1b)hc\[[a-f0-9]{6}\])/gi);
+    if(chunks[0]||chunks.length<3||chunks.length>81)return null;
+    var parts=[];
+    for(var i=1;i<chunks.length;i+=2){
+        parts.push({raw:chunks[i]});
+        if(i+1<chunks.length)parts.push(hexChoiceSegment(chunks[i+1]));
+    }
+    if(!parts.some(function(p){return p.source||p.fixed!==undefined&&p.fixed!==p.raw;}))return null;
+    var plan={parts:parts};hexChoicePlans.set(raw,plan);
+    parts.forEach(function(p){if(p.source)authoredRemember(p.source,p.body,priority);});
+    return plan;
+}
+function hexChoiceRead(raw,requestMissing){
+    var plan=hexChoicePlans.get(raw);if(!plan)return null;
+    var waiting=false,parts=plan.parts.map(function(p){
+        if(p.fixed!==undefined)return p.fixed;
+        if(!p.source)return p.raw;
+        var value=readyText(p.source,p.body);
+        if(typeof value==="string"&&!/[<>{}\r\n]/.test(value)&&
+           (value===p.body&&stableDisplay(p.body,false)===value||validTranslation(p.source,p.body,value,true)))
+            return p.prefix+value+p.suffix;
+        if(rejectedKeys.get(p.source+"\u0000"+p.body)!==Infinity){
+            waiting=true;if(requestMissing)firstViewRequest(p.source,p.body);
+        }
+        return p.raw;
+    });
+    // Never accept the old, partly translated composite cache key. An
+    // incomplete row stays original until every viable span is ready.
+    return {waiting:waiting,shown:waiting?null:parts.join("")};
+}
+function chauPopupEnabled(){return !isMZ&&pluginEnabled(/^Chau_Simple Popups$/);}
+function chauPopupPayload(command){
+    if(!chauPopupEnabled()||typeof command!=="string"||command.length>2200)return null;
+    var m=/^simple_popup[ \t]+(?:player|self|(?:event|actor|follower|enemy)[ \t]+\d{1,6})[ \t]+/i.exec(command);
+    if(!m)return null;
+    var rest=command.slice(m[0].length),seen=Object.create(null),opt;
+    var re=/^(offset_y|font_size|text_color)[ \t]+(-?\d{1,4}|#[0-9a-fA-F]{6})[ \t]+/;
+    while((opt=re.exec(rest))!==null){
+        if(seen[opt[1]]||opt[1]==="text_color"&&!/^#/.test(opt[2])||opt[1]!=="text_color"&&/^#/.test(opt[2]))return null;
+        seen[opt[1]]=true;rest=rest.slice(opt[0].length);
+    }
+    // The native parser searches for these tokens anywhere; don't guess
+    // the meaning of a command whose remaining fields are ambiguous.
+    if(/(?:^|[ \t])(?:offset_y|font_size|text_color|event|self|player|follower|actor|enemy)(?:[ \t]|$)/.test(rest))return null;
+    return rest.trim()?rest:null;
+}
+function chauPopupFixed(raw){
+    var m=/^([+-]?(?:(?:\\|\x1b)v\[\d{1,6}\]|\d{1,9})[ \t]+)(Gold)([!.]?)$/i.exec(raw);
+    if(m)return m[1]+"de oro"+m[3];
+    if(raw==="Gold!")return "¡Oro!";
+    return null;
+}
+function chauPopupRemember(raw,priority){
+    if(!chauPopupEnabled()||typeof raw!=="string"||!raw.trim()||raw.length>1000||
+       actorNames[raw]||/[<>{}\r\n\u0000\uFFFD]/.test(raw)||csvExecutableSyntax(raw)||
+       /[áéíóúüñ¿¡]/i.test(raw)||/(?:\\|\x1b)(?!(?:[nvpi]\[\d{1,6}\]|g\b))/i.test(raw))return null;
+    if(chauPopupPlans.has(raw))return chauPopupPlans.get(raw);
+    if(chauPopupPlans.size>=5000)return null;
+    var fixed=chauPopupFixed(raw),source=authoredSource(raw,true),plan;
+    if(fixed!==null)plan={fixed:fixed};
+    else if(source==="en")plan={source:source};
+    else return null;
+    chauPopupPlans.set(raw,plan);
+    if(plan.source)authoredRemember(plan.source,raw,priority);
+    return plan;
+}
+function chauPopupRead(raw,requestMissing){
+    var plan=chauPopupPlans.get(raw)||chauPopupRemember(raw,true);
+    if(!plan)return {shown:null,waiting:false};
+    if(plan.fixed!==undefined)return {shown:plan.fixed,waiting:false};
+    var result=readyText(plan.source,raw);
+    if(typeof result==="string")return {shown:result,waiting:false};
+    var waiting=rejectedKeys.get(plan.source+"\u0000"+raw)!==Infinity;
+    if(waiting&&requestMissing)firstViewRequest(plan.source,raw);
+    return {shown:null,waiting:waiting};
+}
+function hookChauPopups(){
+    if(!chauPopupEnabled()||typeof Sprite_Popup==="undefined"||!Sprite_Popup.prototype||
+       typeof Sprite_Popup.prototype.setText!=="function")return;
+    var set=Sprite_Popup.prototype.setText;
+    Sprite_Popup.prototype.setText=function(raw){
+        if(inputFormActive()||identityDrawDepth)return set.apply(this,arguments);
+        var args=Array.prototype.slice.call(arguments);
+        try{var r=chauPopupRead(raw,true);if(r.shown!==null){args[0]=r.shown;if(r.shown!==raw)state.shown++;}}
+        catch(_){state.errors++;}
+        // The original calculates its bitmap size, then draws characters
+        // one by one. Do not independently translate those glyphs.
+        return nativeCaptionScope(this,set,args);
+    };
+    function requestHook(proto){
+        if(!proto||typeof proto.requestPopup!=="function")return;
+        var native=proto.requestPopup;
+        proto.requestPopup=function(raw){
+            if(!inputFormActive())try{chauPopupRead(raw,true);}catch(_){state.errors++;}
+            return native.apply(this,arguments);
+        };
+    }
+    if(typeof Game_Character!=="undefined")requestHook(Game_Character.prototype);
+    if(typeof Game_Battler!=="undefined")requestHook(Game_Battler.prototype);
+    function factoryHook(proto,field){
+        if(!proto||typeof proto.addPopupSprite!=="function")return;
+        var native=proto.addPopupSprite;
+        proto.addPopupSprite=function(){
+            var queue=this[field]&&this[field]._popupRequests,item=queue&&queue[0];
+            try{
+                if(!inputFormActive()&&state.connected&&item&&queue.length<=4&&
+                   typeof item.text==="string"&&!/[\\\x1b]/.test(item.text)){
+                    var r=chauPopupRead(item.text,true),now=Date.now(),scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+                    var gate=this._iaChauGate;
+                    if(!gate||gate.item!==item||gate.scene!==scene)
+                        gate=this._iaChauGate={item:item,scene:scene,started:now};
+                    // No interpreter wait, no duplicate requests or delayed
+                    // variable evaluation. Only a short bounded visual wait.
+                    if(r.waiting&&now-gate.started<900)return;
+                }
+            }catch(_){state.errors++;}
+            this._iaChauGate=null;
+            return native.apply(this,arguments);
+        };
+    }
+    if(typeof Sprite_Character!=="undefined")factoryHook(Sprite_Character.prototype,"_character");
+    if(typeof Sprite_Battler!=="undefined")factoryHook(Sprite_Battler.prototype,"_battler");
+}
 function choiceDisplay(win,raw,requestMissing){
     if(inputFormActive()||identityDrawDepth||typeof raw!=="string"||actorNames[raw])return null;
+    var hex=hexChoiceRead(raw,requestMissing);if(hex)return hex.shown;
     var entries=scriptVariableEntries(raw);
     if(entries.length)return scriptVariableRender(raw,entries,requestMissing);
     if(tsvRef(raw)&&tsv.valid){
@@ -2937,6 +3117,7 @@ function choiceDisplay(win,raw,requestMissing){
 }
 function firstViewMissing(win,raw,choice){
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||remNativeSpanishText(raw)||csvExecutableSyntax(raw))return false;
+    if(choice){hexChoiceRemember(raw,true);var hex=hexChoiceRead(raw,true);if(hex)return hex.waiting;}
     var remFallback=remNativeFallback(raw);
     if(remFallback){
         if(readyText("en",remFallback)!==null||rejectedKeys.get("en\u0000"+remFallback)===Infinity)return false;
@@ -3006,7 +3187,7 @@ function firstViewWait(win){
     if(!missing){win._iaFirstGate=null;return false;}
     var now=Date.now(),g=win._iaFirstGate;
     if(!g){g={started:now};win._iaFirstGate=g;}
-    var viewLimit=FIRST_VIEW_LIMIT;
+    var viewLimit=!raw&&choices.some(function(v){return hexChoicePlans.has(v);})?Math.min(2200,FIRST_VIEW_LIMIT):FIRST_VIEW_LIMIT;
     var offlineLimit=FIRST_VIEW_OFFLINE;
     if(now-g.started>=viewLimit||(!state.connected&&now-g.started>=offlineLimit)){
         win._iaFirstGate=null;return false;
@@ -3128,6 +3309,10 @@ function hookChoiceFirstView(){
         var message=typeof $gameMessage!=="undefined"?$gameMessage:null;
         var raw=message?iaChoiceValues(message):[];
         if(!message||!raw.length||raw.length>24)return original.apply(this,arguments);
+        // The normal message gate already gives the visible choices a
+        // bounded head start. Preserve the native choice list and activate
+        // it once; late readiness changes paint only, never start again.
+        if(raw.some(function(v){return !!hexChoiceRemember(v,true);}))return original.apply(this,arguments);
         var initial=iaChoiceProjection(this,raw);
         if(!initial.waiting)return iaRunNativeChoiceStart(this,original,arguments,message,initial.values);
         var key=JSON.stringify(raw),generation=message._iaFirstGeneration||0;
@@ -4061,6 +4246,7 @@ function hookChoices(){
         try{
             for(var i=0;i<choices.length;i++){
                 if(tsvRef(choices[i])){tsvPrioritize(choices[i],true);continue;}
+                if(hexChoiceRemember(choices[i],true)){hexChoiceRead(choices[i],true);continue;}
                 var source=displaySource(choices[i],"choice");
                 if(!source)continue;
                 addPrefetch(choices[i],true,source);
@@ -5528,6 +5714,13 @@ function hookCsvChoiceLabels(){
     var p=Window_ChoiceList.prototype,update=p.update;
     function display(win,index,fn,args){
         var item=win._list&&win._list[index],raw=item&&item.name,translated=null;
+        if(!inputFormActive()&&!identityDrawDepth&&hexChoicePlans.has(raw)){
+            var r=hexChoiceRead(raw,true),shown=r&&r.shown!==null?r.shown:raw;
+            item.name=shown;
+            try{return nativeCaptionScope(win,fn,args);}
+            finally{if(item.name===shown)item.name=raw;
+                (win._iaCsvPaint||(win._iaCsvPaint=[]))[index]={item:item,raw:raw,shown:shown};}
+        }
         if(!inputFormActive()&&(csvWindowEligible(win)||csvWindowChoice(win))&&typeof raw==="string"){
             try{translated=choiceDisplay(win,raw,true);}catch(_){state.errors++;}
         }
@@ -5550,6 +5743,10 @@ function hookCsvChoiceLabels(){
         var measure=p[measureMethod];
         p[measureMethod]=function(text){
             var args=Array.prototype.slice.call(arguments);
+            if(!inputFormActive()&&!identityDrawDepth&&hexChoicePlans.has(text)){
+                var r=hexChoiceRead(text,true);if(r&&r.shown!==null)args[0]=r.shown;
+                return nativeCaptionScope(this,measure,args);
+            }
             if(!inputFormActive()&&(csvWindowEligible(this)||csvWindowChoice(this)))try{
                 var out=choiceDisplay(this,text,true);if(out!==null)args[0]=out;
             }catch(_){state.errors++;}
@@ -5564,11 +5761,16 @@ function hookCsvChoiceLabels(){
         if(inputFormActive()||!(csvWindowEligible(this)||csvWindowChoice(this))||!this.active||this.openness===0||this._closing||
            !Array.isArray(this._list)||this._list.length>24||typeof this.redrawItem!=="function")return out;
         if((this._iaCsvChoiceTick=(this._iaCsvChoiceTick||0)+1)%4!==0)return out;
-        var win=this,needsLayout=false,changes=[];
+        var win=this,needsLayout=false,changes=[],hexChanges=[];
         try{
             this._list.forEach(function(item,i){
                 var original=item&&item.name;
                 if(typeof original!=="string")return;
+                if(hexChoicePlans.has(original)){
+                    var h=hexChoiceRead(original,true),last=win._iaCsvPaint&&win._iaCsvPaint[i];
+                    if(h&&h.shown!==null&&h.shown!==original&&(!last||last.item!==item||last.raw!==original||last.shown!==h.shown))hexChanges.push(i);
+                    return;
+                }
                 var translated=choiceDisplay(win,original,true);
                 if(translated===null||translated===original)return;
                 var last=win._iaCsvPaint&&win._iaCsvPaint[i];
@@ -5578,6 +5780,10 @@ function hookCsvChoiceLabels(){
                 if(rect&&mzChoiceWidth(win,translated)>rect.width)needsLayout=true;
                 changes.push(i);
             });
+            // The native extended-choice plugin may rebuild the command
+            // list from game data during updatePlacement. Do not relayout
+            // an active hex-colour menu; preserve indices and disabled rows.
+            hexChanges.forEach(function(i){win.redrawItem(i);state.shown++;csvUiStats.drawn++;});
             if(needsLayout){
                 // Native placement uses translated width, and native paint
                 // uses the same original list. Do not refresh the command
@@ -5722,8 +5928,9 @@ function scanCommands(list,priority){
                 if(caption)addPrefetch(caption.body,priority,captionSource(caption.body));
             }
         }else if(cmd.code===102&&Array.isArray(cmd.parameters[0])){
-            cmd.parameters[0].forEach(function(t){addPrefetch(t,priority);});
+            cmd.parameters[0].forEach(function(t){if(!hexChoiceRemember(t,priority))addPrefetch(t,priority);});
         }else if(cmd.code===356){
+            var popup=chauPopupPayload(cmd.parameters[0]);if(popup!==null)chauPopupRemember(popup,priority);
             var caption=ambientPayload(cmd.parameters[0]);if(caption)addPrefetch(caption,priority,"en");
         }else if(cmd.code===117&&priority){
             priorityCommon(cmd.parameters[0],collectInitial);
@@ -6295,7 +6502,7 @@ try{
     state.phase="OPCIONES";hookChoices();
     hookChoiceFirstView();hookCsvChoiceLabels();
     state.phase="INTERFAZ";hookInputForm();
-    hookBuiltinNameInputScene();hookNativeSurface();hookAuthoredMZ();hookRemNative();hookTitleStart();
+    hookBuiltinNameInputScene();hookNativeSurface();hookAuthoredMZ();hookRemNative();hookChauPopups();hookTitleStart();
     state.phase="CONEXION";loadIavraCatalogs(function(){startFullScan();nextPrefetch();});startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.

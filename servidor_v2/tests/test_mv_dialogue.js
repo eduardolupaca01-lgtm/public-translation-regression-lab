@@ -2533,6 +2533,85 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR16HexChoicesAndChauPopup(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語"),data=path.join(root,"www","data"),
+        folder=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const action="Close the wooden door.",dialogue="We should stay here.",popup="You found a silver key.",
+        actionEs="Cierra la puerta de madera.",dialogueEs="Deberíamos quedarnos aquí.",popupEs="Has encontrado una llave de plata.";
+    const first="\\hc[ffffff]1: \\hc[5065c3][STRENGTH] \\hc[07e800]<"+action+"> \\hc[7da7bf]\""+dialogue+"\"";
+    const second="\\hc[ffffff]2: \\hc[07e800]<Open the old gate.>";
+    const expected="\\hc[ffffff]1: \\hc[5065c3][FUERZA] \\hc[07e800]<"+actionEs+"> \\hc[7da7bf]\""+dialogueEs+"\"";
+    const raw=[first,second],saved=JSON.stringify(raw);
+    const state={files:{},dirs:{[data]:true,[folder]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[
+        {code:102,parameters:[raw,-1,0,1,2]},
+        {code:356,parameters:["simple_popup player font_size 20 text_color #858585 "+popup]},
+        {code:356,parameters:["simple_popup player font_size 20 text_color #fffb00 +\\v[114] Gold!"]},
+        {code:356,parameters:["change_popup_se Bell 90 100 0"]}
+    ]}]}]});
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:first,
+        translated:first.replace(dialogue,dialogueEs),composed:true})+"\n";
+    const plugins=["YEP_X_ExtMesPack1","OssraWindowChoiceList","Chau_Simple Popups"].map(name=>({name,status:true,parameters:{}}));
+    const f=fixture(100,{fsState:state,plugins,testHooks:true,responses:{
+        [action]:actionEs,[dialogue]:dialogueEs,"Open the old gate.":"Abre la puerta antigua.",[popup]:popupEs},configure(c){
+        function Choice(){this.active=false;this.openness=0;this._list=[];this.painted=[];this.starts=0;this._index=1;this.redraws=0;}
+        Choice.prototype=Object.create(c.Window_Base.prototype);Choice.prototype.constructor=Choice;
+        Choice.prototype.start=function(){
+            this.starts++;this.active=true;this.openness=255;
+            this._list=c.$gameMessage._choices.map((name,i)=>({name,symbol:"choice",enabled:i===0,ext:i+11}));
+            this._list.forEach((_,i)=>this.drawItem(i));
+        };
+        Choice.prototype.drawItem=function(i){this.painted[i]=this._list[i].name;};
+        Choice.prototype.redrawItem=function(i){this.redraws++;this.drawItem(i);};
+        Choice.prototype.update=function(){};
+        Choice.prototype.textWidthEx=function(v){this.measured=v;return v.length*8;};
+        Choice.prototype.itemRectForText=function(){return {width:200};};
+        Choice.prototype.updatePlacement=function(){throw Error("active list must never be rebuilt");};
+        c.Window_ChoiceList=Choice;
+        function Character(){this._popupRequests=[];}
+        Character.prototype.requestPopup=function(text,fontSize,textColor,oy){this._popupRequests.push({text,fontSize,textColor,oy});};
+        function Popup(raw,font,color){this.setText(raw,font,color);}
+        Popup.prototype.setText=function(raw,font,color){
+            this.raw=raw;this.font=font;this.color=color;
+            this.visibleText=raw.replace(/\\v\[114\]/gi,"14");this.bitmap=new c.Bitmap(500,50);
+            for(const ch of this.visibleText)this.bitmap.drawText(ch,0,0,20,20);
+        };
+        function Sprite(character){this._character=character;this.created=[];}
+        Sprite.prototype.addPopupSprite=function(){const x=this._character._popupRequests.shift();if(x)this.created.push(new c.Sprite_Popup(x.text,x.fontSize,x.textColor));};
+        c.Game_Character=Character;c.Sprite_Character=Sprite;c.Sprite_Popup=Popup;
+    }});
+    const c=f.context;c.SceneManager._scene=new c.Scene_Map();new c.Scene_Title().start();
+    c.$gameMessage.setChoices(raw);
+    const win=new c.Window_ChoiceList();win.start();
+    assert.equal(win.starts,1);assert.equal(JSON.stringify(c.$gameMessage._choices),saved);
+    assert.equal(win._list[0].name,first,"do not rewrite native choice labels");
+    assert.equal(win.painted[0],first,"old partial composite never replaces the complete original");
+    const ch=new c.Game_Character(),sprite=new c.Sprite_Character(ch);
+    ch.requestPopup(popup,20,"#858585",7);
+    const originalRequest=ch._popupRequests[0];
+    const deadline=Date.now()+3500;
+    while(Date.now()<deadline&&(win.painted[0]!==expected||!sprite.created.length)){
+        win.update();if(ch._popupRequests.length)sprite.addPopupSprite();await wait(30);
+    }
+    assert.equal(win.painted[0],expected);assert.equal(win.painted[1],"\\hc[ffffff]2: \\hc[07e800]<Abre la puerta antigua.>");
+    assert.equal(win.starts,1);assert.equal(win._index,1);assert.equal(win._list[1].enabled,false);assert.equal(win._list[1].ext,12);
+    assert.equal(win._list[0].name,first);assert.equal(JSON.stringify(c.$gameMessage._choices),saved);
+    win.textWidthEx(first);assert.equal(win.measured,expected);
+    assert.equal(sprite.created.length,1);assert.equal(sprite.created[0].raw,popupEs);
+    assert.equal(sprite.created[0].font,20);assert.equal(sprite.created[0].color,"#858585");
+    assert.equal(originalRequest.text,popup);assert.equal(originalRequest.oy,7);
+    ch.requestPopup("+\\v[114] Gold!",20,"#fffb00",0);sprite.addPopupSprite();
+    assert.equal(sprite.created[1].visibleText,"+14 de oro!");
+    assert.ok(f.posts.some(p=>p.text===action)&&f.posts.some(p=>p.text===dialogue)&&f.posts.some(p=>p.text===popup));
+    assert.ok(!f.posts.some(p=>/\\hc|simple_popup|#858585|change_popup_se|\\v\[114\]|^STRENGTH$/.test(p.text)));
+    // A reused window cannot receive an expired row's translation.
+    const next="\\hc[ffffff]1: \\hc[07e800]<Wait by the river.>";
+    c.$gameMessage.setChoices([next]);win.start();win.active=false;
+    const painted=win.painted[0];await wait(140);for(let i=0;i<8;i++)win.update();
+    assert.equal(win.painted[0],painted);assert.equal(win._list[0].name,next);
+}
 async function testR15NativeLocaleAndFallback(){
     const root=path.join("/tmp","servidor-qa-juego-日本語"),base=path.join(root,"www"),
         loc=path.join(base,"loc"),pics=path.join(base,"img","pictures"),data=path.join(base,"data");
@@ -3078,6 +3157,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR16HexChoicesAndChauPopup();
     await testR15NativeLocaleAndFallback();
     await testR14VisuQuestAndStatusMetadata();
     await testR13PhonePrivateInterpreterAndPictureText();
