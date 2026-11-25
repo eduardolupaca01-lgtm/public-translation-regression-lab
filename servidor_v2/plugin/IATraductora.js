@@ -4731,4 +4731,13 @@ try{
     state.status="IA_INICIO_"+state.phase+"_FALLIDO";
     state.errors++;
 }
+if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
+    // Opt-in test-only probes; ordinary game sessions never receive this object.
+    window.__IA_TRADUCTORA_TEST__={
+        inventorySize:function(){return discovered.size;},
+        has:function(source,text){return discovered.has(source+"\\u0000"+text);},
+        done:function(){return scanStats.done;},
+        limited:function(){return scanStats.limited;}
+    };
+}
 })();
