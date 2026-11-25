@@ -164,6 +164,10 @@ func iaSafeInstallCode(message string)string{
 }
 func iaFriendlyInstall(code string)string{
     switch code{
+    case cookToolPackedCode:
+        return "RPG Maker Dragonhouse/Halva detectado. Requiere una exportación o integración autorizada; no se han modificado los paquetes."
+    case cookToolUnsafeCode:
+        return "Estructura Dragonhouse/Halva incompleta o insegura. No se ha modificado el juego."
     case "IA_DESTINO_CREACION_DENEGADA":
         return "Windows bloqueó la creación de IA Traductora. No se modificó el registro."
     case "IA_DESTINO_SIN_PERMISO":
@@ -317,10 +321,20 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 iaSet(ui.status,"No se pudo abrir el selector. Servidor sigue abierto.")
             }else if file!=""{
                 if _,content,e:=detectGame(file);e!=nil{
-                    iaLog("[IA_EXE_NO_COMPATIBLE] "+e.Error())
-                    iaSet(ui.status,"Selecciona un EXE de una copia de RPG Maker MV o MZ.")
+                    // An invalid new selection must never leave a different game armed for installation.
+                    ui.gameFile="";iaSet(ui.input,"")
+                    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
+                    code:=iaSafeInstallCode(e.Error())
+                    if code==cookToolPackedCode||code==cookToolUnsafeCode{
+                        iaLog("[IA_RPG_HALVA_DETECTADO] "+e.Error())
+                        iaSet(ui.status,iaFriendlyInstall(code))
+                    }else{
+                        iaLog("[IA_EXE_NO_COMPATIBLE] "+code)
+                        iaSet(ui.status,"Selecciona un EXE de una copia de RPG Maker MV o MZ.")
+                    }
                 }else{
                     ui.gameFile=file;iaSet(ui.input,file)
+                    iaEnableWindow.Call(ui.install,1);iaEnableWindow.Call(ui.recoverBtn,1)
                     iaSet(ui.status,"Juego "+engineAt(content)+" seleccionado. Listo para instalar.")
                     iaLog("[IA_EXE_SELECCIONADO] Motor "+engineAt(content)+" verificado.")
                 }
@@ -407,7 +421,8 @@ func runUI(){
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
-    iaLog("[IA_TRADUCTORA_LISTA] RPG-MVMZ-R21-20261125. Selecciona una copia MV, MZ o MZ comprimida compatible. El motor es local.")
+    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
+    iaLog("[IA_TRADUCTORA_LISTA] "+installerBuildID+". MV/MZ y MZ comprimida: instalación. Dragonhouse/Halva: diagnóstico de solo lectura. El motor es local.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

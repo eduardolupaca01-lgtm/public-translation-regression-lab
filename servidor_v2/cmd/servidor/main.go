@@ -25,6 +25,7 @@ const (
  packageMagic="SERVIDOR2ZIPSHA1" // exactamente 16 bytes
  brandFolder="IA Traductora"
  pluginName="IATraductora"
+ installerBuildID="RPG-MVMZ-R23-P1-20261125"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -165,6 +166,9 @@ func detectGame(gameEXE string)(string,string,error){
  if err!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{
   return "","",errors.New("IA_JUEGO_RUTA_INVALIDA")
  }
+ // Packed Cook Tool roots must not be mistaken for a loose RPG project.
+ // The launch cache can be regenerated or removed by the vendor.
+ if e:=cookToolPreflight(root);e!=nil{return "","",e}
  var chosen string
  for _,dir:=range []string{filepath.Join(root,"www"),root}{
   kind:=engineAt(dir)
@@ -354,7 +358,15 @@ func main(){
  exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV o MZ")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
  recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV/MZ (no necesita modelos)")
+ inspect:=flag.Bool("inspect",false,"Diagnóstico RPG de solo lectura, sin modelos ni ejecución del juego")
  flag.Parse()
+ if *inspect {
+  if *exe==""||*recoverGame{fmt.Fprintln(os.Stderr,"IA_INSPECCION_GAME_EXE_REQUERIDO");os.Exit(1)}
+  _,content,e:=detectGame(*exe)
+  if e!=nil{fmt.Println(e.Error());os.Exit(2)}
+  fmt.Println("IA_RPG_RECURSOS_ACCESIBLES motor="+engineAt(content)+" version="+installerBuildID)
+  return
+ }
  if *recoverGame{
   if *exe==""{fmt.Fprintln(os.Stderr,"IA_RECUPERACION_GAME_EXE_REQUERIDO");os.Exit(1)}
   if err:=RecoverGame(*exe);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
