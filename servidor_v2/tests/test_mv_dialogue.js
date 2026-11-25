@@ -2597,7 +2597,11 @@ async function testR14VisuQuestAndStatusMetadata(){
     new c.Scene_Title().start();
     const until=async predicate=>{const deadline=Date.now()+5000;while(!predicate()&&Date.now()<deadline)await wait(30);assert.ok(predicate());};
     await until(()=>c.window.__IA_TRADUCTORA_TEST__.done());
-    await until(()=>[bio,desc,other,gab,hudText,variable].every(raw=>f.posts.some(p=>p.text===raw)));
+    const required=[bio,desc,other,gab,hudText,variable];
+    const deadline=Date.now()+5000;
+    while(Date.now()<deadline&&!required.every(raw=>f.posts.some(p=>p.text===raw)))await wait(30);
+    assert.deepEqual(required.filter(raw=>!f.posts.some(p=>p.text===raw)),[],
+        "R14: every proven status, quest, HUD and gab field is inventoried, including initial-map assignments before Actors.json");
     await wait(180);
     const status=new c.Scene_Status();c.SceneManager._nextScene=status;
     await until(()=>{if(c.SceneManager._nextScene)c.SceneManager.changeScene();return status.calls===1;});

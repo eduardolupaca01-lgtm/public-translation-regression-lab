@@ -3541,6 +3541,7 @@ function phoneDrawLabel(raw){
     return raw==="Messages"?"Mensajes":m[1]+" está escribiendo"+m[2];
 }
 var statusBios=new Map(),statusTextVariables=new Map(),statusProjectionDepth=0;
+var statusPendingAssignments=new Map(),statusPendingCount=0;
 function statusPluginEnabled(){return isMZ&&pluginEnabled(/^StatusMenuTesting3$/);}
 function statusPresentationScope(){
     if(!statusPluginEnabled()||identityDrawDepth||inputFormActive())return false;
@@ -3591,15 +3592,37 @@ function scanStatusActor(row){
     var tag=statusTag(row);if(!tag)return;
     statusRemember(tag.raw);
     var id=/<StatusTextVariable:[ \t]*(\d{1,6})[ \t]*>/i.exec(row.note);
-    if(id&&Number(id[1])>0&&!statusTextVariables.has(Number(id[1])))statusTextVariables.set(Number(id[1]),new Set());
+    if(id&&Number(id[1])>0&&!statusTextVariables.has(Number(id[1]))){
+        var n=Number(id[1]);statusTextVariables.set(n,new Set());
+        var deferred=statusPendingAssignments.get(n);
+        if(deferred){
+            statusPendingAssignments.delete(n);statusPendingCount-=deferred.size;
+            deferred.forEach(function(v){rememberStatusVariable(n,v);});
+        }
+    }
+}
+function rememberStatusVariable(id,value){
+    if(!statusTextVariables.has(id)||typeof value!=="string"||value.length>1800)return;
+    var plan=statusRemember(value);
+    if(plan)statusTextVariables.get(id).add(value);
 }
 function scanStatusAssignment(cmd){
     if(!statusPluginEnabled()||!cmd||cmd.code!==122||!Array.isArray(cmd.parameters))return;
     var a=cmd.parameters;
-    if(a[0]!==a[1]||a[2]!==0||a[3]!==4||!statusTextVariables.has(a[0])||typeof a[4]!=="string")return;
+    if(!integer(a[0])||a[0]<=0||a[0]!==a[1]||a[2]!==0||a[3]!==4||
+       typeof a[4]!=="string"||a[4].length>4096)return;
     try{
-        var value=JSON.parse(a[4]),plan=typeof value==="string"?statusRemember(value):null;
-        if(plan)statusTextVariables.get(a[0]).add(value);
+        var value=JSON.parse(a[4]);
+        if(typeof value!=="string"||!value.trim()||value.length>1800)return;
+        if(statusTextVariables.has(a[0]))rememberStatusVariable(a[0],value);
+        else if(statusPendingCount<2048){
+            // The initial map is scanned before Actors.json. Defer only
+            // bounded literal assignments until an actor note proves its ID.
+            // Never submit an unverified variable's content to the engine.
+            var set=statusPendingAssignments.get(a[0]);
+            if(!set){set=new Set();statusPendingAssignments.set(a[0],set);}
+            if(!set.has(value)){set.add(value);statusPendingCount++;}
+        }
     }catch(_){}
 }
 function statusRenderValue(raw){
