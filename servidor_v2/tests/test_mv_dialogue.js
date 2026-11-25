@@ -2663,7 +2663,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R21-20261125"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R22-20261125"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -3484,7 +3484,64 @@ async function testR8GeneralDisplaySurfaces(){
     await until(()=>mvBitmap.lastText==="Tienda");
 }
 
+
+async function testR22MvPhysicalKeyMenusAndNativeFlow(){
+    let onKey,overlay;
+    const f=fixture(1,{testHooks:true,configure(c){
+        c.$dataSystem={locale:"en_US"};
+        c.Input.keyMapper={121:"debug",90:"ok"};
+        c.window.addEventListener=(type,cb,capture)=>{if(type==="keydown"&&capture)onKey=cb;};
+        c.document={getElementById(){return null;},body:{appendChild(el){overlay=el;}},createElement(){return {style:{},textContent:""};}};
+        function Window_Command(){this._list=[];this.drawn=[];this.active=true;this.contents={};}
+        Window_Command.prototype.commandName=function(i){return this._list[i].name;};
+        Window_Command.prototype.drawItem=function(i){this.drawn.push(this.commandName(i));};
+        Window_Command.prototype.update=function(){};
+        c.Window_Command=Window_Command;
+    }});
+    const c=f.context,t=c.window.__IA_TRADUCTORA_TEST__;
+    assert.equal(c.Input.keyMapper[121],"debug");
+    c.Input.keyMapper={121:"debug",90:"ok"};
+    let prevented=0,stopped=0;
+    const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
+    assert.equal(typeof onKey,"function");onKey(ev);assert.equal(overlay.style.display,"block");
+    onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
+    onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
+    onKey({...ev,target:{tagName:"INPUT"}});assert.equal(overlay.style.display,"block");
+    onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
+    const menu=new c.Window_Command();
+    menu._list=["Fast Travel","Quest Log","Item","Skill","Equip","Formation","Save/Load","CG room","Skilltree","[Options]"].map((name,i)=>({name,symbol:"s"+i,enabled:i!==4,ext:i}));
+    const before=JSON.stringify(menu._list);
+    menu._list.forEach((_,i)=>menu.drawItem(i));
+    assert.deepEqual(menu.drawn,["Viaje rápido","Diario de misiones","Objetos","Habilidades","Equipo","Formación","Guardar/Cargar","Galería CG","Árbol de habilidades","[Opciones]"]);
+    assert.equal(JSON.stringify(menu._list),before);
+    assert.equal(menu.commandName(0),"Fast Travel");
+    assert.equal(t.r22EnglishSource("Indeed!","message"),"en");
+    assert.equal(t.r22EnglishSource("Quiet corner","choice"),"en");
+    assert.equal(t.r22EnglishSource("Sword","data"),"en");
+    assert.equal(t.r22EnglishSource("Zorblax","message"),null);
+    assert.equal(t.r22EnglishSource("picture.png","command"),null);
+    assert.equal(t.r22EnglishSource("$gameVariables.value(1)","message"),null);
+    assert.equal(t.r22EnglishSource("Situación","command"),null);
+    const win={contents:{width:121,outlineWidth:2},textWidth(v){return v.length*8;}};
+    const raw="Una frase larga que conserva absolutamente todo. \x1bC[2]Extraordinariamenteextensa \x1bI[7] después.\x1b.";
+    const ts=win._textState={text:raw,index:0,x:24,left:24};let steps=0,seen="",icons=0,lines=0;
+    while(ts.index<ts.text.length&&steps++<1000){
+        t.r22MessageBreak(win,ts);const ch=ts.text[ts.index];
+        if(ch==="\n"){ts.index++;ts.x=ts.left;lines++;continue;}
+        if(ch==="\x1b"){
+            const m=/^\x1b(?:C\[\d+\]|I\[\d+\]|\.)/.exec(ts.text.slice(ts.index));
+            assert.ok(m);if(/^\x1bI/.test(m[0])){assert.ok(ts.x+36<=120);ts.x+=36;icons++;}
+            ts.index+=m[0].length;continue;
+        }
+        assert.ok(ts.x+8<=120);seen+=ch;ts.x+=8;ts.index++;
+    }
+    assert.ok(steps<1000&&lines>3);assert.equal(icons,1);
+    assert.equal(ts.text.replace(/\n/g,""),raw);
+    assert.equal(seen,raw.replace(/\x1b(?:C\[\d+\]|I\[\d+\]|\.)/g,""));
+}
+
 (async()=>{
+    await testR22MvPhysicalKeyMenusAndNativeFlow();
     await testR8GeneralDisplaySurfaces();
     await testR21CteNativeContextFirstPresentation();
     await testR20CteLargeInventoryAndPhysicalF10();

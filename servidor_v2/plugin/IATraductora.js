@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R21-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R22-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -590,6 +590,116 @@ var englishUi={"Yes":"Sí","No":"No","New Game":"Nueva partida","Continue":"Cont
     "Options":"Opciones","Save":"Guardar","Load":"Cargar","Cancel":"Cancelar",
     "Items":"Objetos","Equipment":"Equipo","Exit":"Salir","Quit Game":"Salir del juego",
     "Quest":"Misión","Quests":"Misiones","Quest Journal":"Diario de misiones","Main Quests":"Misiones principales","Side Quests":"Misiones secundarias"};
+// R22: scoped English UI, authored MV display strings and native line flow.
+var r22Labels={"Fast Travel":"Viaje rápido","Quest Log":"Diario de misiones","Item":"Objetos","Items":"Objetos","Skill":"Habilidades","Skills":"Habilidades","Equip":"Equipo","Equipment":"Equipo","Status":"Situación","Formation":"Formación","Save/Load":"Guardar/Cargar","CG room":"Galería CG","Skilltree":"Árbol de habilidades","Skill Tree":"Árbol de habilidades","[Options]":"[Opciones]","[Fixes/Cheats]":"[Ajustes/Trucos]","Party Menu":"Menú del grupo","Common Event 5":"Evento común 5","Common Event 2":"Evento común 2","Game End":"Salir del juego","Fight":"Luchar","Escape":"Huir","Attack":"Atacar","Guard":"Defender","Weapon":"Arma","Armor":"Armadura","Key Item":"Objeto clave","Optimize":"Optimizar","Clear":"Limpiar","Buy":"Comprar","Sell":"Vender","To Title":"Volver al título","Load":"Cargar","Save":"Guardar","Options":"Opciones","Continue":"Continuar","Cancel":"Cancelar","New Game":"Nueva partida"};
+var r22EnglishLocale=false,r22Authored=new Set();
+function r22EnglishSource(raw,kind){
+    if(isMZ||typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||
+       remNativeSpanishText(raw)||externalLocalizationReference(raw)||tsvExcluded(raw)||csvExecutableSyntax(raw))return null;
+    if(r22Authored.has(raw))return "en";
+    if(!(r22EnglishLocale||(typeof $dataSystem!=="undefined"&&$dataSystem&&/^en(?:[_-]|$)/i.test($dataSystem.locale||""))))return null;
+    var prose=visibleProse(raw).trim();
+    if(!prose||/[áéíóúüñ¿¡]/i.test(prose)||/[^\x09\x0a\x0d\x20-\x7e]/.test(prose)||
+       /[{}=$@#<>_]|^\s*(?:\/\/|\/|\d)|\.(?:png|jpe?g|webp|ogg|wav|mp3|js|json|csv|tsv|webm|mp4)$/i.test(prose))return null;
+    var words=prose.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g)||[];
+    if(!words.length||!/[A-Za-z]{2}/.test(prose))return null;
+    if(words.length>1)return "en";
+    // A single bare word in narrative can be a name: only common words or
+    // explicitly typed UI/data labels; never use this on arbitrary scripts.
+    if(Object.prototype.hasOwnProperty.call(r22Labels,prose)||displayUiWords[prose.toLowerCase()]||
+       /^(?:okay|ok|thanks|indeed|sure|really|sorry|welcome|hello|goodbye|hmm|huh|hey|phew|oops|ouch|wow|fine|impossible|maybe|enough|stop|wait|listen|run|attack|danger|careful|leave|stay|rest|sleep|nothing|excellent|perfect|congratulations)[.!?]*$/i.test(prose))return "en";
+    if((kind==="command"||kind==="choice"||kind==="data")&&/^[A-Za-z][a-zA-Z'-]{1,39}$/.test(prose)&&!(/^[A-Z]{2,}$/.test(prose)))return "en";
+    return null;
+}
+function r22Remember(raw,priority,kind){
+    var source=r22EnglishSource(raw,kind);
+    if(source&&r22Authored.size<100000)r22Authored.add(raw);
+    addPrefetch(raw,priority,source);
+}
+function r22CommandValue(raw,requestMissing){
+    if(typeof raw!=="string"||actorNames[raw])return null;
+    if(Object.prototype.hasOwnProperty.call(r22Labels,raw))return r22Labels[raw];
+    var source=displaySource(raw,"command")||r22EnglishSource(raw,"command");
+    if(!source)return null;
+    var result=readyText(source,raw);
+    if(result===null&&requestMissing)firstViewRequest(source,raw);
+    return result;
+}
+function hookR22Commands(){
+    if(isMZ||typeof Window_Command==="undefined")return;
+    var p=Window_Command.prototype,draw=p.drawItem,update=p.update,name=p.commandName;
+    if(typeof draw!=="function"||typeof name!=="function")return;
+    p.commandName=function(index){
+        var scope=this._iaR22CommandPaint,item=this._list&&this._list[index];
+        return scope&&scope.index===index&&scope.item===item?scope.shown:name.apply(this,arguments);
+    };
+    p.drawItem=function(index){
+        if(inputFormActive()||this._iaOwnSurface||this._iaNameSurface||
+           (typeof Window_ChoiceList!=="undefined"&&this instanceof Window_ChoiceList))return draw.apply(this,arguments);
+        var item=this._list&&this._list[index],raw=item&&item.name;
+        if(typeof raw!=="string")return draw.apply(this,arguments);
+        var shown=r22CommandValue(raw,true)||raw,old=this._iaR22CommandPaint;
+        this._iaR22CommandPaint={index:index,item:item,shown:shown};
+        try{
+            if(shown!==raw){identityDrawDepth++;try{return draw.apply(this,arguments);}finally{identityDrawDepth--;}}
+            return draw.apply(this,arguments);
+        }finally{
+            this._iaR22CommandPaint=old;
+            (this._iaR22Paint||(this._iaR22Paint=Object.create(null)))[index]={item:item,raw:raw,shown:shown,bitmap:this.contents};
+        }
+    };
+    if(typeof update!=="function")return;
+    p.update=function(){
+        var out=update.apply(this,arguments);
+        if(inputFormActive()||!this.active||this.visible===false||this.openness===0||!this._iaR22Paint||typeof this.redrawItem!=="function"||
+           (this._iaR22Tick=(this._iaR22Tick||0)+1)%12!==0)return out;
+        var win=this;
+        Object.keys(this._iaR22Paint).slice(0,60).forEach(function(k){
+            var frame=win._iaR22Paint[k],item=win._list&&win._list[k];
+            if(!item||frame.item!==item||frame.raw!==item.name||frame.bitmap!==win.contents){delete win._iaR22Paint[k];return;}
+            var shown=r22CommandValue(frame.raw,true);
+            if(shown!==null&&shown!==frame.shown)win.redrawItem(Number(k));
+        });
+        return out;
+    };
+}
+// Insert a display-only newline into the native text state. MV consumes it
+// through processNewLine/needsNewPage, preserving pauses, events and choices.
+function r22MessageBreak(win,ts){
+    if(!ts||ts!==win._textState||inputFormActive()||!win.contents||typeof win.textWidth!=="function"||
+       !Number.isFinite(ts.x)||!Number.isFinite(ts.left)||typeof ts.text!=="string"||
+       ts.index<0||ts.index>=ts.text.length||ts.x<=ts.left||ts.rtl||
+       Array.isArray(ts._lineOffsets)||/^(?:center|right)$/.test(win._textAlignment||""))return false;
+    var width=Number(win.contents.width)-Math.max(1,Number(win.contents.outlineWidth||0)/2);
+    if(!Number.isFinite(width)||width<=ts.left)return false;
+    var rest=ts.text.slice(ts.index),ch=rest.charAt(0),size=0;
+    if(ch==="\n"||ch==="\r"||ch==="\f")return false;
+    if(ch==="\x1b"){
+        if(!/^\x1bI\[\d+\]/i.test(rest))return false;
+        size=(typeof Window_Base!=="undefined"&&Window_Base._iconWidth||32)+4;
+    }else{
+        size=win.textWidth(ch);
+        // Prefer a word boundary, but split an unusually long word at its
+        // glyphs rather than throwing it away or shrinking the whole dialog.
+        if(!/\s/.test(ch)&&(ts.index===0||/\s/.test(ts.text.charAt(ts.index-1)))){
+            var word=/^[^\s\x1b\f]+/.exec(rest);
+            if(word){var whole=win.textWidth(word[0]);if(whole<=width-ts.left)size=Math.max(size,whole);}
+        }
+    }
+    if(!Number.isFinite(size)||size<0||ts.x+size<=width)return false;
+    ts.text=ts.text.slice(0,ts.index)+"\n"+rest;
+    return true;
+}
+function hookR22MessageFlow(){
+    if(isMZ||typeof Window_Message==="undefined")return;
+    var p=Window_Message.prototype,process=p.processCharacter;
+    if(typeof process!=="function")return;
+    p.processCharacter=function(ts){
+        try{r22MessageBreak(this,ts);}catch(_){state.errors++;}
+        return process.apply(this,arguments);
+    };
+}
+
 function englishLabel(text){
     return Object.prototype.hasOwnProperty.call(englishUi,text)?englishUi[text]:null;
 }
@@ -672,6 +782,7 @@ function languageFor(s){
     if(typeof csvKnown!=="undefined"&&csvKnown.has(s)&&!actorNames[s])return csvKnown.get(s);
     if(isJapanese(s))return "ja";
     if(actorNames[s])return null;
+    if(!isMZ&&r22Authored.has(s))return "en";
     if((typeof questTexts!=="undefined"&&questTexts.has(s))||
        (typeof discovered!=="undefined"&&discovered.has("en\u0000"+s)))return "en";
     var visible=visibleProse(s);
@@ -698,6 +809,7 @@ function displaySource(text,context){
        remNativeSpanishText(text)||externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
     var source=languageFor(text);if(source)return source;
+    if(context==="message"||context==="choice"||context==="command"){var authored=r22EnglishSource(text,context);if(authored)return authored;}
     var prose=visibleProse(text).replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
         .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...").replace(/\u00a0/g," ")
         .replace(/[♡♥☆★♪♫♬]/g,"").trim();
@@ -4674,7 +4786,7 @@ function hookMessages(){
     if(typeof Window_Message==="undefined"||!Window_Message.prototype)return;
     var proto=Window_Message.prototype,original=proto.startMessage;
     if(typeof original!=="function")return;
-    hookFirstView(proto);
+    hookFirstView(proto);hookR22MessageFlow();
     // Scope the projection to the one native startMessage invocation.
     // A game may bypass our draw/convert hooks and call allText directly.
     if(typeof Game_Message!=="undefined"&&Game_Message.prototype&&typeof Game_Message.prototype.allText==="function"){
@@ -4693,7 +4805,7 @@ function hookMessages(){
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
                 var rawText=$gameMessage.allText(),externalEntry=iavraResolveText(rawText);
                 var text=externalEntry?externalEntry.text:rawText;
-                var source=externalEntry?externalEntry.source:languageFor(text),keys=tsvRawMessage();
+                var source=externalEntry?externalEntry.source:(isMZ?languageFor(text):displaySource(text,"message")),keys=tsvRawMessage();
                 this._iaSourceMessage=text;
                 var scripted=scriptMessagePlan(keys);
                 if(scripted){
@@ -4802,7 +4914,7 @@ function hookMessages(){
                 if(tsvRef(text))tsvPrioritize(text,true);
                 var env=captionEnvelope(text);
                 if(env)addPrefetch(env.body,true,captionSource(env.body));
-                var source=typeof text==="string"?languageFor(text):null;
+                var source=typeof text==="string"?(isMZ?languageFor(text):displaySource(text,"message")):null;
                 if(source){
                     addPrefetch(text,true);
                     if(state.connected&&(!tableStats.root||cacheReadDone)&&pending.size<90)requestVisible(source,text).catch(function(){state.errors++;});
@@ -6516,14 +6628,14 @@ function scanCommands(list,priority){
                 cmd=list[++i];
             }
             // Same exact group and component fragments used by native rendering.
-            if(parts.length)addPrefetch(parts.join("\n"),priority);
+            if(parts.length)r22Remember(parts.join("\n"),priority,"message");
             for(var j=0;j<parts.length;j++){
-                addPrefetch(parts[j],priority);
+                r22Remember(parts[j],priority,"message");
                 var caption=captionEnvelope(parts[j]);
                 if(caption)addPrefetch(caption.body,priority,captionSource(caption.body));
             }
         }else if(cmd.code===102&&Array.isArray(cmd.parameters[0])){
-            cmd.parameters[0].forEach(function(t){if(!hexChoiceRemember(t,priority))addPrefetch(t,priority);});
+            cmd.parameters[0].forEach(function(t){if(!hexChoiceRemember(t,priority))r22Remember(t,priority,"choice");});
         }else if(cmd.code===356){
             var popup=chauPopupPayload(cmd.parameters[0]);if(popup!==null)chauPopupRemember(popup,priority);
             var caption=ambientPayload(cmd.parameters[0]);if(caption)addPrefetch(caption,priority,"en");
@@ -6556,11 +6668,12 @@ function scanDatabase(name,data){
     }
     if(name==="System.json"){
         if(!data||typeof data!=="object")return;
+        r22EnglishLocale=/^en(?:[_-]|$)/i.test(data.locale||"");
         if(isMZ){scriptLocale=data.locale||"";scriptSystem=scriptSystemContract(data);if(scriptSystem)displayVariableNames=data.variables;}
         addPrefetch(data.gameTitle,true);addPrefetch(data.currencyUnit,true);
         var terms=data.terms||{};
         ["basic","commands","params"].forEach(function(k){
-            if(Array.isArray(terms[k]))terms[k].forEach(function(v){addPrefetch(v,true);});
+            if(Array.isArray(terms[k]))terms[k].forEach(function(v){r22Remember(v,true,"command");});
         });
         if(terms.messages&&typeof terms.messages==="object")
             Object.keys(terms.messages).forEach(function(k){addPrefetch(terms.messages[k],true);});
@@ -6591,7 +6704,10 @@ function scanDatabase(name,data){
             addPrefetch(row.profile,true);scanStatusActor(row);return;
         }
         ["name","description","message1","message2","message3","message4"].forEach(function(k){
-            if(typeof row[k]==="string")addPrefetch(row[k],false);
+            if(typeof row[k]==="string"){
+                if(/^(?:Items|Weapons|Armors|Skills|States|Classes)\.json$/.test(name))r22Remember(row[k],false,k==="name"?"data":"message");
+                else addPrefetch(row[k],false);
+            }
         });
     });
     if(name==="Actors.json")scanVisuQuestParameters();
@@ -7018,8 +7134,8 @@ function cteHudRefresh(){
         "Solicitudes: "+state.requested+" · Recibidas: "+state.received+" · Mostradas: "+state.shown,
         "Caché: "+diskStats.loaded+" cargadas · "+diskStats.saved+" guardadas",
         "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+" · Omitidos: "+scanStats.skipped,
-        "CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos",
-        "Idioma: "+cte.locale.status+" · Contexto: "+cte.contextHits+" · TextState: "+cte.textStates,
+        cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos":"Interfaz MV/MZ · memoria OPUS",
+        cte.enabled?"Idioma: "+cte.locale.status+" · Contexto: "+cte.contextHits+" · TextState: "+cte.textStates:"Etiquetas y diálogos nativos",
         "Textos listos: "+scanStats.ready+"/"+discovered.size+" · Fallos: "+scanStats.rejected,
         "Errores: "+state.errors+" · Avisos CTE: "+cte.errors,
         "F10: cerrar"
@@ -7046,7 +7162,7 @@ function cteHudToggle(){
     return false;
 }
 function hookCteHud(){
-    if(!cteProfile()||cteHud.keyHook)return;
+    if(cteHud.keyHook)return;
     var host=typeof window!=="undefined"&&window&&typeof window.addEventListener==="function"?window:
         typeof document!=="undefined"&&document&&typeof document.addEventListener==="function"?document:null;
     if(!host)return;
@@ -7146,11 +7262,12 @@ function setupHud(){
         }
         if(this._iaPanel && ++this._iaPanel._tick%30===0&&this._iaPanel.visible)this._iaPanel.refresh();
     };
-    if(!cteProfile()||!Input.keyMapper[121])Input.keyMapper[121]="ia-traductora";
+    // Fallback for non-DOM runtimes only; do not overwrite a game binding.
+    if(!Input.keyMapper[121])Input.keyMapper[121]="ia-traductora";
 }
 try{
     // Keep F10 accessible even if detection or worker startup fails.
-    state.phase="F10";setupHud();
+    state.phase="F10";try{hookCteHud();}catch(_){state.errors++;}setupHud();
     state.phase="RUTA";initPaths();detectRootCsv();detectTsv();detectIavraLocalization();detectRemNative();detectCte();
     try{hookCteHud();}catch(_){state.errors++;}
     // Load verified translations asynchronously before map boot; never
@@ -7168,7 +7285,7 @@ try{
         state.phase="OPCIONES";hookChoices();
         hookChoiceFirstView();hookCsvChoiceLabels();
         state.phase="INTERFAZ";hookInputForm();
-        hookBuiltinNameInputScene();hookNativeSurface();hookAuthoredMZ();hookRemNative();hookChauPopups();hookTitleStart();
+        hookBuiltinNameInputScene();hookNativeSurface();hookR22Commands();hookAuthoredMZ();hookRemNative();hookChauPopups();hookTitleStart();
     }
     state.phase="CONEXION";loadIavraCatalogs(function(){startFullScan();nextPrefetch();});startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
@@ -7189,7 +7306,8 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         inventorySize:function(){return discovered.size;},
         has:function(source,text){return discovered.has(source+"\u0000"+text);},
         done:function(){return scanStats.done;},
-        limited:function(){return scanStats.limited;}
+        limited:function(){return scanStats.limited;},
+        r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue
     };
 }
 })();
