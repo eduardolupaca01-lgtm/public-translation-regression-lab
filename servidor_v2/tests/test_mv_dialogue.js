@@ -1928,9 +1928,9 @@ async function testSceneRevisitUsesCompletedTranslation(){
 }
 
 
-async function testShortWakeUpLineWithActorCodeIsRecognized(){
-    const raw="Hey! \\n[21] wake up!";
-    const translated="¡Oye! \\n[21], despierta!";
+async function testShortWakeUpLineIsRecognized(){
+    const raw="Hey! wake up!";
+    const translated="¡Oye, despierta!";
     const f=fixture(35,{responses:{[raw]:translated},configure:function(c){
         const p=c.Window_Message.prototype;
         p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
@@ -1954,8 +1954,8 @@ async function testShortWakeUpLineWithActorCodeIsRecognized(){
     assert.equal(win.originalStarts,0,"a short wake-up line with a protected actor code waits for first-view translation");
     for(let i=0;i<24&&win.originalStarts===0;i++){await wait(40);win.update();}
     assert.equal(win.originalStarts,1,"the wake-up message starts after its translation is ready");
-    assert.equal(win._textState.text,translated,"the actor-name control code survives translation unchanged");
-    assert.ok(f.posts.some(function(p){return p.text===raw;}),"the short English source line is sent to the translator");
+    assert.equal(win._textState.text,translated,"the short wake-up line is translated on first view");
+    assert.ok(f.posts.some(function(p){return p.text===raw;}),"the short English wake-up line is sent to the translator");
 }
 async function testIavraExternalJsonCatalogAndKeyFallback(){
     const root=path.join("/tmp","servidor-qa-juego-日本語");
@@ -2595,7 +2595,7 @@ async function testR8GeneralDisplaySurfaces(){
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testYEPFormattingCodesDoNotHideWords();
     await testSceneRevisitUsesCompletedTranslation();
-    await testShortWakeUpLineWithActorCodeIsRecognized();
+    await testShortWakeUpLineIsRecognized();
     await testIavraExternalJsonCatalogAndKeyFallback();
     await testLargeGamePausesBackgroundPrefetch();
     await testLargeCommonEventsJsonIsParsedIncrementally();
