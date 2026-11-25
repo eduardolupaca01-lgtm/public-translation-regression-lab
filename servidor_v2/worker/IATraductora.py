@@ -400,6 +400,44 @@ class NeuralOPUS:
             raise RuntimeError("IA_QUALITY_ALL_CANDIDATES_REJECTED")
         return result
 
+def por_compressed_database(content: Path) -> bool:
+    """Same bounded native POR profile as the installer. No code execution.
+    LZString's padded Base64 is a format marker, not standard decoded JSON;
+    the native game loader owns decompression and the plugin reads text."""
+    js=content/"js"
+    data=content/"data"
+    def ordinary(file):
+        return file.is_file() and not file.is_symlink()
+    try:
+        for folder in (content,js,js/"plugins",data):
+            if folder.is_symlink() or not folder.is_dir():
+                return False
+        for name in ("POR_DatabaseEncoder.js","lz-string.min.js"):
+            if not ordinary(js/"plugins"/name):
+                return False
+        for name in ("System.jsono","Actors.jsono","CommonEvents.jsono","MapInfos.jsono"):
+            file=data/name
+            if not ordinary(file) or not 4<=file.stat().st_size<=2*1024*1024:
+                return False
+        registry=js/"plugins.js"
+        if not ordinary(registry) or registry.stat().st_size>2*1024*1024:
+            return False
+        raw=registry.read_text(encoding="utf-8-sig")
+        match=re.search(r"\bvar\s+\$plugins\s*=\s*(?=\[)",raw)
+        if not match:
+            return False
+        entries,_=json.JSONDecoder().raw_decode(raw[match.end():])
+        if not isinstance(entries,list) or len(entries)>500:
+            return False
+        names={entry.get("name") for entry in entries if isinstance(entry,dict)
+               and isinstance(entry.get("name"),str) and entry.get("status") is True}
+        if not {"POR_DatabaseEncoder","lz-string.min"}.issubset(names):
+            return False
+        marker=(data/"System.jsono").read_bytes()
+        return len(marker)%4==0 and re.fullmatch(rb"[A-Za-z0-9+/]+={0,3}",marker) is not None
+    except (OSError,ValueError,UnicodeError,TypeError,RecursionError):
+        return False
+
 def game_root(exe_root:Path)->tuple[Path,Path]:
     if exe_root.is_symlink():raise ValueError("IA_JUEGO_NO_VALIDO")
     root=exe_root.resolve(strict=True)
@@ -407,19 +445,29 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
     def ordinary(f):
         return f.is_file() and not f.is_symlink()
     layouts=[]
+    invalid_compressed=False
     for folder in (root/"www",root):
         js=folder/"js"
         mv=ordinary(js/"rpg_core.js")
         mz=ordinary(js/"rmmz_core.js")
         if mv and mz:raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
-        if not (ordinary(js/"plugins.js") and ordinary(folder/"data"/"System.json")):continue
+        if not ordinary(js/"plugins.js"):continue
+        plain=ordinary(folder/"data"/"System.json")
+        if not plain:
+            if not mz:continue
+            if not por_compressed_database(folder):
+                if (folder/"data"/"System.jsono").exists():invalid_compressed=True
+                continue
         if mz:
             if any(not ordinary(js/n) for n in ("rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js")):
                 raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
             if any(d.is_symlink() for d in (folder,js,folder/"data")):
                 raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
         if mv or mz:layouts.append(folder)
-    if len(layouts)!=1:raise ValueError("IA_SOLAMENTE_RPG_MV_MZ")
+    if len(layouts)!=1:
+        if len(layouts)>1:raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
+        if invalid_compressed:raise ValueError("IA_RPG_MZ_COMPRIMIDO_NO_VALIDO")
+        raise ValueError("IA_SOLAMENTE_RPG_MV_MZ")
     return root,layouts[0]
 
 class Service:
@@ -628,6 +676,13 @@ def safe_startup_code(error):
     # Neither a raw exception, a model path nor game dialogue may leave
     # the private worker through this diagnostic.
     raw = str(error).lower()
+    # Enumerate safe startup categories; never expose a raw path or game text.
+    allowed={"IA_JUEGO_NO_VALIDO","IA_GAME_ROOT_FALTANTE","IA_SOLAMENTE_RPG_MV_MZ",
+             "IA_RPG_RUTAS_AMBIGUAS","IA_RPG_MZ_COMPRIMIDO_NO_VALIDO",
+             "IA_MOTOR_FUERA_DEL_JUEGO","IA_MODELO_INCOMPLETO",
+             "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO"}
+    if str(error) in allowed:return str(error)
+    if isinstance(error,sqlite3.Error):return "IA_CACHE_PERSISTENTE_INACCESIBLE"
     if "version" in raw and ("model" in raw or "binary" in raw):
         return "IA_MODELO_VERSION_INCOMPATIBLE"
     if "ia_parent_pid_invalido" in raw:
@@ -684,6 +739,7 @@ def main():
             return
         if args.game_root is None:
             raise ValueError("IA_GAME_ROOT_FALTANTE")
+        write_startup_code(args.diagnostic_file,"IA_VALIDANDO_ESTRUCTURA_RPG")
         service=Service(args.game_root,engine)
         write_startup_code(args.diagnostic_file,"IA_MODELOS_CARGADOS_SERVICIO_INICIANDO")
         run(service,args.parent_pid)

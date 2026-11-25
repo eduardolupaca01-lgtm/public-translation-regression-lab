@@ -335,4 +335,75 @@ class MZLayoutTests(unittest.TestCase):
                 (content/"js"/"rpg_core.js").write_text("{}")
                 with self.assertRaises(ValueError):ia.game_root(root)
 
+class CompressedMZWorkerTests(unittest.TestCase):
+    def fixture(self,root,wrapped=False):
+        content=root/"www" if wrapped else root
+        for name in ("rmmz_core.js","rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js",
+                     "plugins/POR_DatabaseEncoder.js","plugins/lz-string.min.js"):
+            file=content/"js"/name
+            file.parent.mkdir(parents=True,exist_ok=True)
+            file.write_text("// synthetic native marker",encoding="utf8")
+        data=content/"data"
+        data.mkdir()
+        for name in ("System","Actors","CommonEvents","MapInfos"):
+            (data/(name+".jsono")).write_bytes(b"N4XyA===")
+        entries=[{"name":"POR_DatabaseEncoder","status":True,"parameters":{}},
+                 {"name":"lz-string.min","status":True,"parameters":{}},
+                 {"name":"IATraductora","status":True,"parameters":{}}]
+        (content/"js"/"plugins.js").write_text("// generated\nvar $plugins = "+json.dumps(entries)+";",encoding="utf-8-sig")
+        return content,entries
+    def test_worker_mz_compressed_root_and_www_authenticated_http(self):
+        for wrapped in (False,True):
+            with self.subTest(wrapped=wrapped),tempfile.TemporaryDirectory(prefix="IA R18 日本語 ") as tmp:
+                root=Path(tmp)
+                content,entries=self.fixture(root,wrapped)
+                snapshots={f:f.read_bytes() for f in (content/"data").glob("*.jsono")}
+                registry=content/"js"/"plugins.js";before=registry.read_bytes()
+                self.assertEqual(ia.game_root(root),(root.resolve(),content.resolve()))
+                engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+                engine.mkdir(parents=True)
+                service=ia.Service(root,engine,neural=FakeNeural())
+                server=ia.ThreadingHTTPServer(("127.0.0.1",0),ia.make_handler(service))
+                bridge=ia.publish(service,server.server_port)
+                thread=threading.Thread(target=server.serve_forever,daemon=True)
+                thread.start()
+                try:
+                    descriptor=json.loads(bridge.read_text(encoding="utf8"))
+                    self.assertEqual(bridge,content/"data"/"IATraductora"/"bridge.json")
+                    base="http://127.0.0.1:"+str(descriptor["port"])
+                    headers={"X-IA-Token":descriptor["token"],"Content-Type":"application/json"}
+                    with urlopen(Request(base+"/status",headers=headers),timeout=3) as response:
+                        self.assertTrue(json.load(response)["active"])
+                    for lang,raw,expected in (("en","Good morning.","Buen día"),("ja","おはようございます。","Buenos días")):
+                        payload=json.dumps({"source":lang,"target":"es","text":raw}).encode()
+                        with urlopen(Request(base+"/translate",data=payload,headers=headers),timeout=3) as response:
+                            self.assertEqual(json.load(response)["translated"],expected)
+                    self.assertEqual(service.translations,2)
+                    self.assertEqual(service.memory.db.execute("PRAGMA integrity_check").fetchone()[0],"ok")
+                finally:
+                    server.shutdown();server.server_close();thread.join(3);service.close()
+                self.assertFalse((content/"data"/"System.json").exists())
+                self.assertEqual(registry.read_bytes(),before)
+                for f,raw in snapshots.items():self.assertEqual(f.read_bytes(),raw)
+    def test_worker_rejects_inactive_missing_invalid_and_ambiguous(self):
+        for case in ("inactive","missing","invalid","mv","dual"):
+            with self.subTest(case=case),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);content,entries=self.fixture(root)
+                if case=="inactive":
+                    entries[0]["status"]=False
+                    (content/"js"/"plugins.js").write_text("var $plugins = "+json.dumps(entries)+";",encoding="utf8")
+                if case=="missing":(content/"data"/"Actors.jsono").unlink()
+                if case=="invalid":(content/"data"/"System.jsono").write_text("invalid data")
+                if case=="mv":
+                    (content/"js"/"rmmz_core.js").unlink()
+                    (content/"js"/"rpg_core.js").write_text("{}")
+                if case=="dual":self.fixture(root,True)
+                with self.assertRaises(ValueError) as error:ia.game_root(root)
+                want="IA_RPG_RUTAS_AMBIGUAS" if case=="dual" else ("IA_SOLAMENTE_RPG_MV_MZ" if case=="mv" else "IA_RPG_MZ_COMPRIMIDO_NO_VALIDO")
+                self.assertEqual(ia.safe_startup_code(error.exception),want)
+    def test_startup_diagnostic_is_specific_but_private(self):
+        self.assertEqual(ia.safe_startup_code(ValueError("IA_SOLAMENTE_RPG_MV_MZ")),"IA_SOLAMENTE_RPG_MV_MZ")
+        self.assertEqual(ia.safe_startup_code(ValueError("IA_RPG_MZ_COMPRIMIDO_NO_VALIDO")),"IA_RPG_MZ_COMPRIMIDO_NO_VALIDO")
+        self.assertEqual(ia.safe_startup_code(ValueError("unknown private path")),"IA_MOTOR_ERROR_NO_CLASIFICADO")
+
 if __name__=="__main__":unittest.main()

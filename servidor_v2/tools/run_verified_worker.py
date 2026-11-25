@@ -10,7 +10,7 @@ import re
 import subprocess
 import sys
 import time
-from probe_new_worker import read_bridge, run as prove_spanish
+from probe_new_worker import bridge_file, read_bridge, run as prove_spanish
 
 def diagnostic(file: Path) -> str:
     if not file.is_file() or file.is_symlink() or file.stat().st_size > 512:
@@ -46,7 +46,7 @@ def launch(exe: Path, arguments: list[str], diagnostic_file: Path, timeout: int)
             print("IA_GAME_ROOT_NO_ESPECIFICADO")
             return 1
         game = Path(arguments[arguments.index("--game-root") + 1]).resolve(strict=True)
-        bridge = game / "www" / "data" / "IATraductora" / "bridge.json"
+        bridge = bridge_file(game)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if proc.poll() is not None:

@@ -34,6 +34,8 @@ jobs:
       - name: Exigir regresiones de presentacion MV/MZ antes de preparar el EXE
         shell: pwsh
         run: |
+          python -m unittest discover -s servidor_v2/tests -p test_worker.py
+          if ($LASTEXITCODE -ne 0) { throw "IA_R18_WORKER_REGRESSION_FAIL" }
           node --check servidor_v2/plugin/IATraductora.js
           if ($LASTEXITCODE -ne 0) { throw "IA_PLUGIN_SYNTAX_FAIL" }
           node servidor_v2/tests/test_mv_dialogue.js
@@ -228,6 +230,34 @@ jobs:
           }
           node servidor_v2/tests/test_mv_real_worker.js $game
           if ($LASTEXITCODE -ne 0) { throw "IA_MZ_MODELO_REAL_Y_PRESENTACION_FALLO" }
+      - name: Instalar MZ comprimido y exigir respuestas reales desde JSONO sin System.json
+        shell: pwsh
+        run: |
+          $game=Join-Path $env:RUNNER_TEMP "ia-v2-por-compressed-日本語"
+          $deps=Join-Path $env:RUNNER_TEMP "ia-v2-r18-test-deps"
+          npm install --prefix $deps --no-save --ignore-scripts --no-audit --no-fund lz-string@1.5.0
+          if ($LASTEXITCODE -ne 0) { throw "IA_R18_NATIVE_CODEC_TEST_DEPENDENCY_FAIL" }
+          $lz=Join-Path $deps "node_modules/lz-string"
+          node servidor_v2/tests/por_real_fixture.js $game $lz
+          if ($LASTEXITCODE -ne 0) { throw "IA_R18_COMPRESSED_FIXTURE_FAIL" }
+          $exe=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          $output=Join-Path $env:RUNNER_TEMP "ia-v2-por-install.txt"
+          $errors=Join-Path $env:RUNNER_TEMP "ia-v2-por-errors.txt"
+          $arg='--game "'+(Join-Path $game "Game.exe")+'"'
+          $p=Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru -RedirectStandardOutput $output -RedirectStandardError $errors -ErrorAction Stop
+          if ($null -eq $p -or $p.ExitCode -ne 0) { throw "IA_R18_COMPRESSED_INSTALL_FAIL" }
+          if (Test-Path -LiteralPath (Join-Path $game "data/System.json")) { throw "IA_R18_PLAINTEXT_CREATED" }
+          $worker=Join-Path $game "IA Traductora/.local/Rpg/engine/IATraductora.exe"
+          $diagnostic=Join-Path $env:RUNNER_TEMP "ia-v2-por-real-status.json"
+          python servidor_v2/tools/run_verified_worker.py --worker $worker --game-root $game --diagnostic-file $diagnostic --timeout-seconds 190
+          if ($LASTEXITCODE -ne 0) { throw "IA_R18_COMPRESSED_WORKER_REAL_TRANSLATION_FAIL" }
+          # The probe may terminate a worker; its bridge is fixture-local.
+          # Remove only this disposable fixture's descriptor, not its cache.
+          $bridge=Join-Path $game "data/IATraductora/bridge.json"
+          if (Test-Path -LiteralPath $bridge) { Remove-Item -LiteralPath $bridge -Force }
+          node servidor_v2/tests/test_mv_real_worker.js $game --por $lz
+          if ($LASTEXITCODE -ne 0) { throw "IA_R18_COMPRESSED_NATIVE_PRESENTATION_FAIL" }
+          if (Test-Path -LiteralPath (Join-Path $game "data/System.json")) { throw "IA_R18_PLAINTEXT_CREATED" }
       - name: Cifrar siempre la versión final antes de publicarla en GitHub
         shell: pwsh
         run: |
@@ -235,19 +265,19 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R17-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R18-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R17-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R18-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
           'Servidor v2: modelo propio CT2 OPUS; MV y MZ, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v4
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R17-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R18-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error

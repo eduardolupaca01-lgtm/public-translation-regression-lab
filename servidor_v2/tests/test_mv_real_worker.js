@@ -131,7 +131,79 @@ async function until(predicate,limitMs,code){
     throw Error(code);
 }
 function japanese(value){return /[\u3040-\u30ff\u3400-\u9fff]/.test(value);}
+async function runCompressedMZ(){
+    assert.ok(isMZ,"IA_R18_COMPRESSED_MZ_REQUIRED");
+    const data=path.join(content,"data"),plain=path.join(data,"System.json");
+    assert.ok(!fs.existsSync(plain),"IA_R18_PLAINTEXT_FIXTURE_FORBIDDEN");
+    const lz=require(path.resolve(process.argv[4])),originals=new Map();
+    const registry=fs.readFileSync(path.join(content,"js","plugins.js"),"utf8");
+    ctx.$plugins=JSON.parse(registry.slice(registry.indexOf("["),registry.lastIndexOf("]")+1));
+    const catalogs={en:{},jp:{}};
+    for(const name of fs.readdirSync(data).filter(n=>n.endsWith(".jsono"))){
+        const file=path.join(data,name),raw=fs.readFileSync(file,"utf8");
+        originals.set(file,raw);
+        const match=/^lang_\w+_(en|jp)\.jsono$/.exec(name);
+        if(match)Object.assign(catalogs[match[1]],JSON.parse(lz.decompressFromBase64(raw)));
+    }
+    ctx.LZString=lz;
+    ctx.IAVRA={MasterLocalization:{I18N:{language:"en"}}};
+    Window_Base.prototype.convertEscapeCharacters=function(raw){
+        const table=catalogs[ctx.IAVRA.MasterLocalization.I18N.language]||catalogs.en;
+        return raw.replace(/\{([\w.]+)\}/g,(token,key)=>Object.prototype.hasOwnProperty.call(table,key)?table[key]:token);
+    };
+    Window_ChoiceList.prototype.convertEscapeCharacters=function(raw){
+        return Window_Base.prototype.convertEscapeCharacters.call(this,raw);
+    };
+    Window_Message.prototype.startMessage=function(){
+        this.starts++;this.painted=gameMessage.allText();
+    };
+    vm.runInNewContext(source,ctx,{filename:"IATraductora.js"});
+    const scene=new Scene_Map();ctx.SceneManager._scene=scene;scene.createAllWindows();
+    keyPressed=true;scene.update();keyPressed=false;
+    assert.equal(scene.windows.length,2,"IA_R18_F10_MISSING");
+    await until(()=>{
+        scene.update();scene.windows[1].refresh();
+        return scene.windows[1].drawn.some(v=>v.includes("IA local conectada"));
+    },120000,"IA_R18_COMPRESSED_WORKER_NOT_CONNECTED");
+    const window=new Window_Base(new Rectangle(0,0,600,200));
+    const has=(key,regex)=>regex.test(window.convertEscapeCharacters(key));
+    // Prefetch the actual compressed catalog through the installed plugin
+    // and the packaged neural worker. No mock translation responses.
+    await until(()=>{
+        scene.update();return has("{line1}",/linterna|farol|lámpara/i)&&
+            has("{choice1}",/abr/i)&&has("{notice1}",/gracias|agradezco|agradecemos|ayuda|asistencia/i);
+    },120000,"IA_R18_COMPRESSED_PREFETCH_NO_SPANISH");
+    gameMessage._texts=["{line1}"];
+    const msg=new Window_Message();msg.update();
+    await until(()=>{msg.update();return msg.starts===1;},35000,"IA_R18_COMPRESSED_FIRST_DIALOG_TIMEOUT");
+    assert.ok(/linterna|farol|lámpara/i.test(msg.painted)&&/mesa/i.test(msg.painted),"IA_R18_COMPRESSED_DIALOG_EN_FAIL");
+    assert.equal(gameMessage.allText(),"{line1}","IA_R18_NATIVE_KEY_CHANGED");
+    gameMessage._texts=[];gameMessage.setChoices(["{choice1}"]);
+    const choice=new Window_ChoiceList();choice._list=[{name:"{choice1}",symbol:"choice",enabled:true,ext:0}];
+    choice.drawItem(0);
+    assert.ok(/abr/i.test(choice.painted[0])&&/madera/i.test(choice.painted[0]),"IA_R18_COMPRESSED_CHOICE_FAIL");
+    assert.equal(choice._list[0].name,"{choice1}");
+    assert.equal(choice._list[0].ext,0);
+    const popup=["TSR_MapPopups","text","",{text:"{notice1}",duration:"60",target:"0",color:"2"}];
+    const it=new Game_Interpreter(),before=JSON.stringify(popup);it.setup([{code:357,parameters:popup}]);
+    await until(()=>it.command357(popup)===true,10000,"IA_R18_COMPRESSED_POPUP_TIMEOUT");
+    assert.equal(it.calls.length,1);
+    assert.ok(/gracias|agradezco|agradecemos|ayuda|asistencia/i.test(it.calls[0][3].text),"IA_R18_COMPRESSED_POPUP_FAIL");
+    assert.equal(JSON.stringify(popup),before);
+    for(const k of Object.keys(popup[3]))if(k!=="text")assert.equal(it.calls[0][3][k],popup[3][k]);
+    ctx.IAVRA.MasterLocalization.I18N.language="jp";
+    await until(()=>{scene.update();return has("{line1}",/puente/i);},120000,"IA_R18_COMPRESSED_JP_PREFETCH_FAIL");
+    gameMessage.setChoices([]);gameMessage._texts=["{line1}"];
+    const jp=new Window_Message();
+    await until(()=>{jp.update();return jp.starts===1;},35000,"IA_R18_COMPRESSED_JP_DIALOG_TIMEOUT");
+    assert.ok(/puente/i.test(jp.painted)&&!japanese(jp.painted),"IA_R18_COMPRESSED_JP_DIALOG_FAIL");
+    assert.equal(gameMessage.allText(),"{line1}");
+    assert.ok(!fs.existsSync(plain),"IA_R18_PLAINTEXT_WAS_CREATED");
+    for(const [file,raw] of originals)assert.equal(fs.readFileSync(file,"utf8"),raw,"IA_R18_COMPRESSED_ORIGINAL_CHANGED");
+    console.log("SERVIDOR_V2_R18_REAL_OPUS_COMPRESSED_MZ_IAVRA_DIALOG_CHOICE_POPUP_PASS");
+}
 async function run(){
+    if(process.argv[3]==="--por")return runCompressedMZ();
     // This is the CI-created synthetic acceptance game, not a user's game.
     const root=path.join(content,"csv"),sheet=path.join(root,"sheet.csv");
     const csvMessage="\\c[2]The lantern is on the table.\\I[17]",csvChoice="Open the wooden gate";

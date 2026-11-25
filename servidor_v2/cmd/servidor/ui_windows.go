@@ -407,7 +407,7 @@ func runUI(){
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
-    iaLog("[IA_TRADUCTORA_LISTA] RPG-MVMZ-R17-20261125. Selecciona una copia MV, MZ o MZ comprimida compatible. El motor es local.")
+    iaLog("[IA_TRADUCTORA_LISTA] RPG-MVMZ-R18-20261125. Selecciona una copia MV, MZ o MZ comprimida compatible. El motor es local.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

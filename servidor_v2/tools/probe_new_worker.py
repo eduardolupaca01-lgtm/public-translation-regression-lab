@@ -26,15 +26,21 @@ def call(opener,url,token,object=None):
         body=response.read(65537)
         if len(body)>65536: raise RuntimeError("IA_RESPUESTA_EXCESIVA")
     return json.loads(body.decode("utf8"))
+def bridge_file(game:Path):
+    candidates=[folder for folder in (game/"www",game)
+                if any((folder/"js"/name).is_file() for name in ("rpg_core.js","rmmz_core.js"))]
+    if len(candidates)!=1:raise RuntimeError("IA_PROBE_RPG_RUTA_AMBIGUA")
+    return candidates[0]/"data"/"IATraductora"/"bridge.json"
+
 def run(game:Path):
     game=game.resolve(strict=True)
-    folder=game/"www"/"data"/"IATraductora"
+    bridge=bridge_file(game)
     if not (game/"IA Traductora"/".local"/"Rpg"/"engine"/"IATraductora.exe").is_file():
         raise RuntimeError("IA_MOTOR_PROPIO_FALTANTE")
     opener=build_opener(ProxyHandler({}))
     limit=time.monotonic()+200
     while time.monotonic()<limit:
-        d=read_bridge(folder/"bridge.json")
+        d=read_bridge(bridge)
         if d:
             base="http://127.0.0.1:"+str(d["port"])
             try:
