@@ -2533,6 +2533,96 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR21CteNativeContextFirstPresentation(){
+    const root=path.join("/tmp","servidor-qa-cte-context-日本語"),data=path.join(root,"data"),base=path.join(root,"languages"),
+        en=path.join(base,"EN"),es=path.join(base,"ES");
+    const state={files:{},dirs:{[data]:true,[base]:true,[en]:true,[es]:true}};
+    const raw="The lantern is glowing.\\. Please wait here.",one="El farol brilla.\\. Espera aquí.",two="La linterna resplandece.\\. Aguarda aquí.";
+    const choices=["Open the gate.","Wait outside."],translated=["Abre la puerta.","Espera afuera."];
+    const sourceChoice=choices.join("\n"),targetChoice=translated.join("\n"),title="A missing lantern",titleEs="Un farol desaparecido",
+        objective="Find the old key.",objectiveEs="Encuentra la llave antigua.";
+    const maps=(message,choice)=>({events:{"2":{pages:{"0":{"message-1":message,"choice-1":choice}}}}});
+    function put(dir,file,doc){state.files[path.join(dir,file)]=JSON.stringify(doc);}
+    put(data,"System.json",{locale:"en_US",startMapId:1});
+    put(base,"Languages.json",{codes:{EN:1,ES:.8}});
+    put(en,"AllCommons.json",{"common-1":{"message-1":raw}});
+    put(es,"AllCommons.json",{"common-1":{"message-1":two}});
+    put(en,"Map034.json",maps(raw,sourceChoice));put(es,"Map034.json",maps(one,targetChoice));
+    put(en,"Map035.json",maps(raw,sourceChoice));put(es,"Map035.json",maps(two,"Una opción."));
+    put(en,"AllPlugins.json",{plugins:{"auramz/quests":{newObjectiveLabel_cte:"NEW [%1] OBJECTIVE"},"auramz/sample":{caption_cte:"Open inventory"}}});
+    put(es,"AllPlugins.json",{plugins:{"auramz/quests":{newObjectiveLabel_cte:"\x60NUEVO OBJETIVO EN [%1]]\x60"},"auramz/sample":{caption_cte:"Abrir inventario"}}});
+    put(en,"Quests.json",{"0":{title_cte:title,objectives_cte:{"0":objective}}});
+    put(es,"Quests.json",{"0":{title_cte:titleEs,objectives_cte:{"0":objectiveEs}}});
+    const original=JSON.stringify(Object.entries(state.files).filter(([n])=>n.startsWith(base)));
+    const f=fixture(50,{root,mz:true,fsState:state,testHooks:true,cacheReadDelay:100,
+        plugins:["thirdparty/CustomTranslationEngine","auramz/quests"].map(name=>({name,status:true,parameters:{}})),configure(c){
+            c.ConfigManager={language:"EN",getLanguage(){return this.language;}};
+            c.CTE={BaseLanguage:"EN",LockLanguage:false,languageLoaded:false,loadCount:0,data:{},getDataForLanguage(){},
+                checkAndLoadLanguage(){this.loadCount++;}};
+            function Boot(){} Boot.prototype.isReady=function(){return true;};c.Scene_Boot=Boot;
+            c.TextManager={message(){return "";}};
+            c.PluginManager={parameters(name){return name==="auramz/sample"?{caption_cte:"Open inventory"}:{};}};
+            c.Window_Base.prototype.convertEscapeCharacters=function(raw){return raw.replace(/\\/g,"\x1b");};
+            c.Window_Base.prototype.createTextState=function(text,x,y,width){return {text:this.convertEscapeCharacters(text),index:0,x,y,width};};
+            c.Window_Base.prototype.drawTextEx=function(text,x,y,w){this.lastTextEx=this.createTextState(text,x,y,w).text;return this.lastTextEx.length;};
+            Object.setPrototypeOf(c.Window_Message.prototype,c.Window_Base.prototype);
+            c.Window_Message.prototype.startMessage=function(){this.originalStarts++;this._textState=this.createTextState(c.$gameMessage.allText(),0,0,600);};
+            function Interpreter(){this._index=0;this._list=[];this.calls=0;this.branch=-1;}
+            Interpreter.prototype.command101=function(){
+                this.calls++;
+                while(this._list[this._index+1]&&this._list[this._index+1].code===401){
+                    this._index++;c.$gameMessage.add(this._list[this._index].parameters[0]);
+                }
+                this.waitMode="message";return true;
+            };
+            Interpreter.prototype.setupChoices=function(params){
+                c.$gameMessage.setChoices(params[0]);c.$gameMessage._choiceCallback=n=>{this.branch=n;};
+            };
+            c.Game_Interpreter=Interpreter;
+            function Choice(){this._list=[];this.painted=[];this._index=1;this.active=true;this.openness=255;}
+            Choice.prototype=Object.create(c.Window_Base.prototype);Choice.prototype.constructor=Choice;
+            Choice.prototype.drawItem=function(i){this.drawTextEx(this._list[i].name,0,0,600);this.painted[i]=this.lastTextEx;};
+            Choice.prototype.update=function(){};Choice.prototype.redrawItem=function(i){this.drawItem(i);};
+            c.Window_ChoiceList=Choice;
+        }});
+    const c=f.context;
+    assert.equal(c.TextManager.message("auramz/sample-caption_cte"),"Abrir inventario","plugin labels work before catalog scan");
+    assert.equal(c.TextManager.message("auramz/quests-newObjectiveLabel_cte"),"NUEVO OBJETIVO DE [%1]");
+    const boot=new c.Scene_Boot();assert.equal(boot.isReady(),false);assert.equal(c.ConfigManager.language,"ES");
+    assert.equal(c.CTE.loadCount,1);assert.equal(boot.isReady(),false);assert.equal(c.CTE.loadCount,1);
+    c.CTE.data.ES={commonevents:{},plugins:{}};c.CTE.languageLoaded=true;assert.equal(boot.isReady(),true);
+    c.ConfigManager.language="EN";assert.equal(boot.isReady(),true);assert.equal(c.ConfigManager.language,"EN");
+    // Explicit context at the native command boundary, even before scanning.
+    const messageList=[{code:101,parameters:[]},{code:401,parameters:[raw]}];
+    function eventList(map,list){return Object.assign(list,{_context:"map",_mapId:map,_eventId:2,_pageIndex:0});}
+    const it=new c.Game_Interpreter();
+    for(const [map,want] of [[34,one],[35,two]]){
+        c.$gameMessage.clear();it._index=0;it._list=eventList(map,messageList.slice());
+        assert.equal(it.command101(),true);
+        const w=new c.Window_Message();w.startMessage();
+        assert.equal(w._textState.text,want.replace(/\\/g,"\x1b"));
+        assert.equal(c.$gameMessage.allText(),raw);assert.equal(w.originalStarts,1);assert.equal(it.waitMode,"message");
+        assert.equal(it._index,1);
+    }
+    assert.equal(it.calls,2);
+    c.$gameMessage.clear();it._index=0;it._list=eventList(34,[{code:102,parameters:[choices.slice(),-1,0,2,0]}]);
+    it.setupChoices(it._list[0].parameters);
+    const win=new c.Window_ChoiceList();win._list=choices.map((name,i)=>({name,enabled:i===0,ext:i,symbol:"choice"}));
+    win._list.forEach((_,i)=>win.drawItem(i));assert.deepEqual(win.painted,translated);
+    assert.equal(win._list[1].name,choices[1]);assert.equal(win._list[1].enabled,false);assert.equal(win._index,1);
+    c.$gameMessage._choiceCallback(1);assert.equal(it.branch,1);
+    assert.deepEqual(it._list[0].parameters[0],choices);
+    c.$gameMessage.clear();it._index=0;it._list=eventList(35,[{code:102,parameters:[choices.slice(),-1,0,2,0]}]);
+    it.setupChoices(it._list[0].parameters);
+    // A truncated catalog must never change row count or select a different branch.
+    win._list=choices.map((name,i)=>({name,enabled:true,ext:i,symbol:"choice"}));
+    win._list.forEach((_,i)=>win.drawItem(i));assert.equal(win._list.length,2);assert.equal(win._list[1].name,choices[1]);
+    const view=new c.Window_Base(new c.Rectangle(0,0,600,200));
+    view.drawTextEx("\\c[6]NEW ["+title+"] OBJECTIVE\n\\}"+objective,0,0,600);
+    assert.equal(view.lastTextEx,"\x1bc[6]NUEVO OBJETIVO DE ["+titleEs+"]\n\x1b}"+objectiveEs);
+    assert.equal(JSON.stringify(Object.entries(state.files).filter(([n])=>n.startsWith(base))),original);
+    assert.ok(!f.posts.some(p=>p.text.includes("\\.")||p.text.includes("%1")));
+}
 async function testR20CteLargeInventoryAndPhysicalF10(){
     const root=path.join("/tmp","servidor-qa-cte-large-日本語"),data=path.join(root,"data"),base=path.join(root,"languages"),
         en=path.join(base,"EN"),es=path.join(base,"ES");
@@ -3396,6 +3486,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR21CteNativeContextFirstPresentation();
     await testR20CteLargeInventoryAndPhysicalF10();
     await testR19CteNativeChoicesAndCatalogs();
     await testR17CompressedNativeMZ();

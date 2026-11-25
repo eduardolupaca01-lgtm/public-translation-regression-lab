@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R20-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R21-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -4126,7 +4126,9 @@ function bindNativeMessageBitmap(win){
 // For the verified CTE JSON dialect, use a separate read-only display path.
 var cte={enabled:false,started:false,done:false,known:new Map(),spanish:new Set(),speakers:new Set(),
     paired:0,missing:0,choiceMismatch:0,conflicts:0,errors:0,depth:0,paint:0,frame:null,
-    aliases:new Map(),spanishFlat:new Set(),fragments:new Set(),questTitles:new Set(),questTemplate:false};
+    aliases:new Map(),spanishFlat:new Set(),fragments:new Set(),questTitles:new Set(),questTemplate:false,
+    indexed:new Set(),files:new Map(),messageRef:null,choiceRef:null,contextHits:0,textStates:0,
+    locale:{checked:false,requested:false,settled:false,started:0,status:"visual"}};
 function cteProfile(){return isMZ&&pluginEnabled(/^(?:thirdparty\/)?CustomTranslationEngine$/);}
 function detectCte(){
     if(!cteProfile()||!content)return;
@@ -4140,25 +4142,30 @@ function detectCte(){
             Object.prototype.hasOwnProperty.call(info.codes,"ES"));
     }catch(_){}
 }
+// Only native visual/pace controls. Custom executable escape codes remain
+// the game's responsibility; never pass their arguments to the model.
+var cteControl=/(?:\\|\x1b)(?:(?:c|i|fs|px|py|v|n|p)\[\d{1,6}\]|[.!|^><{}$]|g(?![a-z]))/gi;
 function cteNormal(text){
-    return text.replace(/\r\n/g,"\n").replace(/(?:\\|\x1b)([ci])\[(\d{1,4})\]/gi,function(_,c,n){return "\\"+c.toLowerCase()+"["+n+"]";});
+    return text.replace(/\r\n/g,"\n").replace(cteControl,function(v){return "\\"+v.slice(1).toLowerCase();});
 }
 function cteFlat(raw){return cteNormal(raw).replace(/[ \t\n]+/g," ").trim();}
 function cteSafe(raw){
-    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||/[\u0000\uFFFD]|[\r](?!\n)|(?:^|\n)\s*[@＠]|[<>{}]|%[0-9]|\$\{|(?:^|\n)\s*\/\//.test(raw))return false;
-    var prose=cteNormal(raw).replace(/\\[ci]\[\d{1,4}\]/g,"");
-    return !/[\\\x1b]/.test(prose)&&!csvExecutableSyntax(prose)&&/[A-Za-z]{2}/.test(prose)&&
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||/[\u0000\uFFFD]|[\r](?!\n)|(?:^|\n)\s*[@＠]|%[0-9]|\$\{|(?:^|\n)\s*\/\//.test(raw))return false;
+    var prose=cteNormal(raw).replace(cteControl,"");
+    return !/[\\\x1b<>{}]/.test(prose)&&!csvExecutableSyntax(prose)&&/[A-Za-z]{2}/.test(prose)&&
         !/^[\w./-]+\.(?:js|json|png|jpg|ogg|webm)$/i.test(prose.trim());
 }
-function cteSignature(raw){
-    return (cteNormal(raw).match(/\\[ci]\[\d{1,4}\]/g)||[]).join("\u0001");
+function cteSignature(raw){return (cteNormal(raw).match(cteControl)||[]).join("\u0001");}
+function cteRendered(raw){return cteNormal(raw).replace(cteControl,function(v){return "\x1b"+v.slice(1);});}
+function ctePairValue(raw,value){
+    return typeof raw==="string"&&typeof value==="string"&&cteSafe(raw)&&cteSafe(value)&&
+        cteNormal(raw)!==cteNormal(value)&&cteSignature(raw)===cteSignature(value)&&numbersIn(raw)===numbersIn(value)?cteNormal(value):null;
 }
 function ctePair(raw,value,priority,speaker){
     if(!cteSafe(raw)||actorNames[raw]||cte.known.size>=100000)return;
     var key=cteNormal(raw),target=null;
-    if(typeof value==="string"&&cteSafe(value)&&cteNormal(value)!==key&&
-       cteSignature(raw)===cteSignature(value)&&numbersIn(raw)===numbersIn(value)){
-        target=cteNormal(value);
+    target=ctePairValue(raw,value);
+    if(target!==null){
         if(cte.spanish.size<100000){cte.spanish.add(target);cte.spanishFlat.add(cteFlat(target));}
     }
     if(speaker){
@@ -4244,6 +4251,126 @@ function cteReadCatalog(base,file){
     var raw=fs.readFileSync(f,"utf8");
     return JSON.parse(raw.replace(/^\uFEFF/,""));
 }
+// Load the exact local catalog on demand. An English display string can
+// have several translations in different events; prefer proven event identity.
+function cteFilePair(file){
+    if(!/^(?:Map\d{3,6}|AllCommons|AllTroops|Actors|AllPlugins|Quests|System|TemplateMessages)\.json$/.test(file))return null;
+    if(cte.files.has(file)){var old=cte.files.get(file);cte.files.delete(file);cte.files.set(file,old);return old;}
+    try{
+        var base=path.join(content,"languages"),en=cteReadCatalog(path.join(base,"EN"),file),es=cteReadCatalog(path.join(base,"ES"),file);
+        if(!en)return null;
+        var pair={en:en,es:es};cte.files.set(file,pair);
+        while(cte.files.size>8)cte.files.delete(cte.files.keys().next().value);
+        return pair;
+    }catch(_){cte.errors++;return null;}
+}
+function cteIndexFile(file){
+    if(cte.indexed.has(file))return true;
+    var pair=cteFilePair(file);if(!pair)return false;
+    cteCatalog(file,pair.en,pair.es);cte.indexed.add(file);return true;
+}
+function ctePrime(){
+    ["Actors.json","AllPlugins.json","Quests.json","System.json","TemplateMessages.json","Map001.json"].forEach(cteIndexFile);
+}
+function ctePosition(interpreter,code){
+    var list=interpreter&&interpreter._list,index=interpreter&&interpreter._index;
+    if(!Array.isArray(list)||!integer(index)||index<0||index>=list.length||!list[index]||list[index].code!==code)return null;
+    var page=list._pageIndex,file,keys;
+    function positive(n){return integer(n)&&n>0&&n<=999999;}
+    if(list._context==="map"&&positive(list._mapId)&&positive(list._eventId)&&integer(page)&&page>=0&&page<=999){
+        file="Map"+("000"+list._mapId).slice(-Math.max(3,String(list._mapId).length))+".json";
+        keys=["events",String(list._eventId),"pages",String(page)];
+    }else if(list._context==="common"&&positive(list._commonEventId)){
+        file="AllCommons.json";keys=["common-"+list._commonEventId];
+    }else if(list._context==="troop"&&positive(list._troopId)&&integer(page)&&page>=0&&page<=999){
+        file="AllTroops.json";keys=["troop-"+list._troopId,"pages",String(page)];
+    }else return null;
+    var num=1;for(var i=0;i<index;i++)if(list[i]&&list[i].code===code)num++;
+    keys.push((code===102?"choice":code===105?"scrollingmessage":"message")+"-"+num);
+    return {file:file,keys:keys,code:code};
+}
+function ctePathValue(doc,keys){
+    for(var i=0;i<keys.length;i++){
+        if(!doc||typeof doc!=="object"||!Object.prototype.hasOwnProperty.call(doc,keys[i]))return null;
+        doc=doc[keys[i]];
+    }
+    return typeof doc==="string"?doc:null;
+}
+function cteContextValue(raw,ref,row,count){
+    if(!ref||typeof raw!=="string")return null;
+    var pair=cteFilePair(ref.file);if(!pair)return null;
+    var en=ctePathValue(pair.en,ref.keys),es=ctePathValue(pair.es,ref.keys);
+    if(typeof en!=="string"||typeof es!=="string")return null;
+    if(ref.code===102){
+        var a=en.split(/\r?\n/),b=es.split(/\r?\n/);
+        if(a.length!==b.length||a.length!==count||!integer(row)||row<0||row>=a.length)return null;
+        en=a[row];es=b[row];
+    }
+    if(cteFlat(raw)!==cteFlat(en)||cteSignature(raw)!==cteSignature(en))return null;
+    var result=ctePairValue(en,es);
+    if(result!==null){cte.contextHits++;cte.spanish.add(result);cte.spanishFlat.add(cteFlat(result));}
+    return result;
+}
+function cteWindowContext(win,raw){
+    var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
+    if(!m)return null;
+    var frame=cte.frame&&cte.frame.win===win?cte.frame:null,ref=frame?cte.choiceRef:cte.messageRef;
+    if(!frame&&!(typeof Window_Message!=="undefined"&&win instanceof Window_Message))return null;
+    if(!ref||ref.message!==m||ref.generation!==(m._iaFirstGeneration||0))return null;
+    if(frame){if(!Array.isArray(m._choices)||m._choices.length!==ref.count||cteFlat(frame.raw)!==cteFlat(raw))return null;}
+    else if(typeof m.allText!=="function"||typeof ref.raw!=="string"||cteFlat(ref.raw)!==cteFlat(raw)||cteFlat(m.allText())!==cteFlat(raw))return null;
+    return cteContextValue(raw,ref.position,frame?frame.index:null,ref.count);
+}
+// The author already exposes a supported Spanish locale. Switch only a
+// base-English boot, via the existing ConfigManager/CTE API, never edit files.
+// If loading fails or times out, keep the original language and visual adapter.
+function cteNativeLocaleApi(){
+    return typeof CTE!=="undefined"&&CTE&&CTE.BaseLanguage==="EN"&&!CTE.LockLanguage&&
+        typeof CTE.checkAndLoadLanguage==="function"&&typeof CTE.getDataForLanguage==="function"&&
+        typeof ConfigManager!=="undefined"&&typeof ConfigManager.getLanguage==="function"&&
+        typeof Scene_Boot!=="undefined"&&typeof Scene_Boot.prototype.isReady==="function";
+}
+function hookCteNativeLocale(){
+    if(!cteNativeLocaleApi())return;
+    var native=Scene_Boot.prototype.isReady;
+    Scene_Boot.prototype.isReady=function(){
+        var ready=native.apply(this,arguments),l=cte.locale;
+        if(!l.checked&&ready){
+            l.checked=true;
+            if(ConfigManager.getLanguage()==="EN"){
+                l.requested=true;l.started=Date.now();l.status="cargando ES";
+                try{
+                    CTE.languageLoaded=false;ConfigManager.language="ES";CTE.checkAndLoadLanguage();
+                }catch(_){l.status="respaldo EN";l.settled=true;try{ConfigManager.language="EN";}catch(__){}cte.errors++;}
+            }else{l.status=ConfigManager.getLanguage()==="ES"?"ES nativo":"idioma elegido";l.settled=true;}
+        }
+        if(l.requested&&!l.settled){
+            if(ConfigManager.getLanguage()!=="ES"){l.status="idioma elegido";l.settled=true;}
+            else if(CTE.languageLoaded===true&&CTE.data&&CTE.data.ES&&CTE.data.ES.commonevents&&CTE.data.ES.plugins){
+                l.settled=true;l.status="ES nativo";
+            }else if(Date.now()-l.started<12000)return false;
+            else{l.settled=true;l.status="respaldo EN";try{ConfigManager.language="EN";}catch(_){cte.errors++;}}
+        }
+        return ready;
+    };
+}
+function hookCtePluginLabels(){
+    if(typeof TextManager==="undefined"||typeof TextManager.message!=="function")return;
+    var native=TextManager.message;
+    TextManager.message=function(id){
+        var out=native.apply(this,arguments);
+        if(typeof id!=="string"||inputFormActive())return out;
+        if(id==="auramz/quests-newObjectiveLabel_cte"&&cte.questTemplate&&
+           (out==="NEW [%1] OBJECTIVE"||out==="\x60NUEVO OBJETIVO EN [%1]]\x60"||!out))return "NUEVO OBJETIVO DE [%1]";
+        var m=/^([A-Za-z0-9_/.]+)-([A-Za-z0-9_]+_cte)$/.exec(id);
+        if(!m||!cteField("AllPlugins.json",["plugins",m[1],m[2]])||typeof PluginManager==="undefined"||typeof PluginManager.parameters!=="function")return out;
+        var pair=cteFilePair("AllPlugins.json"),keys=["plugins",m[1],m[2]];
+        if(!pair)return out;
+        var en=ctePathValue(pair.en,keys),es=ctePathValue(pair.es,keys),actual=(PluginManager.parameters(m[1])||{})[m[2]];
+        if(typeof actual!=="string"||actual!==en||out&&out!==en)return out;
+        return ctePairValue(en,es)||out;
+    };
+}
 function startCteScan(){
     if(!cte.enabled||cte.started||!cacheReadDone)return;
     cte.started=true;scanStarted=true;
@@ -4273,7 +4400,11 @@ function startCteScan(){
                 enqueueSlice();return;
             }
             var file=files[at++];
-            try{var src=cteReadCatalog(en,file),dest=cteReadCatalog(es,file);if(src)cteCatalog(file,src,dest);else scanStats.skipped++;}
+            try{
+                if(cte.indexed.has(file)){}
+                else if(/^(?:Map\d{3,6}|AllCommons|AllTroops|Actors|AllPlugins|Quests|System|TemplateMessages)\.json$/.test(file)){if(!cteIndexFile(file))scanStats.skipped++;}
+                else{var src=cteReadCatalog(en,file),dest=cteReadCatalog(es,file);if(src)cteCatalog(file,src,dest);else scanStats.skipped++;}
+            }
             catch(_){cte.errors++;scanStats.skipped++;}
             scanStats.files++;setTimeout(step,0);
         }
@@ -4305,7 +4436,7 @@ function cteEntry(raw,speaker,live){
 }
 function cteQuestLabel(raw,request){
     if(!cte.questTemplate||typeof raw!=="string")return null;
-    if(raw==="NEW [%1] OBJECTIVE")return "NUEVO OBJETIVO DE [%1]";
+    if(raw==="NEW [%1] OBJECTIVE"||raw==="\x60NUEVO OBJETIVO EN [%1]]\x60")return "NUEVO OBJETIVO DE [%1]";
     var m=/^NEW \[([^\[\]\r\n]{1,180})\] OBJECTIVE$/.exec(raw);
     if(!m||!cte.questTitles.has(cteNormal(m[1])))return null;
     return "NUEVO OBJETIVO DE ["+cteResult(m[1],request,false,false,false)+"]";
@@ -4314,6 +4445,12 @@ function cteResult(raw,request,converted,speaker,live){
     if(!cte.enabled||inputFormActive()||typeof raw!=="string")return raw;
     var label=!speaker?cteQuestLabel(raw,request):null;
     if(label!==null)return label;
+    if(!speaker&&cte.questTemplate){
+        var q=/^(\\c\[6\])([^\r\n]+)\n(\\[{}])([\s\S]+)$/.exec(cteNormal(raw));
+        if(q){var title=cteQuestLabel(q[2],request);
+            if(title!==null){var body=cteResult(q[4],request,false,false,false),whole=q[1]+title+"\n"+q[3]+body;
+                return converted?cteRendered(whole):whole;}}
+    }
     var entry=cteEntry(raw,speaker,live);
     if(!entry)return raw;
     var value=entry.target;
@@ -4329,7 +4466,7 @@ function cteResult(raw,request,converted,speaker,live){
         }
     }
     if(!cteSafe(value)||!value.trim())return raw;
-    if(converted&&raw.indexOf("\x1b")>=0)value=value.replace(/\\([ci])\[(\d{1,4})\]/gi,"\x1b$1[$2]");
+    if(converted&&raw.indexOf("\x1b")>=0)value=cteRendered(value);
     return value;
 }
 function cteChoiceRaw(win,index){
@@ -4350,14 +4487,14 @@ function cteSafeOriginal(raw){
     if(typeof raw!=="string")return "";
     // No second call into a failed native translator; preserve literal
     // source and allow only ordinary colour/icon controls in the fallback.
-    return cteSafe(raw)?cteNormal(raw).replace(/\\([ci])\[(\d{1,4})\]/gi,"\x1b$1[$2]"):raw;
+    return cteSafe(raw)?cteRendered(raw):raw;
 }
 function hookCteConversion(proto,own){
     if(!proto||typeof proto.convertEscapeCharacters!=="function"||
        own&&!Object.prototype.hasOwnProperty.call(proto,"convertEscapeCharacters"))return;
     var native=proto.convertEscapeCharacters;
     proto.convertEscapeCharacters=function(text){
-        if(this._iaOwnSurface||inputFormActive())return native.apply(this,arguments);
+        if(this===proto||this._iaOwnSurface||inputFormActive())return native.apply(this,arguments);
         var frame=cte.frame&&cte.frame.win===this?cte.frame:null,args=Array.prototype.slice.call(arguments);
         // RPG Maker's native replace() requires a string.
         if(typeof text!=="string")args[0]=frame?frame.raw:"";
@@ -4391,7 +4528,33 @@ function hookCte(){
     if(!cte.enabled)return;
     var base=typeof Window_Base!=="undefined"?Window_Base.prototype:null;
     if(!base)return;
+    ctePrime();hookCteNativeLocale();hookCtePluginLabels();
     hookCteConversion(base,false);
+    if(typeof base.createTextState==="function"){
+        var create=base.createTextState;
+        base.createTextState=function(raw){
+            if(this._iaOwnSurface||inputFormActive()||identityDrawDepth)return create.apply(this,arguments);
+            var frame=cte.frame&&cte.frame.win===this?cte.frame:null,args=Array.prototype.slice.call(arguments);
+            if(typeof raw!=="string")args[0]=raw=frame?frame.raw:"";
+            var speaker=this._iaNameSurface||typeof Window_NameBox!=="undefined"&&this instanceof Window_NameBox;
+            var live=!!frame||typeof Window_Message!=="undefined"&&this instanceof Window_Message||typeof Window_ChoiceList!=="undefined"&&this instanceof Window_ChoiceList;
+            var projected=raw;
+            try{
+                if(!speaker)projected=cteWindowContext(this,raw)||cteResult(raw,true,false,false,live);
+            }catch(_){cte.errors++;projected=raw;}
+            cte.textStates++;
+            if(typeof projected!=="string"||!projected.trim()&&raw.trim())projected=raw;
+            if(projected===raw)return create.apply(this,args);
+            args[0]=projected;
+            // Native conversion still resolves the original, unchanged controls.
+            // Do not translate the already projected Spanish a second time.
+            cte.depth++;
+            try{var textState=create.apply(this,args);state.shown++;
+                if(frame){frame.resolved=raw;frame.shown=projected;}
+                return textState;
+            }finally{cte.depth--;}
+        };
+    }
     if(typeof Window_Message!=="undefined")hookCteConversion(Window_Message.prototype,true);
     if(typeof Window_NameBox!=="undefined"){
         Window_NameBox.prototype._iaNameSurface=true;hookCteConversion(Window_NameBox.prototype,true);
@@ -4427,16 +4590,29 @@ function hookCte(){
     if(typeof Game_Message!=="undefined"){
         var mp=Game_Message.prototype,clear=mp.clear;
         if(typeof clear==="function")mp.clear=function(){
-            var out=clear.apply(this,arguments);this._iaFirstGeneration=(this._iaFirstGeneration||0)+1;this._iaCteChoiceSource=null;return out;
+            var out=clear.apply(this,arguments);this._iaFirstGeneration=(this._iaFirstGeneration||0)+1;this._iaCteChoiceSource=null;cte.messageRef=null;cte.choiceRef=null;return out;
         };
+    }
+    if(typeof Game_Interpreter!=="undefined"){
+        [101,105].forEach(function(code){
+            var p=Game_Interpreter.prototype,method="command"+code,native=p[method];if(typeof native!=="function")return;
+            p[method]=function(){
+                var position=ctePosition(this,code),result=native.apply(this,arguments),m=typeof $gameMessage!=="undefined"?$gameMessage:null;
+                if(result!==false&&m&&position){cte.messageRef={message:m,generation:m._iaFirstGeneration||0,position:position,raw:typeof m.allText==="function"?m.allText():null};cteIndexFile(position.file);}
+                return result;
+            };
+        });
     }
     if(typeof Game_Interpreter!=="undefined"&&typeof Game_Interpreter.prototype.setupChoices==="function"){
         var setup=Game_Interpreter.prototype.setupChoices;
         Game_Interpreter.prototype.setupChoices=function(params){
-            var raw=Array.isArray(params)&&Array.isArray(params[0])?params[0].slice():null;
+            var raw=Array.isArray(params)&&Array.isArray(params[0])?params[0].slice():null,position=ctePosition(this,102);
             var result=setup.apply(this,arguments);
             var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
-            if(m&&raw)m._iaCteChoiceSource={values:raw,count:raw.length,generation:m._iaFirstGeneration||0};
+            if(m&&raw){m._iaCteChoiceSource={values:raw,count:raw.length,generation:m._iaFirstGeneration||0};
+                cte.choiceRef=position?{message:m,generation:m._iaFirstGeneration||0,position:position,count:raw.length}:null;
+                if(position)cteIndexFile(position.file);
+            }
             return result;
         };
     }
@@ -4466,7 +4642,7 @@ function hookCte(){
                        frame.scene!==(typeof SceneManager!=="undefined"?SceneManager._scene:null)||
                        frame.generation!==(typeof $gameMessage!=="undefined"&&$gameMessage?$gameMessage._iaFirstGeneration||0:0)||
                        typeof frame.resolved!=="string")return;
-                    var ready=cteResult(frame.resolved,true,true,false,true);
+                    var ready=cteWindowContext(win,frame.raw)||cteResult(frame.resolved,true,true,false,true);
                     if(ready!==frame.shown){frame.shown=ready;win.redrawItem(i);}
                 });
                 return out;
@@ -6843,6 +7019,7 @@ function cteHudRefresh(){
         "Caché: "+diskStats.loaded+" cargadas · "+diskStats.saved+" guardadas",
         "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+" · Omitidos: "+scanStats.skipped,
         "CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos",
+        "Idioma: "+cte.locale.status+" · Contexto: "+cte.contextHits+" · TextState: "+cte.textStates,
         "Textos listos: "+scanStats.ready+"/"+discovered.size+" · Fallos: "+scanStats.rejected,
         "Errores: "+state.errors+" · Avisos CTE: "+cte.errors,
         "F10: cerrar"
