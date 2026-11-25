@@ -216,7 +216,7 @@ function fixture(translationDelay=0,options={}){
     iconAtlas.isReady=()=>true;
     const context={
         ImageManager:{loadSystem(name){assert.equal(name,"IconSet");return iconAtlas;}},
-        window:{location:{pathname:options.pathname||path.join(content,"index.html")}},
+        window:{location:{pathname:options.pathname||path.join(content,"index.html")},__IA_TRADUCTORA_TEST_HOOKS__:options.testHooks===true},
         document:options.scriptSrc?{currentScript:{src:options.scriptSrc}}:null,
         Utils:{isNwjs:()=>true,RPGMAKER_NAME:options.mz?"MZ":"MV"},Rectangle,ColorManager:{textColor:i=>"color-"+i},
         require(name){
@@ -1895,19 +1895,21 @@ async function testLargeCommonEventsJsonIsParsedIncrementally(){
     state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
     state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null]});
     state.files[path.join(data,"CommonEvents.json")]=raw;
-    const f=fixture(1,{fsState:state,batch:true,jsonParseSizes:[]});
+    const f=fixture(1,{fsState:state,batch:true,jsonParseSizes:[],testHooks:true});
     const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();
     f.context.SceneManager._scene=new f.context.Scene_Map();
     let heartbeats=0;
     const heartbeat=setInterval(()=>heartbeats++,1);
     assert.ok(raw.length<16*1024*1024,
         "large CommonEvents fixture must stay within the per-file safety limit");
+    const inspect=f.context.window.__IA_TRADUCTORA_TEST__;
+    assert.ok(inspect,"opt-in inventory test probe must be installed");
     const deadline=Date.now()+15000;
     try{
-        while(!f.context.scanStats.done&&Date.now()<deadline)await wait(10);
+        while(!inspect.done()&&Date.now()<deadline)await wait(10);
     }finally{clearInterval(heartbeat);}
-    assert.ok(f.context.scanStats.done,"large CommonEvents inventory must finish");
-    assert.ok(f.context.discovered.has("en\u0000"+finalText),
+    assert.ok(inspect.done(),"large CommonEvents inventory must finish");
+    assert.ok(inspect.has("en",finalText),
         "last CommonEvents entry must be parsed and inventoried even while bulk prefetch is paused");
     assert.ok(f.jsonParseSizes.length>=events.length,
         "CommonEvents entries must be parsed individually, not as one giant array");
@@ -1934,17 +1936,19 @@ async function testInventoryHasNoFortyThousandTextCeiling(){
     state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
     state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null]});
     state.files[path.join(data,"CommonEvents.json")]=raw;
-    const f=fixture(0,{fsState:state,batch:true});
+    const f=fixture(0,{fsState:state,batch:true,testHooks:true});
     const title=new f.context.Scene_Title();f.context.SceneManager._scene=title;title.start();
     f.context.SceneManager._scene=new f.context.Scene_Map();
+    const inspect=f.context.window.__IA_TRADUCTORA_TEST__;
+    assert.ok(inspect,"opt-in inventory test probe must be installed");
     const deadline=Date.now()+45000;
-    while(!f.context.scanStats.done&&Date.now()<deadline)await wait(10);
-    assert.ok(f.context.scanStats.done,"full inventory must finish without a candidate-count cutoff");
-    assert.ok(f.context.discovered.size>40000,
+    while(!inspect.done()&&Date.now()<deadline)await wait(10);
+    assert.ok(inspect.done(),"full inventory must finish without a candidate-count cutoff");
+    assert.ok(inspect.inventorySize()>40000,
         "the inventory must exceed the former 40,000-text ceiling");
-    assert.ok(f.context.discovered.has("en\u0000"+lastText),
+    assert.ok(inspect.has("en",lastText),
         "the final unique event text must be present after the former cutoff");
-    assert.equal(f.context.scanStats.limited,false,
+    assert.equal(inspect.limited(),false,
         "a large number of valid texts must not be reported as a truncated inventory");
 }
 async function testR6FirstViewNativeGate(mz){
