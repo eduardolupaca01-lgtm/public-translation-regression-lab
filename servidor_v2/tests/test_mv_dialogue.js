@@ -1879,7 +1879,7 @@ async function testLargeGamePausesBackgroundPrefetch(){
 }
 
 async function testLargeCommonEventsJsonIsParsedIncrementally(){
-    const data=path.join("/tmp","servidor-qa-common-events-日本語","www","data");
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
     const events=[null],longText=("Please open the extraordinarily complicated wooden gate while the guards carefully watch the northern courtyard and wait for our signal. ").repeat(4);
     for(let i=0;i<1978;i++){
@@ -1919,7 +1919,7 @@ async function testLargeCommonEventsJsonIsParsedIncrementally(){
         "incremental CommonEvents parsing must yield to the render/event loop");
 }
 async function testInventoryHasNoFortyThousandTextCeiling(){
-    const data=path.join("/tmp","servidor-qa-unlimited-inventory-日本語","www","data");
+    const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
     const events=[null],count=40025;
     let lastText="";
