@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R9-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R10-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -1469,6 +1469,7 @@ function projectMessageSurface(win,text){
     return text;
 }
 function projectSurface(win,text){
+    var external=iavraDisplayValue(text,true);if(external!==null)return external;
     if(typeof Window_Message!=="undefined"&&win instanceof Window_Message)
         return projectMessageSurface(win,text);
     if(questSurface(win,text))return questDraw(win,text);
@@ -1957,6 +1958,7 @@ function nativeDisplayProjection(text,context,bitmap){
     if(inputFormActive()||identityDrawDepth||typeof text!=="string"||!text.trim()||
        text.length>1800||actorNames[text]||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
+    var external=iavraDisplayValue(text,true);if(external!==null)return external;
     var localized=tsvProject(text,true);if(localized!==null)return localized;
     if(tsvExcluded(text))return null;
     var named=csvNameReady(text);if(named!==null)return named;
@@ -2357,8 +2359,9 @@ function choiceDisplay(win,raw,requestMissing){
         var locale=tsvProbeLocale(win);
         if(locale)return tsvTranslatedKeys(raw,locale,requestMissing);
     }
+    var externalReady=iavraReadyValue(raw,requestMissing);
+    if(externalReady!==null)return externalReady;
     var projected=csvProjectDisplay(raw,true,requestMissing);
-    if(projected!==null)return projected;
     if(tsvExcluded(raw))return null;
     var source=displaySource(raw,"choice");if(!source)return null;
     var value=readyText(source,raw);
@@ -2368,6 +2371,13 @@ function choiceDisplay(win,raw,requestMissing){
 }
 function firstViewMissing(win,raw,choice){
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||csvExecutableSyntax(raw))return false;
+    var externalKey=iavraResolveText(raw);
+    if(externalKey){
+        if(readyText(externalKey.source,externalKey.text)!==null)return false;
+        if(rejectedKeys.get(externalKey.source+"\u0000"+externalKey.text)===Infinity)return false;
+        firstViewRequest(externalKey.source,externalKey.text);return true;
+    }
+    if(iavra.detected&&iavra.loading&&iavraHasReference(raw))return true;
     if(tsv.detected&&tsvRef(raw)){
         tsvPrioritize(raw,true);
         if(!tsv.valid)return !tsv.done;
@@ -2500,6 +2510,14 @@ function iaChoiceProjection(win,raw){
     var values=raw.slice(),waiting=false;
     for(var i=0;i<raw.length;i++){
         if(typeof raw[i]!=="string")continue;
+        var external=iavraResolveText(raw[i]);
+        if(external){
+            var externalReady=readyText(external.source,external.text);
+            if(externalReady!==null){values[i]=externalReady;continue;}
+            values[i]=external.text;
+            if(firstViewMissing(win,raw[i],true))waiting=true;
+            continue;
+        }
         var ready=choiceDisplay(win,raw[i],false);
         if(typeof ready==="string"){values[i]=ready;continue;}
         if(firstViewMissing(win,raw[i],true))waiting=true;
@@ -2883,18 +2901,20 @@ function hookMessages(){
         var projection=null;
         try{
             if(typeof $gameMessage!=="undefined"&&$gameMessage&&$gameMessage.hasText&&$gameMessage.hasText()){
-                var text=$gameMessage.allText(),source=languageFor(text),keys=tsvRawMessage();
+                var rawText=$gameMessage.allText(),externalEntry=iavraResolveText(rawText);
+                var text=externalEntry?externalEntry.text:rawText;
+                var source=externalEntry?externalEntry.source:languageFor(text),keys=tsvRawMessage();
                 this._iaSourceMessage=text;
                 var scripted=scriptMessagePlan(keys);
                 if(scripted){
                     var projected=authoredRead(scripted,true);
-                    if(projected!==null)projection={message:$gameMessage,raw:text,text:projected,used:false,scripted:true};
+                    if(projected!==null)projection={message:$gameMessage,raw:rawText,text:projected,used:false,scripted:true};
                     source=null;
                 }
                 var entries=!scripted?scriptVariableEntries(keys):[];
                 if(entries.length){
                     var fieldText=scriptVariableRender(keys,entries,true);
-                    if(fieldText!==null)projection={message:$gameMessage,raw:text,text:fieldText,used:false,scripted:true};
+                    if(fieldText!==null)projection={message:$gameMessage,raw:rawText,text:fieldText,used:false,scripted:true};
                     source=null;
                 }
                 if(!scripted&&!entries.length&&tsv.detected&&tsvRef(keys)){
@@ -2903,8 +2923,18 @@ function hookMessages(){
                     if(locale)tsv.language=locale;
                     tsvPrioritize(keys,true);
                     var localized=locale?tsvTranslatedKeys(keys,locale,true):null;
-                    if(localized!==null)projection={message:$gameMessage,raw:text,text:localized,used:false};
+                    if(localized!==null)projection={message:$gameMessage,raw:rawText,text:localized,used:false};
                     // Never replace the game's reference array.
+                    source=null;
+                }
+                if(externalEntry&&!scripted&&!entries.length&&source){
+                    var externalCached=readyText(source,text);
+                    projection={message:$gameMessage,raw:rawText,text:externalCached!==null?externalCached:text,
+                        used:false,iavra:true,translated:externalCached!==null&&externalCached!==text};
+                    if(externalCached===null){
+                        if(state.connected)requestVisible(source,text).then(function(){},function(){state.errors++;});
+                        else addPrefetch(text,true,source);
+                    }
                     source=null;
                 }
                 if(source){
@@ -2936,7 +2966,10 @@ function hookMessages(){
         tsvProjection=projection;
         try{out=original.apply(this,arguments);}
         finally{tsvProjection=previousProjection;}
-        if(projection&&projection.used){state.shown++;if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
+        if(projection&&projection.used){
+            if(projection.iavra){if(projection.translated){state.shown++;iavra.shown++;}}
+            else{state.shown++;if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
+        }
         if(tsv.detected)try{tsvLateTicket(this);}catch(_){state.errors++;}
         if(this._iaLateTicket)try{snapshotMessage(this,this._iaLateTicket);}catch(_){hideLate(this);}
         return out;
@@ -3031,7 +3064,207 @@ var tableStats={files:0,candidates:0,root:false,rootDone:false,rootFiles:0,rootT
 // named language columns. The game's identifiers are never neural input.
 var tsv={detected:false,valid:false,done:false,loading:false,rows:0,conflicts:0,shown:0,
     keys:new Map(),display:new Map(),chinese:new Map(),visual:new Map(),priority:new Map(),language:"en",skippedRows:0,late:0,visu:false,probe:null,loose:new Map(),repairs:0};
-function externalTables(){return tableStats.root||tsv.detected;}
+// Explicit, read-only adapter for Iavra Localization Core. It follows the
+// game's own File Path/Languages settings; it never crawls arbitrary folders,
+// rewrites a catalog, changes the active language, or translates identity keys.
+var iavra={
+    detected:false,done:true,loading:false,template:"",languages:[],defaultLanguage:"en",
+    prefix:"#{",suffix:"}",catalogs:{en:new Map(),ja:new Map()},textSources:new Map(),
+    files:0,strings:0,skipped:0,shown:0
+};
+function iavraSourceForCode(value){
+    var code=String(value||"").trim().toLowerCase().replace(/_/g,"-");
+    if(/^(?:en|eng|english)(?:-[a-z0-9]+)?$/.test(code))return "en";
+    if(/^(?:ja|jp|jpn|japanese)(?:-[a-z0-9]+)?$/.test(code))return "ja";
+    return null;
+}
+function iavraEscapeRegex(value){return String(value).replace(/([\\^$.*+?()[\]{}|])/g,"\\$1");}
+function detectIavraLocalization(){
+    iavra.done=true;
+    if(typeof $plugins==="undefined"||!Array.isArray($plugins))return false;
+    var plugin=null;
+    for(var i=0;i<$plugins.length;i++){
+        var p=$plugins[i];
+        if(!p||!p.status)continue;
+        if(/<Iavra Localization Core>/i.test(String(p.description||""))||
+           /Iavra.*Localization.*Core/i.test(String(p.name||""))){plugin=p;break;}
+    }
+    if(!plugin)return false;
+    var params=plugin.parameters||{},template=String(params["File Path"]||"").trim();
+    var folder=String(params["Localization Folder"]||"").trim();
+    if(folder)template=folder.replace(/\\/g,"/").replace(/\/+$/,"")+"/"+template.replace(/^[/\\]+/,"");
+    template=template.replace(/\\/g,"/");
+    if(template.split("{lang}").length!==2)return false;
+    var rawLanguages=String(params["Languages"]||"en").trim(),languages=[];
+    if(rawLanguages.charAt(0)==="["){
+        try{var parsed=JSON.parse(rawLanguages);if(Array.isArray(parsed))languages=parsed.map(String);}catch(_){}
+    }
+    if(!languages.length)languages=rawLanguages.split(/[,;\s]+/);
+    var entries=[],seen={};
+    languages.forEach(function(code){
+        code=String(code||"").trim();
+        var source=iavraSourceForCode(code);
+        if(!source||seen[source]||!/^[A-Za-z]{2,12}(?:[-_][A-Za-z0-9]{2,12})?$/.test(code))return;
+        seen[source]=true;entries.push({code:code,source:source});
+    });
+    if(!entries.length)return false;
+    var escape=String(params["Escape Code"]||"#{{key}}"),at=escape.indexOf("{key}");
+    if(at<0||escape.indexOf("{key}",at+5)>=0)return false;
+    var prefix=escape.slice(0,at),suffix=escape.slice(at+5);
+    if(!prefix||!suffix||prefix.length>30||suffix.length>30||/[\r\n]/.test(prefix+suffix))return false;
+    iavra.detected=true;iavra.done=false;iavra.template=template;iavra.languages=entries;
+    iavra.defaultLanguage=iavraSourceForCode(languages[0])||entries[0].source;
+    iavra.prefix=prefix;iavra.suffix=suffix;
+    return true;
+}
+function iavraFile(code){
+    if(!content||!iavra.template)return null;
+    var relative=iavra.template.replace("{lang}",String(code)).replace(/\\/g,"/");
+    if(!relative||relative.charAt(0)==="/"||/^[A-Za-z]:/.test(relative)||relative.indexOf("\u0000")>=0)return null;
+    var parts=relative.split("/");
+    if(parts.length<1||parts.length>12||parts.some(function(s){
+        return !s||s==="."||s===".."||!/^[A-Za-z0-9_.-]{1,100}$/.test(s);
+    }))return null;
+    var current=content;
+    try{
+        for(var i=0;i<parts.length-1;i++){
+            current=path.join(current,parts[i]);
+            if(!directoryUnder(content,current)||path.normalize(fs.realpathSync(current))!==path.normalize(current))return null;
+        }
+        var file=path.join.apply(path,[content].concat(parts));
+        if(!regularUnder(content,file,16*1024*1024)||path.normalize(fs.realpathSync(file))!==path.normalize(file))return null;
+        return file;
+    }catch(_){return null;}
+}
+function iavraSkipSegment(segment){
+    return /^(?:names?|speakers?|actors?|characters?|npcs?|ids?|keys?|paths?|files?|filenames?|assets?|images?|audio|fonts?|icons?|codes?|scripts?|plugins?|switches?|variables?)$/i.test(segment);
+}
+function iavraCatalogText(source,text){
+    if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
+       /[\u0000\uFFFD]/.test(text)||csvExecutableSyntax(text)||
+       /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return false;
+    var prose=visibleProse(text).trim();
+    if(!prose||prose.length>1600||/^[A-Z][0-9]{3,}$/i.test(prose)||
+       /^[A-Za-z0-9_.-]+\.(?:png|ogg|js|json|csv|tsv|woff2?|ttf)$/i.test(prose))return false;
+    if(source==="ja")return isJapanese(prose);
+    return source==="en"&&/[A-Za-z]{2}/.test(prose)&&!isJapanese(prose)&&!/[áéíóúñ¿¡]/i.test(prose);
+}
+function iavraRememberText(text,source){
+    if(!iavra.textSources.has(text))iavra.textSources.set(text,source);
+    else if(iavra.textSources.get(text)!==source)iavra.textSources.set(text,null);
+}
+function iavraIndexCatalog(data,source){
+    var count=0,nodes=0,map=iavra.catalogs[source];
+    function walk(value,prefix,depth){
+        if(++nodes>50000||depth>12)return;
+        if(typeof value==="string"){
+            if(prefix&&prefix.length<=300&&iavraCatalogText(source,value)){
+                map.set(prefix,value);iavraRememberText(value,source);iavra.strings++;count++;
+                addPrefetch(value,false,source);
+            }
+            return;
+        }
+        if(Array.isArray(value)){
+            for(var i=0;i<value.length&&i<10000;i++)walk(value[i],prefix?prefix+"."+i:String(i),depth+1);
+            return;
+        }
+        if(value&&typeof value==="object"){
+            Object.keys(value).forEach(function(key){
+                if(!/^[A-Za-z0-9_-]{1,100}$/.test(key)||iavraSkipSegment(key))return;
+                walk(value[key],prefix?prefix+"."+key:key,depth+1);
+            });
+        }
+    }
+    walk(data,"",0);
+    return count;
+}
+function loadIavraCatalogs(done){
+    if(!iavra.detected){iavra.done=true;if(typeof done==="function")done();return;}
+    if(iavra.done){if(typeof done==="function")done();return;}
+    if(iavra.loading)return;
+    iavra.loading=true;
+    var at=0;
+    function finish(){
+        iavra.loading=false;iavra.done=true;
+        if(typeof done==="function")done();
+    }
+    function next(){
+        if(at>=iavra.languages.length){finish();return;}
+        var entry=iavra.languages[at++],file=iavraFile(entry.code);
+        if(!file){iavra.skipped++;setTimeout(next,0);return;}
+        fs.readFile(file,"utf8",function(err,raw){
+            if(err||typeof raw!=="string"||raw.length>16*1024*1024){
+                iavra.skipped++;setTimeout(next,0);return;
+            }
+            try{
+                var data=JSON.parse(raw.replace(/^\uFEFF/,""));
+                if(!data||typeof data!=="object"||Array.isArray(data))throw Error("invalid localization catalog");
+                if(!iavraIndexCatalog(data,entry.source))iavra.skipped++;
+                iavra.files++;
+            }catch(_){iavra.skipped++;}
+            setTimeout(next,0);
+        });
+    }
+    next();
+}
+function iavraActiveSource(){
+    var code="";
+    try{
+        if(typeof IAVRA!=="undefined"&&IAVRA){
+            var api=IAVRA.I18N||(IAVRA.MasterLocalization&&IAVRA.MasterLocalization.I18N);
+            if(api){
+                code=typeof api.language==="function"?api.language():api.language||api.currentLanguage||"";
+                if(!code&&typeof api.getLanguage==="function")code=api.getLanguage();
+            }
+        }
+    }catch(_){}
+    return iavraSourceForCode(code)||iavra.defaultLanguage||"en";
+}
+function iavraReferencePattern(){
+    return new RegExp(iavraEscapeRegex(iavra.prefix)+"([A-Za-z0-9_.-]{1,300})"+
+        iavraEscapeRegex(iavra.suffix)+"|«([A-Za-z0-9_.-]{1,300})»","g");
+}
+function iavraKeyValid(key){
+    return typeof key==="string"&&key.length<=300&&
+        /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/.test(key)&&
+        !/(?:^|\.)(?:__proto__|prototype|constructor)(?:\.|$)/i.test(key);
+}
+function iavraHasReference(text){
+    if(typeof text!=="string"||!iavra.detected)return false;
+    var pattern=iavraReferencePattern();return pattern.test(text);
+}
+function iavraResolveText(text){
+    if(typeof text!=="string"||!iavra.detected||!iavra.done||!iavraHasReference(text))return null;
+    var preferred=iavraActiveSource(),order=preferred==="ja"?["ja","en"]:["en","ja"];
+    for(var n=0;n<order.length;n++){
+        var source=order[n],map=iavra.catalogs[source],complete=true,found=false;
+        if(!map)continue;
+        var pattern=iavraReferencePattern();
+        var value=text.replace(pattern,function(token,a,b){
+            var key=a||b;
+            if(!iavraKeyValid(key)||!map.has(key)){complete=false;return token;}
+            found=true;return map.get(key);
+        });
+        if(complete&&found&&value!==text)return {source:source,text:value};
+    }
+    return null;
+}
+function iavraReadyValue(text,requestMissing){
+    var entry=iavraResolveText(text);if(!entry)return null;
+    var ready=readyText(entry.source,entry.text);
+    if(ready!==null)return ready;
+    if(requestMissing)firstViewRequest(entry.source,entry.text);
+    return null;
+}
+function iavraDisplayValue(text,requestMissing){
+    var entry=iavraResolveText(text);if(!entry)return null;
+    var ready=readyText(entry.source,entry.text);
+    if(ready!==null)return ready;
+    if(requestMissing)firstViewRequest(entry.source,entry.text);
+    return entry.text;
+}
+
+function externalTables(){return tableStats.root||tsv.detected||iavra.detected;}
 function tsvRef(text){return typeof text==="string"&&/(?:\\|\x1b)tl\{[^{}\r\n]{1,300}\}/i.test(text);}
 function tsvNormal(text){
     return text.replace(/\r\n/g,"\n").replace(/\x1b(?=[A-Za-z{}!.,|^<>$])/g,"\\");
@@ -4191,7 +4424,8 @@ function addPrefetch(text,priority,trustedLang){
     if(tsvRef(text)){if(priority)tsvPrioritize(text);return;}
     if(tsvExcluded(text))return;
     learnReadings(text);
-    var source=authoredDisplay.get(text)||languageFor(text)||displaySource(text,"inventory")||
+    var catalogSource=iavra.textSources.has(text)?iavra.textSources.get(text):null;
+    var source=authoredDisplay.get(text)||catalogSource||languageFor(text)||displaySource(text,"inventory")||
         (trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
     if(!source)return;
     rememberNameTemplate(source,text);
@@ -4412,7 +4646,7 @@ function scanCommonEventsChunked(data,done){
     slice();
 }
 function startFullScan(){
-    if(scanStarted||!content||(externalTables()&&!cacheReadDone))return;
+    if(scanStarted||!content||(externalTables()&&!cacheReadDone)||(iavra.detected&&!iavra.done))return;
     if(tsv.detected&&!tsv.done){tsvRead(startFullScan);return;}
     scanStarted=true;
     var dataDir=path.join(content,"data");
@@ -4600,7 +4834,7 @@ function nextPrefetch(){
 // a wait inside Game_Interpreter or Window_Message. The title keeps running.
 function firstMapProgress(){
     if(externalTables()){
-        var complete=(!tableStats.root||tableStats.rootDone)&&(!tsv.detected||tsv.done)&&scanStats.done&&cacheReadDone&&
+        var complete=(!tableStats.root||tableStats.rootDone)&&(!tsv.detected||tsv.done)&&(!iavra.detected||iavra.done)&&scanStats.done&&cacheReadDone&&
             scanStats.ready+scanStats.rejected>=discovered.size&&!prefetchBusy;
         return {ready:scanStats.ready,finished:scanStats.ready+scanStats.rejected,total:discovered.size,complete:complete};
     }
@@ -4766,6 +5000,7 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
+            iavra.detected?"JSON externo: "+iavra.files+" archivos · "+iavra.strings+" textos · "+iavra.shown+" mostrados":
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
             (scriptProfile||enabledTextPicture())?"Textos especiales: "+scriptStats.shown+" · Inventario: "+authoredDisplay.size:
@@ -4809,7 +5044,7 @@ function setupHud(){
 try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";setupHud();
-    state.phase="RUTA";initPaths();detectRootCsv();detectTsv();
+    state.phase="RUTA";initPaths();detectRootCsv();detectTsv();detectIavraLocalization();
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
     loadDisplayMacros();startPersistentCache();
@@ -4820,7 +5055,7 @@ try{
     hookChoiceFirstView();hookCsvChoiceLabels();
     state.phase="INTERFAZ";hookInputForm();
     hookBuiltinNameInputScene();hookNativeSurface();hookAuthoredMZ();hookTitleStart();
-    state.phase="CONEXION";startFullScan();refreshConnection();setInterval(function(){
+    state.phase="CONEXION";loadIavraCatalogs(function(){startFullScan();nextPrefetch();});startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.
         if(runtimeActivated)try{startFullScan();collectMapText();}catch(_){state.errors++;}
