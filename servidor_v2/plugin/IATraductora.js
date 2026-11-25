@@ -3078,7 +3078,16 @@ function iavraSourceForCode(value){
     if(/^(?:ja|jp|jpn|japanese)(?:-[a-z0-9]+)?$/.test(code))return "ja";
     return null;
 }
-function iavraEscapeRegex(value){return String(value).replace(/([\\^$.*+?()[\]{}|])/g,"\\$1");}
+function iavraEscapeRegex(value){
+    var out="",special=".+*?^$()[]{}|\\";
+    value=String(value);
+    for(var i=0;i<value.length;i++){
+        var ch=value.charAt(i);
+        if(special.indexOf(ch)>=0)out+="\\";
+        out+=ch;
+    }
+    return out;
+}
 function detectIavraLocalization(){
     iavra.done=true;
     if(typeof $plugins==="undefined"||!Array.isArray($plugins))return false;
@@ -3147,7 +3156,7 @@ function iavraCatalogText(source,text){
     if(!prose||prose.length>1600||/^[A-Z][0-9]{3,}$/i.test(prose)||
        /^[A-Za-z0-9_.-]+\.(?:png|ogg|js|json|csv|tsv|woff2?|ttf)$/i.test(prose))return false;
     if(source==="ja")return isJapanese(prose);
-    return source==="en"&&/[A-Za-z]{2}/.test(prose)&&!isJapanese(prose)&&!/[áéíóúñ¿¡]/i.test(prose);
+    return source==="en"&&/[A-Za-z]{2}/.test(prose)&&!isJapanese(prose);
 }
 function iavraRememberText(text,source){
     if(!iavra.textSources.has(text))iavra.textSources.set(text,source);
