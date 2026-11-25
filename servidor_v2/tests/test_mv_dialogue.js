@@ -1927,6 +1927,116 @@ async function testSceneRevisitUsesCompletedTranslation(){
     assert.equal(m.allText(),translated,"the cached translation is used without rewriting event data");
 }
 
+
+async function testShortWakeUpLineWithActorCodeIsRecognized(){
+    const raw="Hey! \\n[21] wake up!";
+    const translated="¡Oye! \\n[21], despierta!";
+    const f=fixture(35,{responses:{[raw]:translated},configure:function(c){
+        const p=c.Window_Message.prototype;
+        p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        p.startMessage=function(){
+            this.originalStarts++;
+            this._textState={text:c.$gameMessage.allText(),index:0};
+            this.pause=false;
+        };
+        p.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.canStart())this.startMessage();
+        };
+    }});
+    await wait(25);
+    const c=f.context,m=f.$gameMessage;
+    c.SceneManager._scene=new c.Scene_Map();
+    m.add(raw);
+    const win=new c.Window_Message();
+    win.update();
+    assert.equal(win.originalStarts,0,"a short wake-up line with a protected actor code waits for first-view translation");
+    for(let i=0;i<24&&win.originalStarts===0;i++){await wait(40);win.update();}
+    assert.equal(win.originalStarts,1,"the wake-up message starts after its translation is ready");
+    assert.equal(win._textState.text,translated,"the actor-name control code survives translation unchanged");
+    assert.ok(f.posts.some(function(p){return p.text===raw;}),"the short English source line is sent to the translator");
+}
+async function testIavraExternalJsonCatalogAndKeyFallback(){
+    const root=path.join("/tmp","servidor-qa-juego-日本語");
+    const content=path.join(root,"www");
+    const dataDir=path.join(content,"data"),systemDir=path.join(content,"System");
+    const enPath=path.join(systemDir,"en.json"),jpPath=path.join(systemDir,"jp.json");
+    const japanese="物語は朝日が昇るときに始まります。";
+    const englishFallback="The next chapter begins after the storm.";
+    const enCatalog={
+        start:{intro_part_one:[ "The story begins at dawn." ],extra_line:[englishFallback]},
+        names:{"21":"Ryuu","22":"Marin"}
+    };
+    const jpCatalog={
+        start:{intro_part_one:[japanese]},
+        names:{"21":"リュウ","22":"マリン"}
+    };
+    const enRaw=JSON.stringify(enCatalog),jpRaw=JSON.stringify(jpCatalog);
+    const fsState={
+        files:{
+            [path.join(dataDir,"System.json")]:JSON.stringify({startMapId:1}),
+            [enPath]:enRaw,
+            [jpPath]:jpRaw
+        },
+        dirs:{[dataDir]:true,[systemDir]:true}
+    };
+    const plugin={
+        name:"Iavra Localization - Core",status:true,description:"<Iavra Localization Core>",
+        parameters:{"File Path":"System/{lang}.json","Languages":"en, jp","Escape Code":"#{{key}}"}
+    };
+    const f=fixture(120,{
+        fsState,plugins:[plugin],
+        responses:{
+            [japanese]:"La historia comienza cuando sale el sol.",
+            [englishFallback]:"El siguiente capítulo comienza después de la tormenta."
+        },
+        testHooks:true,
+        configure:function(c){
+            c.IAVRA={I18N:{language:"jp"}};
+            const p=c.Window_Message.prototype;
+            p.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+            p.startMessage=function(){
+                this.originalStarts++;
+                this._textState={text:c.$gameMessage.allText(),index:0};
+                this.pause=false;
+            };
+            p.update=function(){
+                this.updates++;
+                if(this.updateWait())return;
+                if(this.canStart())this.startMessage();
+            };
+        }
+    });
+    await wait(45);
+    const c=f.context,m=f.$gameMessage;
+    c.SceneManager._scene=new c.Scene_Map();
+    const firstKey="«start.intro_part_one.0»";
+    m.add(firstKey);
+    const first=new c.Window_Message();
+    first.update();
+    assert.equal(first.originalStarts,0,"an Iavra fallback key is resolved and gated before the first message is painted");
+    for(let i=0;i<30&&first.originalStarts===0;i++){await wait(40);first.update();}
+    assert.equal(first.originalStarts,1,"the first Iavra message starts after its external catalog translation is ready");
+    assert.equal(first._textState.text,"La historia comienza cuando sale el sol.","the active Japanese catalog entry is translated on first view");
+    assert.equal(m.allText(),firstKey,"the source event key remains unchanged after runtime projection");
+    m.clear();
+    const fallbackKey="#{start.extra_line.0}";
+    m.add(fallbackKey);
+    const second=new c.Window_Message();
+    second.update();
+    for(let i=0;i<30&&second.originalStarts===0;i++){await wait(40);second.update();}
+    assert.equal(second.originalStarts,1,"an entry missing from the active Japanese file falls back to the configured English catalog");
+    assert.equal(second._textState.text,"El siguiente capítulo comienza después de la tormenta.","missing Japanese keys still receive a Spanish display value");
+    assert.equal(m.allText(),fallbackKey,"the Iavra escape token remains in the original event message");
+    assert.ok(f.posts.some(function(p){return p.text===japanese;}),"Japanese catalog text is inventoried from the external JSON file");
+    assert.ok(f.posts.some(function(p){return p.text===englishFallback;}),"English fallback text is inventoried from the external JSON file");
+    assert.ok(!f.posts.some(function(p){return ["Ryuu","Marin","リュウ","マリン"].includes(p.text);}),
+        "the names subtree is excluded from translation");
+    assert.equal(fsState.files[enPath],enRaw,"the English localization catalog is read-only");
+    assert.equal(fsState.files[jpPath],jpRaw,"the Japanese localization catalog is read-only");
+}
+
 async function testLargeGamePausesBackgroundPrefetch(){
     const data=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[data]:true}};
@@ -2485,6 +2595,8 @@ async function testR8GeneralDisplaySurfaces(){
     await testPreloadUnvisitedMapsAndBatchesWithoutReadingScripts();
     await testYEPFormattingCodesDoNotHideWords();
     await testSceneRevisitUsesCompletedTranslation();
+    await testShortWakeUpLineWithActorCodeIsRecognized();
+    await testIavraExternalJsonCatalogAndKeyFallback();
     await testLargeGamePausesBackgroundPrefetch();
     await testLargeCommonEventsJsonIsParsedIncrementally();
     await testInventoryHasNoFortyThousandTextCeiling();
