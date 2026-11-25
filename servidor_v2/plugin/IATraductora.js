@@ -648,7 +648,7 @@ function languageFor(s){
     if(/[áéíóúñ¿¡]/i.test(prose)||/[^\x09\x0a\x0d\x20-\x7e]/.test(prose))return null;
     var words=prose.match(/[A-Za-z']+/g)||[];
     if(words.length<2||prose.trim().length<5)return null;
-    if(/\b(?:the|you|your|are|have|this|that|with|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning|and|of|from|into|there|here|was|were|will|must|he|she|they|their|his|her|my|our|is|i|it|him|himself|herself|ourselves|themselves|says|said|keep|moving|writing|looking|always|typical|absurd|enough|stop|listen|leave|wait|come|get|go|back|ready|look|find|help|give|take|bring|open|close|follow|one|year|earlier|city|courthouse|courtroom|change|relationship|text|skip|speed|setting|romantic|idea|naughty|exposing|love|capped|never|mind|me|out|let|read|more|drink|compliment|ask|about|tell|yourself|before|head|door)\b/i.test(prose))return "en";
+    if(/\b(?:the|you|your|are|have|this|that|with|where|please|hello|sorry|why|what|when|would|could|should|really|don't|doesn't|isn't|won't|i'm|you're|we're|can't|thank|good|morning|and|of|from|into|there|here|was|were|will|must|he|she|they|their|his|her|my|our|is|i|it|him|himself|herself|ourselves|themselves|says|said|keep|moving|writing|looking|always|typical|absurd|enough|stop|listen|leave|wait|come|get|go|back|ready|look|find|help|give|take|bring|open|close|follow|one|year|earlier|city|courthouse|courtroom|change|relationship|text|skip|speed|setting|romantic|idea|naughty|exposing|love|capped|never|mind|me|out|let|read|more|drink|compliment|ask|about|tell|yourself|before|head|door|wake)\b/i.test(prose))return "en";
     return null;
 }
 // Confirmed rendered surfaces may contain short UI labels that are not
