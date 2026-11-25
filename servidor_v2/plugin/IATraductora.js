@@ -2390,42 +2390,26 @@ function firstViewMissing(win,raw,choice){
     firstViewRequest(source,raw);return true;
 }
 function firstViewWait(win){
-    // MV English dialogue has a safe native late-render path. Never hold
-    // the message loop waiting for CPU inference on those visible strings.
-    // Large inventories also fail open regardless of source language.
-    // MZ contracts and explicit TSV localization keep their own first-view
-    // rules because they may need authored-key/variable resolution.
-    if(inputFormActive()||win.pause||win._textState||
-       (typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive()))return false;
+    if(inputFormActive()||win.pause||win._textState||typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive())return false;
     var m=typeof $gameMessage!=="undefined"?$gameMessage:null;
-    if(!m||(typeof m.scrollMode==="function"&&m.scrollMode()))return false;
-    var raw=m.hasText&&m.hasText()?tsvRawMessage():"";
+    if(!m)return false;
+    var raw=typeof m.allText==="function"?m.allText():"";
     var choices=typeof m.choices==="function"?m.choices():m._choices;
-    choices=Array.isArray(choices)&&choices.length<=24?choices.slice():[];
-    if(!raw&&!choices.length){win._iaFirstGate=null;return false;}
-    if(!isMZ&&!tsv.detected){
-        if(discovered.size>=1200)return false;
-        if(raw&&displaySource(raw,"message")==="en")return false;
-        for(var i=0;i<choices.length;i++){
-            if(displaySource(choices[i],"choice")==="en")return false;
-        }
-    }
-    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null,
-        key=JSON.stringify([raw,choices,m._iaFirstGeneration||0,(scriptMessagePlan(raw)||{}).body||"",scriptVariableKey(raw),choices.map(scriptVariableKey)]),now=Date.now(),g=win._iaFirstGate;
-    if(!g||g.message!==m||g.scene!==scene||g.key!==key)
-        g=win._iaFirstGate={message:m,scene:scene,key:key,started:now,checked:0,waiting:true};
-    if(g.done)return false;
-    var viewLimit=isMZ?FIRST_VIEW_LIMIT:2500;
-    var offlineLimit=isMZ?FIRST_VIEW_OFFLINE:1200;
+    if(!Array.isArray(choices))choices=[];
+    if(!raw&&!choices.length)return false;
+    // First presentation is gated for MV and MZ. Large inventories only pause
+    // background prefetch; they never disable the request for visible text.
+    var missing=raw&&firstViewMissing(win,raw,false);
+    for(var j=0;j<choices.length;j++)if(firstViewMissing(win,choices[j],true))missing=true;
+    if(!missing){win._iaFirstGate=null;return false;}
+    var now=Date.now(),g=win._iaFirstGate;
+    if(!g){g={started:now};win._iaFirstGate=g;}
+    var viewLimit=FIRST_VIEW_LIMIT;
+    var offlineLimit=FIRST_VIEW_OFFLINE;
     if(now-g.started>=viewLimit||(!state.connected&&now-g.started>=offlineLimit)){
-        g.done=true;g.waiting=false;return false;
+        win._iaFirstGate=null;return false;
     }
-    if(g.checked&&now-g.checked<40)return g.waiting;
-    g.checked=now;
-    var missing=firstViewMissing(win,raw,false);
-    choices.forEach(function(t){if(firstViewMissing(win,t,true))missing=true;});
-    g.waiting=missing;if(!missing)g.done=true;
-    return missing;
+    return true;
 }
 function hookFirstView(proto){
     if(typeof proto.updateWait!=="function"||typeof proto.canStart!=="function")return;
@@ -2449,9 +2433,35 @@ function inputFormNodes(){
     var input=document.getElementById("_111_input"),submit=document.getElementById("_111_submit");
     return input?{input:input,submit:submit}:null;
 }
+function builtinNameInputActive(){
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    if(!scene)return false;
+    if(typeof Scene_Name!=="undefined"&&scene instanceof Scene_Name)return true;
+    var edit=scene._editWindow||scene._nameEditWindow;
+    var input=scene._inputWindow||scene._nameInputWindow;
+    if(typeof Window_NameEdit!=="undefined"&&edit instanceof Window_NameEdit)return true;
+    if(typeof Window_NameInput!=="undefined"&&input instanceof Window_NameInput)return true;
+    return false;
+}
 function inputFormActive(){
+    if(builtinNameInputActive())return true;
     if(typeof Input!=="undefined"&&Input.form_mode===true)return true;
     return !!inputFormNodes();
+}
+function hookBuiltinNameInputScene(){
+    if(typeof Scene_Name==="undefined"||!Scene_Name.prototype)return;
+    ["start","terminate"].forEach(function(method){
+        var original=Scene_Name.prototype[method];
+        if(typeof original!=="function"||original._iaNameInputSceneWrapped)return;
+        var wrapped=function(){
+            formEpoch++;
+            if(method==="start")formWasOpen=true;
+            try{return original.apply(this,arguments);}
+            finally{if(method==="terminate")formWasOpen=false;}
+        };
+        wrapped._iaNameInputSceneWrapped=true;
+        Scene_Name.prototype[method]=wrapped;
+    });
 }
 function protectInputForm(){
     var nodes=inputFormNodes(),active=!!nodes||inputFormActive();
@@ -2466,6 +2476,81 @@ function protectInputForm(){
     });
     if(nodes.submit&&String(nodes.submit.type).toLowerCase()==="submit"&&nodes.submit.value==="決定")
         nodes.submit.value="Aceptar";
+}
+function iaChoiceValues(message){
+    var values=[];
+    try{values=message&&typeof message.choices==="function"?message.choices():message&&message._choices;}catch(_){}
+    return Array.isArray(values)?values.slice():[];
+}
+function iaChoiceProjection(win,raw){
+    var values=raw.slice(),waiting=false;
+    for(var i=0;i<raw.length;i++){
+        if(typeof raw[i]!=="string")continue;
+        var ready=choiceDisplay(win,raw[i],false);
+        if(typeof ready==="string"){values[i]=ready;continue;}
+        if(firstViewMissing(win,raw[i],true))waiting=true;
+    }
+    return {values:values,waiting:waiting};
+}
+function iaRunNativeChoiceStart(win,original,args,message,values){
+    var oldChoices=message._choices;
+    var hadOwnChoices=Object.prototype.hasOwnProperty.call(message,"choices");
+    var oldChoicesMethod=message.choices;
+    var projected=values.slice();
+    try{
+        message._choices=projected;
+        if(typeof oldChoicesMethod==="function")message.choices=function(){return projected;};
+        win._iaChoiceNativeStart=true;
+        return original.apply(win,args);
+    }finally{
+        win._iaChoiceNativeStart=false;
+        message._choices=oldChoices;
+        if(hadOwnChoices)message.choices=oldChoicesMethod;
+        else if(typeof oldChoicesMethod==="function")delete message.choices;
+    }
+}
+function hookChoiceFirstView(){
+    if(typeof Window_ChoiceList==="undefined"||!Window_ChoiceList.prototype)return;
+    var proto=Window_ChoiceList.prototype,original=proto.start;
+    if(typeof original!=="function"||original._iaFirstViewChoiceWrapped)return;
+    var wrapped=function(){
+        if(this._iaChoiceNativeStart||inputFormActive())return original.apply(this,arguments);
+        var message=typeof $gameMessage!=="undefined"?$gameMessage:null;
+        var raw=message?iaChoiceValues(message):[];
+        if(!message||!raw.length||raw.length>24)return original.apply(this,arguments);
+        var initial=iaChoiceProjection(this,raw);
+        if(!initial.waiting)return iaRunNativeChoiceStart(this,original,arguments,message,initial.values);
+        var key=JSON.stringify(raw),generation=message._iaFirstGeneration||0;
+        var existing=this._iaChoiceGate;
+        if(existing&&existing.message===message&&existing.key===key&&existing.generation===generation&&!existing.done)return;
+        var gate={message:message,key:key,generation:generation,raw:raw.slice(),
+            scene:typeof SceneManager!=="undefined"?SceneManager._scene:null,
+            started:Date.now(),done:false,args:Array.prototype.slice.call(arguments)};
+        this._iaChoiceGate=gate;
+        var self=this;
+        function poll(){
+            if(self._iaChoiceGate!==gate||gate.done)return;
+            var current=typeof $gameMessage!=="undefined"?$gameMessage:null;
+            var currentChoices=current?iaChoiceValues(current):[];
+            var currentScene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+            if(current!==gate.message||currentScene!==gate.scene||
+               current&&(current._iaFirstGeneration||0)!==gate.generation||
+               JSON.stringify(currentChoices)!==gate.key){
+                gate.done=true;self._iaChoiceGate=null;return;
+            }
+            var projectedNow=iaChoiceProjection(self,gate.raw);
+            var elapsed=Date.now()-gate.started;
+            var limit=state.connected?FIRST_VIEW_LIMIT:FIRST_VIEW_OFFLINE;
+            if(!projectedNow.waiting||elapsed>=limit){
+                gate.done=true;self._iaChoiceGate=null;
+                return iaRunNativeChoiceStart(self,original,gate.args,gate.message,projectedNow.values);
+            }
+            setTimeout(poll,40);
+        }
+        setTimeout(poll,0);
+    };
+    wrapped._iaFirstViewChoiceWrapped=true;
+    proto.start=wrapped;
 }
 function hookInputForm(){
     if(typeof Game_Interpreter==="undefined"||!Game_Interpreter.prototype||
@@ -4717,8 +4802,10 @@ try{
     state.phase="NUCLEO";
     if(engineAt(content)!==ENGINE_ID)throw Error("IA_NUCLEO_RPG_NO_ENCONTRADO");
     state.phase="MENSAJES";hookMessages();
-    state.phase="OPCIONES";hookChoices();hookCsvChoiceLabels();
-    state.phase="INTERFAZ";hookInputForm();hookNativeSurface();hookAuthoredMZ();hookTitleStart();
+    state.phase="OPCIONES";hookChoices();
+    hookChoiceFirstView();hookCsvChoiceLabels();
+    state.phase="INTERFAZ";hookInputForm();
+    hookBuiltinNameInputScene();hookNativeSurface();hookAuthoredMZ();hookTitleStart();
     state.phase="CONEXION";startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.
