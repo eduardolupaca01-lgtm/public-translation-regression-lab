@@ -2533,6 +2533,107 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR14VisuQuestAndStatusMetadata(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","data");
+    const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
+    const hud=path.join(data,"plugin");
+    const state={files:{},dirs:{[data]:true,[folder]:true,[hud]:true}};
+    const bio="Alice studies plants and teaches the local children.";
+    const esBio="Alice estudia plantas y enseña a los niños del lugar.";
+    const desc="Get through the start of the new festival.";
+    const esDesc="Supera el comienzo del nuevo festival.";
+    const objective="Speak to Alice",other="Look at the old fountain.",esOther="Mira la fuente antigua.";
+    const gab="The garden is open.",esGab="El jardín está abierto.";
+    const hudText="The flowers are ready.",esHud="Las flores están listas.";
+    const variable="The library is closed.",esVariable="La biblioteca está cerrada.";
+    const note="<Menu Portrait: portraitA>\n<StatusImageVariable: 37, imageA>\n<StatusText: "+bio+">\n<StatusTextVariable: 42>";
+    const actors=[null,{id:1,name:"Alice",nickname:"",profile:"",note,meta:{StatusText:" "+bio,StatusTextVariable:" 42"}}];
+    const quest={ "Key:str":"QuestKeyInternal","Title:str":"\\i[87]Prologue","Difficulty:str":"Easy","From:str":"Alice","Location:str":"",
+        "Description:arrayjson":JSON.stringify([JSON.stringify(desc)]),
+        "Objectives:arrayjson":JSON.stringify([JSON.stringify(objective),JSON.stringify(other)]),
+        "VisibleObjectives:arraynum":"[1,2]","OnLoadQuestJS:func":"\"Do not translate this executable field.\"",
+        "Rewards:arrayjson":"[]","Subtext:arrayjson":"[]","Quotes:arrayjson":"[]" };
+    const qparams={"General:struct":JSON.stringify({"KnownQuests:arraystr":"[\"QuestKeyInternal\"]","TrackedQuest:str":"QuestKeyInternal",
+        "LogFmt:json":JSON.stringify("[[Title]]\nDescription:\n[[Description]]"),"ButtonAssistPageUpDown:str":"Scroll Up/Down"}),
+        "Categories:arraystruct":JSON.stringify([JSON.stringify({"CategoryName:str":"Character Quests",
+            "Quests:arraystruct":JSON.stringify([JSON.stringify(quest)])})])};
+    const plugins=[{name:"VisuMZ_2_QuestSystem",status:true,parameters:qparams},
+        {name:"StatusMenuTesting3",status:true,parameters:{}},
+        {name:"VisuMZ_4_GabWindow",status:true,parameters:{}},
+        {name:"SRD_HUDMakerUltra",status:true,parameters:{}}];
+    const cmd=["VisuMZ_4_GabWindow","GabTextOnly","",{ "Text:json":JSON.stringify(gab),"ForceGab:eval":"false","Override:struct":"{}" }];
+    const originalPlugins=JSON.stringify(plugins),originalActors=JSON.stringify(actors),originalCmd=JSON.stringify(cmd);
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(data,"Actors.json")]=JSON.stringify(actors);
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[
+        {code:122,parameters:[42,42,0,4,JSON.stringify(variable)]},{code:357,parameters:cmd}]}]}]});
+    state.files[path.join(hud,"UltraHUD.json")]=JSON.stringify({Data:[{HUD:[{Children:[
+        {TextData:{Text:{Type:0,Text:hudText}},Children:[]},
+        {TextData:{Text:{Type:5,Text:"Do not send dynamic code."}},Children:[]}
+    ]}]}]});
+    state.files[path.join(folder,"translations-ja-en-es-v2.jsonl")]=JSON.stringify({
+        schema:"ia-traductora-cache-v2",source:"en",original:"start",translated:"iniciar",composed:false})+"\n";
+    const f=fixture(80,{mz:true,fsState:state,plugins,testHooks:true,responses:{
+        [bio]:esBio,[desc]:esDesc,[other]:esOther,[gab]:esGab,[hudText]:esHud,[variable]:esVariable},configure(c){
+            c.$dataActors=actors;c.$dataSystem={locale:"en_US"};
+            function Vars(){this.values={42:variable};}
+            Vars.prototype.value=function(id){return this.values[id];};
+            c.Game_Variables=Vars;c.$gameVariables=new Vars();
+            function Scene_Status(){this.calls=0;}
+            Scene_Status.prototype.create=function(){
+                this.calls++;this.note=c.$dataActors[1].note;
+                this.meta=c.$dataActors[1].meta.StatusText;
+                this.variable=c.$gameVariables.value(42);
+                this.bitmap=new c.Bitmap(800,450);this.bitmap.drawText("Age: 27",0,0,400,30);
+                this.bitmap.drawText("Alice",0,40,400,30);
+            };
+            c.Scene_Status=Scene_Status;
+            c.SceneManager.changeScene=function(){this._scene=this._nextScene;this._nextScene=null;this._scene.create();};
+            function Interpreter(){this.calls=[];}
+            Interpreter.prototype.command357=function(params){this.calls.push(params);return true;};
+            c.Game_Interpreter=Interpreter;
+        }});
+    const c=f.context;
+    new c.Scene_Title().start();
+    const until=async predicate=>{const deadline=Date.now()+5000;while(!predicate()&&Date.now()<deadline)await wait(30);assert.ok(predicate());};
+    await until(()=>c.window.__IA_TRADUCTORA_TEST__.done());
+    await until(()=>[bio,desc,other,gab,hudText,variable].every(raw=>f.posts.some(p=>p.text===raw)));
+    await wait(180);
+    const status=new c.Scene_Status();c.SceneManager._nextScene=status;
+    await until(()=>{if(c.SceneManager._nextScene)c.SceneManager.changeScene();return status.calls===1;});
+    assert.ok(status.note.includes("<StatusText: "+esBio+">"));
+    assert.equal(status.meta," "+esBio);
+    assert.equal(status.variable,esVariable);
+    assert.equal(status.bitmap.ops[0].text,"Edad: 27");assert.equal(status.bitmap.ops[1].text,"Alice");
+    assert.equal(c.$dataActors,actors);assert.equal(JSON.stringify(actors),originalActors);
+    assert.equal(c.$gameVariables.value(42),variable,"game variable never rewritten");
+    function Scene_Quest(){}
+    c.SceneManager._scene=new Scene_Quest();
+    function Window_QuestLog(){this.initialize(new c.Rectangle(0,0,600,500));this.parent=c.SceneManager._scene;}
+    Window_QuestLog.prototype=Object.create(c.Window_Base.prototype);
+    Window_QuestLog.prototype.constructor=Window_QuestLog;
+    const win=new Window_QuestLog();
+    const raw="\\i[87]Prologue\n\\c[4]From:\\c[0] Alice\n\\c[4]Description:\\c[0]\n"+desc+
+        "\n\\c[4]Objectives:\\c[0]\n◎"+objective+"\n◎"+other+"\n\\c[4]Rewards:\\c[0]";
+    await until(()=>{win.drawTextEx(raw,0,0);return win.lastTextEx.includes(esDesc)&&win.lastTextEx.includes(esOther);});
+    assert.ok(win.lastTextEx.includes("\\i[87]Prólogo"));
+    assert.ok(win.lastTextEx.includes("◎Habla con Alice"));
+    assert.ok(win.lastTextEx.includes("\\c[4]De:\\c[0] Alice"));
+    assert.ok(win.lastTextEx.includes("\\c[4]Objetivos:\\c[0]"));
+    win.drawText("Z/X:Scroll Up/Down",0,0,300);assert.equal(win.lastText,"Z/X:Desplazar arriba/abajo");
+    const bitmap=new c.Bitmap(500,100);bitmap.drawText("start",0,0,400,30);
+    assert.equal(bitmap.lastText,"start","the cached isolated word must not corrupt a quest sentence");
+    const it=new c.Game_Interpreter();
+    await until(()=>it.command357(cmd)===true);
+    assert.equal(it.calls.length,1);assert.equal(JSON.parse(it.calls[0][3]["Text:json"]),esGab);
+    assert.equal(it.calls[0][3]["ForceGab:eval"],"false");assert.equal(JSON.stringify(cmd),originalCmd);
+    c.SceneManager._scene=new c.Scene_Map();
+    const drawHud=(v)=>vm.runInNewContext("b.drawText(v,0,0,400,30)",{b:bitmap,v},{filename:"SRD_HUDMakerUltra.js"});
+    drawHud("Day 3");assert.equal(bitmap.lastText,"Día 3");
+    drawHud(hudText);assert.equal(bitmap.lastText,esHud);
+    assert.ok(!f.posts.some(p=>/QuestKeyInternal|Do not translate this executable field|Do not send dynamic code|^Alice$/.test(p.text)));
+    assert.equal(JSON.stringify(plugins),originalPlugins);
+}
 async function testR13PhonePrivateInterpreterAndPictureText(){
     const speech="I will meet you at the station.",answer="That is a lovely photograph.",
         choice="Cute profile photo",notice="Look at the clock in the upper left corner.";
@@ -2900,6 +3001,7 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR14VisuQuestAndStatusMetadata();
     await testR13PhonePrivateInterpreterAndPictureText();
     await testR12NotificationFirstAppearance();
     await testR12NativeSpeakerPresentation();

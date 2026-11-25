@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R13-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R14-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -1298,15 +1298,51 @@ function hasNativeClass(win,pattern){
     }
     return false;
 }
+function visuQuestEnabled(){return isMZ&&pluginEnabled(/^VisuMZ_2_QuestSystem$/);}
+function visuQuestScene(){
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    return visuQuestEnabled()&&!!scene&&hasNativeClass(scene,/^Scene_Quest(?:$|[A-Za-z])/);
+}
+function visuQuestBitmapScope(bitmap){
+    if(!visuQuestEnabled()||identityDrawDepth||inputFormActive())return false;
+    var owner=bitmap&&bitmap._iaOwnerWindow;
+    if(owner&&(owner._iaOwnSurface||owner._iaNameSurface||
+       typeof Window_Message!=="undefined"&&owner instanceof Window_Message))return false;
+    return !!(owner&&isQuestWindow(owner)||visuQuestScene()||
+        /\bVisuMZ_2_QuestSystem\.js(?::|\?)/.test(String(new Error().stack||"")));
+}
+function visuQuestFixed(value){
+    if(!visuQuestEnabled()||typeof value!=="string")return null;
+    var labels={"Prologue":"Prólogo","Epilogue":"Epílogo","Character Quests":"Misiones de personajes",
+        "Scroll Up/Down":"Desplazar arriba/abajo","Track":"Seguir","Untrack":"Dejar de seguir",
+        "Expand":"Expandir","Collapse":"Contraer","Difficulty":"Dificultad",
+        "Easy":"Fácil","Normal":"Normal","Hard":"Difícil","No Quests Listed":"No hay misiones",
+        "(No Quests Listed)":"(No hay misiones)"};
+    if(Object.prototype.hasOwnProperty.call(labels,value))return labels[value];
+    var hotkey=/^([A-Za-z0-9/+\-]{1,16}:[ \t]*)(Scroll Up\/Down|Track|Untrack|Expand|Collapse)$/.exec(value);
+    if(hotkey)return hotkey[1]+labels[hotkey[2]];
+    var objective=/^(Speak to|Talk to|Meet|Find|Visit) (.{1,80})([.!?]?)$/.exec(value);
+    if(objective){
+        var who=objective[2],suffix=objective[3]||"";
+        // The greedy capture can include final punctuation; normalize only
+        // against the original, proven actor identity.
+        if(!suffix&&/[.!?]$/.test(who)){suffix=who.slice(-1);who=who.slice(0,-1);}
+        var verbs={"Speak to":"Habla con","Talk to":"Habla con","Meet":"Reúnete con","Find":"Encuentra a","Visit":"Visita a"};
+        if(actorNames[who])return verbs[objective[1]]+" "+who+suffix;
+    }
+    return null;
+}
 function isQuestWindow(win){
-    if(!win)return false;
+    if(!win||win._iaOwnSurface||win._iaNameSurface||
+       typeof Window_Message!=="undefined"&&win instanceof Window_Message)return false;
     if(hasNativeClass(win,/^Window_Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)/))return true;
+    if(visuQuestEnabled()&&(hasNativeClass(win,/^Window_Quest(?:Log|Label|Button|Tracker)/)||visuQuestScene()))return true;
     var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
     return !!(scene&&hasNativeClass(scene,/^Scene_Quest/)&&
         (scene._questDataWindow===win||scene._dataWindow===win||scene._descriptionWindow===win));
 }
 function isQuestTemplate(win,text){
-    if(typeof text!=="string"||text.length>16000||!pluginEnabled(/^YEP_QuestJournal$/)||
+    if(typeof text!=="string"||text.length>16000||(!pluginEnabled(/^YEP_QuestJournal$/)&&!visuQuestEnabled())||
        (typeof Window_Message!=="undefined"&&win instanceof Window_Message))return false;
     // Some journal plugins implement their own drawTextEx, then call the
     // native escape conversion on the complete assembled data template.
@@ -1320,9 +1356,9 @@ function questSurface(win,text){
 // The author's category format can include a color prefix, count and
 // expansion marker. Keep them, even when the caption itself is short.
 function questEnvelope(text){
-    var lead=(text.match(/^(?:(?:\\|\x1b)(?:[ci]\[\d{1,4}\]|[{}])|<\/?wordwrap>|[ \t])*/i)||[""])[0];
+    var lead=(text.match(/^(?:(?:\\|\x1b)(?:[ci]\[\d{1,4}\]|[{}])|<\/?wordwrap>|<ColorLock>|[◎✔✘]|[ \t])*/i)||[""])[0];
     var rest=text.slice(lead.length);
-    var tail=(rest.match(/(?:(?:\\|\x1b)(?:c\[\d{1,3}\]|[{}])|<\/wordwrap>|[ \t])*$/i)||[""])[0];
+    var tail=(rest.match(/(?:(?:\\|\x1b)(?:c\[\d{1,3}\]|[{}])|<\/wordwrap>|<\/ColorLock>|[ \t])*$/i)||[""])[0];
     return {lead:lead,body:rest.slice(0,rest.length-tail.length),tail:tail};
 }
 function questCachedLabel(text,scoped){
@@ -1332,7 +1368,8 @@ function questCachedLabel(text,scoped){
     if(!m||!m[2])return null;
     var value=m[2];
     if(!scoped&&/^(?:From|Location|Level|Castle|Forest|Village|Town|Close)$/.test(value))return null;
-    var translated=Object.prototype.hasOwnProperty.call(questLabels,value)?questLabels[value]:null;
+    var translated=scoped?visuQuestFixed(value):null;
+    if(translated===null)translated=Object.prototype.hasOwnProperty.call(questLabels,value)?questLabels[value]:null;
     if(translated===null&&questTexts.has(value))translated=readyText(questTexts.get(value),value);
     return translated!==null&&translated!==value?e.lead+m[1]+translated+m[3]+e.tail:null;
 }
@@ -1386,11 +1423,29 @@ function questLine(win,text){
         }
         return e.lead+fixed+":"+header[2]+value+e.tail;
     }
+    // Prefer whole authored fields, before the native renderer wraps them.
+    // Do not turn an isolated word drawn from a sentence into a new request.
     var source=questSource(body);
     if(!source||!body)return text;
     var found=readyText(source,body);
     if(found!==null)return e.lead+found+e.tail;
     queueQuest(win,source,body);
+    return text;
+}
+function visuQuestBitmapText(bitmap,text){
+    if(typeof text!=="string"||surfaceDepth||identityDrawDepth)return text;
+    var label=questCachedLabel(text,true);
+    if(label!==null)return label;
+    var e=questEnvelope(text);
+    // If an unrecognized custom renderer only emits individual words, do
+    // not use unrelated word-cache hits. Only complete, proven fields.
+    var src=questTexts.get(e.body);
+    if(!src)return text;
+    var out=readyText(src,e.body);
+    if(out!==null)return e.lead+out+e.tail;
+    var owner=bitmap&&bitmap._iaOwnerWindow;
+    if(owner&&typeof owner.refresh==="function")queueQuest(owner,src,e.body);
+    else firstViewRequest(src,e.body);
     return text;
 }
 function questDraw(win,text){
@@ -1534,7 +1589,8 @@ function hookSpecificSurfaces(){
     // Do not wrap arbitrary third-party prototypes. Only opt in classes
     // from the two supported surface families; preserve inherited hooks.
     var names=Object.getOwnPropertyNames(window).filter(function(k){
-        return /^Window_(?:Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)\w*|Galv(?:Caption|Message|Popup)|(?:Map)?Caption|TimedMessage(?:Popup)?|Popup|Gab(?:Window)?)$/.test(k);
+        return /^Window_(?:Quest(?:Data|Title|List|Category|Info|Detail|Journal|Help|Command)\w*|Galv(?:Caption|Message|Popup)|(?:Map)?Caption|TimedMessage(?:Popup)?|Popup|Gab(?:Window)?)$/.test(k)||
+            visuQuestEnabled()&&/^Window_Quest(?:Log|Label|Button|Tracker)\w*$/.test(k);
     }),seen=[];
     names.forEach(function(k){
         var descriptor=Object.getOwnPropertyDescriptor(window,k),ctor=descriptor&&descriptor.value;
@@ -1981,6 +2037,9 @@ function nativeDisplayProjection(text,context,bitmap){
     if(inputFormActive()||identityDrawDepth||typeof text!=="string"||!text.trim()||
        text.length>1800||actorNames[text]||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
+    if(statusPresentationScope())return statusRenderValue(text);
+    if(visuQuestBitmapScope(bitmap))return visuQuestBitmapText(bitmap,text);
+    if(ultraHudScope())return ultraHudRender(text);
     var phoneLabel=phoneDrawLabel(text);if(phoneLabel!==null)return phoneLabel;
     var external=iavraDisplayValue(text,true);if(external!==null)return external;
     var localized=tsvProject(text,true);if(localized!==null)return localized;
@@ -2126,13 +2185,14 @@ function hookNativeSurface(){
                 }
                 try{
                     if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
-                        if(!identity&&questSurface(this,args[0]))args[0]=questDraw(this,args[0]);
+                        if(!identity&&statusPresentationScope())args[0]=statusRenderValue(args[0]);
+                        else if(!identity&&questSurface(this,args[0]))args[0]=questDraw(this,args[0]);
                         else if(!identity&&isAmbientSurface(this,args[0]))args[0]=projectCaption(args[0]);
                         else {var bookLabel=!identity?questCachedLabel(args[0]):null;
                             if(bookLabel===null&&csvWindowEligible(this))bookLabel=csvProjectDisplay(args[0],csvWindowChoice(this),true);
                             if(bookLabel===null&&!identity)bookLabel=nativeDisplayProjection(args[0],csvWindowChoice(this)?"choice":"surface",this.contents);
                             args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
-                        if(!identity&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
+                        if(!identity&&!statusPresentationScope()&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
                            languageFor(args[0])==="en"){
                             var cachedEnglish=readyText("en",args[0]);
@@ -2560,6 +2620,17 @@ function hookNativeSurface(){
             if(bitmapReplayDepth||inputFormActive()||
                (typeof Window_Message!=="undefined"&&this._iaOwnerWindow instanceof Window_Message))return callBitmapDraw(this,arguments);
             var args=Array.prototype.slice.call(arguments),raw=typeof args[0]==="string"?args[0]:null;
+            if(raw&&!identityDrawDepth&&statusPresentationScope()){
+                args[0]=statusRenderValue(raw);
+                return callBitmapDraw(this,args);
+            }
+            if(raw&&visuQuestBitmapScope(this)){
+                args[0]=visuQuestBitmapText(this,raw);
+                return callBitmapDraw(this,args);
+            }
+            if(raw&&!identityDrawDepth&&ultraHudScope()){
+                args[0]=ultraHudRender(raw);return callBitmapDraw(this,args);
+            }
             var direct=!!(raw&&!surfaceDepth&&!identityDrawDepth&&!this._iaOwnerWindow),job=null,source=null,group=null;
             if(!bitmapReplayDepth&&this._iaDrawJobs)invalidateBitmapJobs(this,bitmapTextRect(this,args),false);
             if(!direct)dropSurfaceGroup(this);
@@ -2588,6 +2659,9 @@ function hookNativeSurface(){
         if(typeof measure==="function")Bitmap.prototype.measureTextWidth=function(text){
             if(inputFormActive())return measure.apply(this,arguments);
             var bitmap=this,args=Array.prototype.slice.call(arguments),label=null;
+            if(!identityDrawDepth&&statusPresentationScope()){args[0]=statusRenderValue(text);return measure.apply(this,args);}
+            if(visuQuestBitmapScope(bitmap)){args[0]=visuQuestBitmapText(bitmap,text);return measure.apply(this,args);}
+            if(!identityDrawDepth&&ultraHudScope()){args[0]=ultraHudRender(text);return measure.apply(this,args);}
             try{
                 label=csvPlainLabel(text);
                 if(label===null)label=nativeDisplayProjection(text,"surface",bitmap);
@@ -3466,6 +3540,199 @@ function phoneDrawLabel(raw){
     if(!/\bPKD_PhoneMenu(?:_?Pro)?\.js(?::|\?)/i.test(String(new Error().stack||"")))return null;
     return raw==="Messages"?"Mensajes":m[1]+" está escribiendo"+m[2];
 }
+var statusBios=new Map(),statusTextVariables=new Map(),statusProjectionDepth=0;
+function statusPluginEnabled(){return isMZ&&pluginEnabled(/^StatusMenuTesting3$/);}
+function statusPresentationScope(){
+    if(!statusPluginEnabled()||identityDrawDepth||inputFormActive())return false;
+    if(statusProjectionDepth)return true;
+    var scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+    return !!(scene&&typeof Scene_Status!=="undefined"&&scene instanceof Scene_Status)||
+        /\bStatusMenuTesting3\.js(?::|\?)/.test(String(new Error().stack||""));
+}
+function statusTag(row){
+    if(!row||typeof row.note!=="string"||row.note.length>32768)return null;
+    var m=/<StatusText:([ \t]*)([^<>]{1,1800})>/i.exec(row.note);
+    if(!m||!m[2].trim()||/<StatusText:/i.test(row.note.slice(m.index+m[0].length)))return null;
+    return {match:m,raw:m[2]};
+}
+function statusRemember(raw){
+    if(statusBios.has(raw))return statusBios.get(raw);
+    var source=authoredSource(raw,true);
+    if(!source||raw.length>1800||statusBios.size>=4096)return null;
+    var parts=[],at=0,m;
+    // Long prose: independent complete sentences prevent truncated
+    // biographies and allow exact reassembly before the author's wrapping.
+    if(raw.length>240&&!/[\r\n\\<>]/.test(raw)){
+        var separator=/[.!?]([ \t]+)(?=[A-Z])/g;
+        while((m=separator.exec(raw))!==null){
+            var end=m.index+1,segment=raw.slice(at,end);
+            if(segment.length<12||/^(?:Mr|Mrs|Ms|Dr|St)\.$/.test(segment.trim()))continue;
+            parts.push({text:segment,space:m[1]});at=end+m[1].length;
+        }
+    }
+    parts.push({text:raw.slice(at),space:""});
+    if(parts.length>10||parts.some(function(p){return !p.text.trim()||!hasProse(source,p.text);}))parts=[{text:raw,space:""}];
+    var plan={source:source,raw:raw,parts:parts};statusBios.set(raw,plan);
+    parts.forEach(function(p){authoredRemember(source,p.text,false);});
+    return plan;
+}
+function statusBiographyReady(raw,requestMissing){
+    var plan=statusBios.get(raw);if(!plan)return null;
+    var out="",missing=false;
+    plan.parts.forEach(function(p){
+        var value=readyText(plan.source,p.text);
+        if(value===null){missing=true;if(requestMissing)firstViewRequest(plan.source,p.text);}
+        else out+=value+p.space;
+    });
+    return !missing&&validTranslation(plan.source,raw,out,true)?out:null;
+}
+function scanStatusActor(row){
+    if(!statusPluginEnabled())return;
+    var tag=statusTag(row);if(!tag)return;
+    statusRemember(tag.raw);
+    var id=/<StatusTextVariable:[ \t]*(\d{1,6})[ \t]*>/i.exec(row.note);
+    if(id&&Number(id[1])>0&&!statusTextVariables.has(Number(id[1])))statusTextVariables.set(Number(id[1]),new Set());
+}
+function scanStatusAssignment(cmd){
+    if(!statusPluginEnabled()||!cmd||cmd.code!==122||!Array.isArray(cmd.parameters))return;
+    var a=cmd.parameters;
+    if(a[0]!==a[1]||a[2]!==0||a[3]!==4||!statusTextVariables.has(a[0])||typeof a[4]!=="string")return;
+    try{
+        var value=JSON.parse(a[4]),plan=typeof value==="string"?statusRemember(value):null;
+        if(plan)statusTextVariables.get(a[0]).add(value);
+    }catch(_){}
+}
+function statusRenderValue(raw){
+    if(typeof raw!=="string")return raw;
+    var m=/^(Age|Height|Bust|Waist|Hips)([ \t]*:[ \t]*(?:\d{1,4}(?:[.,]\d{1,3})?(?:[ \t]*(?:cm|kg))?|\?)?)?$/.exec(raw);
+    if(m){
+        var labels={Age:"Edad",Height:"Altura",Bust:"Busto",Waist:"Cintura",Hips:"Caderas"};
+        return labels[m[1]]+(m[2]||"");
+    }
+    var value=statusBiographyReady(raw,true);return value===null?raw:value;
+}
+function statusActorProjection(row){
+    var tag=statusTag(row);if(!tag)return row;
+    var shown=statusBiographyReady(tag.raw,true);
+    if(shown===null||shown===tag.raw||/[<>\\\r\n\u0000]/.test(shown))return row;
+    var clone=Object.assign({},row),m=tag.match;
+    clone.note=row.note.slice(0,m.index)+"<StatusText:"+m[1]+shown+">"+row.note.slice(m.index+m[0].length);
+    if(row.meta&&typeof row.meta==="object"){
+        clone.meta=Object.assign({},row.meta);
+        if(typeof row.meta.StatusText==="string"&&row.meta.StatusText.trim()===tag.raw.trim()){
+            var lead=(row.meta.StatusText.match(/^[ \t]*/)||[""])[0];
+            clone.meta.StatusText=lead+shown;
+        }
+    }
+    return clone;
+}
+function statusRows(){
+    return typeof $dataActors!=="undefined"&&Array.isArray($dataActors)?$dataActors:null;
+}
+function prepareStatusScene(){
+    var rows=statusRows();if(!rows)return true;
+    var id=null;
+    try{var actor=typeof $gameParty!=="undefined"&&$gameParty&&typeof $gameParty.menuActor==="function"?$gameParty.menuActor():null;
+        if(actor&&typeof actor.actorId==="function")id=actor.actorId();}catch(_){}
+    var ready=true;
+    rows.forEach(function(row){
+        if(!row)return;
+        scanStatusActor(row);
+        var tag=statusTag(row);
+        if(tag&&(id===null||row.id===id)&&statusBiographyReady(tag.raw,true)===null)ready=false;
+    });
+    return ready;
+}
+function hookStatusPresentation(){
+    if(!statusPluginEnabled())return;
+    if(typeof Scene_Status!=="undefined"&&Scene_Status.prototype){
+        var p=Scene_Status.prototype;
+        ["create","start","refresh","refreshActor","onActorChange"].forEach(function(method){
+            var native=p[method];if(typeof native!=="function")return;
+            p[method]=function(){
+                if(statusProjectionDepth||inputFormActive())return native.apply(this,arguments);
+                var rows=statusRows(),shadow=rows;
+                if(rows){
+                    rows.forEach(scanStatusActor);
+                    shadow=rows.map(function(row){return row?statusActorProjection(row):row;});
+                }
+                statusProjectionDepth++;
+                if(rows)$dataActors=shadow;
+                try{return native.apply(this,arguments);}
+                finally{if(rows&&$dataActors===shadow)$dataActors=rows;statusProjectionDepth--;}
+            };
+        });
+        if(typeof SceneManager!=="undefined"&&typeof SceneManager.changeScene==="function"){
+            var change=SceneManager.changeScene;
+            SceneManager.changeScene=function(){
+                var next=this._nextScene;
+                if(next instanceof Scene_Status&&!inputFormActive()){
+                    var ready=prepareStatusScene(),now=Date.now(),gate=this._iaStatusFirstView;
+                    if(!gate||gate.scene!==next)gate=this._iaStatusFirstView={scene:next,started:now};
+                    if(!ready&&now-gate.started<(state.connected?FIRST_VIEW_LIMIT:FIRST_VIEW_OFFLINE))return;
+                }
+                this._iaStatusFirstView=null;
+                return change.apply(this,arguments);
+            };
+        }
+    }
+    // Late callbacks may use the actor accessor outside scene creation.
+    // Only the identified author presentation stack can see a shadow.
+    if(typeof Game_Actor!=="undefined"&&Game_Actor.prototype&&typeof Game_Actor.prototype.actor==="function"){
+        var readActor=Game_Actor.prototype.actor;
+        Game_Actor.prototype.actor=function(){
+            var row=readActor.apply(this,arguments);
+            if(statusProjectionDepth||!statusPluginEnabled()||inputFormActive()||
+               !/\bStatusMenuTesting3\.js(?::|\?)/.test(String(new Error().stack||"")))return row;
+            scanStatusActor(row);return statusActorProjection(row);
+        };
+    }
+    if(typeof Game_Variables!=="undefined"&&Game_Variables.prototype&&typeof Game_Variables.prototype.value==="function"){
+        var value=Game_Variables.prototype.value;
+        Game_Variables.prototype.value=function(id){
+            var raw=value.apply(this,arguments);
+            if(!statusPluginEnabled()||typeof raw!=="string"||!statusTextVariables.has(id)||
+               !statusTextVariables.get(id).has(raw)||inputFormActive()||
+               (!statusProjectionDepth&&!/\bStatusMenuTesting3\.js(?::|\?)/.test(String(new Error().stack||""))))return raw;
+            return statusRenderValue(raw);
+        };
+    }
+}
+/* HUD Maker: only explicit static TextData.Text.Text, Type 0.
+   Do not inspect evaluated HUD functions or variable fields. */
+var ultraHudTexts=new Map();
+function ultraHudEnabled(){return isMZ&&pluginEnabled(/^SRD_HUDMakerUltra(?:Pro)?$/);}
+function ultraHudScope(){
+    return ultraHudEnabled()&&!identityDrawDepth&&!inputFormActive()&&
+        /\bSRD_(?:HUDMakerUltra(?:Pro)?|UltraBase)\.js(?::|\?)/.test(String(new Error().stack||""));
+}
+function ultraHudFixed(raw){
+    if(typeof raw!=="string")return null;
+    var m=/^Day ([0-9]{1,4})$/.exec(raw);if(m)return "Día "+m[1];
+    var labels={Weekend:"Fin de semana",Noon:"Mediodía",Afternoon:"Tarde",Evening:"Atardecer",Night:"Noche",Morning:"Mañana"};
+    return Object.prototype.hasOwnProperty.call(labels,raw)?labels[raw]:null;
+}
+function ultraHudRender(raw){
+    var label=ultraHudFixed(raw);if(label!==null)return label;
+    var source=ultraHudTexts.get(raw);if(!source)return raw;
+    var shown=readyText(source,raw);
+    if(shown===null){firstViewRequest(source,raw);return raw;}
+    return shown;
+}
+function scanUltraHud(data){
+    if(!ultraHudEnabled()||!data||!Array.isArray(data.Data))return;
+    var count=0;
+    function node(n,depth){
+        if(!n||typeof n!=="object"||depth>24||++count>20000)return;
+        var field=n.TextData&&n.TextData.Text;
+        if(field&&field.Type===0&&typeof field.Text==="string"&&ultraHudFixed(field.Text)===null){
+            var raw=field.Text,source=authoredSource(raw,true);
+            if(source){ultraHudTexts.set(raw,source);authoredRemember(source,raw,false);}
+        }
+        if(Array.isArray(n.Children))n.Children.forEach(function(child){node(child,depth+1);});
+    }
+    data.Data.forEach(function(group){if(group&&Array.isArray(group.HUD))group.HUD.forEach(function(n){node(n,0);});});
+}
 function notificationPlan(params){
     if(!isMZ||!Array.isArray(params)||!params[3]||typeof params[3]!=="object"||Array.isArray(params[3]))return null;
     if(params[0]==="Hendrix_Pictures_UI_Creator"&&params[1]==="ShowText"&&pluginEnabled(/^Hendrix_Pictures_UI_Creator$/)){
@@ -3474,6 +3741,12 @@ function notificationPlan(params){
         if(picture)picture.field="text";
         return picture;
     }
+    if(params[0]==="VisuMZ_4_GabWindow"&&params[1]==="GabTextOnly"&&pluginEnabled(/^VisuMZ_4_GabWindow$/)){
+        var rawGab=boundedQuestJson(params[3]["Text:json"],16384);
+        var gab=explicitUiPlan(rawGab);
+        if(gab){gab.field="Text:json";gab.json=true;}
+        return gab;
+    }
     if(params[0]!=="LL_InfoPopupWIndow"||params[1]!=="showMessage"||!pluginEnabled(/^LL_InfoPopupWIndow$/))return null;
     var raw=params[3].messageText;
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||
@@ -3481,8 +3754,9 @@ function notificationPlan(params){
     var source=authoredSource(raw,false)||displaySource(raw,"surface");
     return source?{source:source,body:raw,prefix:"",suffix:"",field:"messageText"}:null;
 }
+var notificationDispatchDepth=0;
 function hookNotificationMZ(){
-    if(!isMZ||!pluginEnabled(/^(?:LL_InfoPopupWIndow|Hendrix_Pictures_UI_Creator)$/))return;
+    if(!isMZ||!pluginEnabled(/^(?:LL_InfoPopupWIndow|Hendrix_Pictures_UI_Creator|VisuMZ_4_GabWindow)$/))return;
     if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&
        typeof Game_Interpreter.prototype.command357==="function"){
         var p=Game_Interpreter.prototype,native357=p.command357;
@@ -3505,9 +3779,10 @@ function hookNotificationMZ(){
             if(shown===null)return native357.apply(this,arguments);
             var copy=params.slice(),fields={};
             Object.keys(params[3]).forEach(function(k){if(k!=="__proto__")fields[k]=params[3][k];});
-            fields[plan.field]=shown;copy[3]=fields;
+            fields[plan.field]=plan.json?JSON.stringify(shown):shown;copy[3]=fields;
             var args=Array.prototype.slice.call(arguments);args[0]=copy;
-            return native357.apply(this,args);
+            notificationDispatchDepth++;
+            try{return native357.apply(this,args);}finally{notificationDispatchDepth--;}
         };
     }
     // Support script-originated plugin calls when their translations are
@@ -3515,12 +3790,12 @@ function hookNotificationMZ(){
     if(typeof PluginManager!=="undefined"&&typeof PluginManager.callCommand==="function"){
         var call=PluginManager.callCommand;
         PluginManager.callCommand=function(self,name,command,fields){
-            if(inputFormActive())return call.apply(this,arguments);
+            if(notificationDispatchDepth||inputFormActive())return call.apply(this,arguments);
             var plan=notificationPlan([name,command,"",fields]),shown=plan?readUi(plan,true):null;
             if(shown===null)return call.apply(this,arguments);
             var args=Array.prototype.slice.call(arguments),copy={};
             Object.keys(fields).forEach(function(k){if(k!=="__proto__")copy[k]=fields[k];});
-            copy[plan.field]=shown;args[3]=copy;return call.apply(this,args);
+            copy[plan.field]=plan.json?JSON.stringify(shown):shown;args[3]=copy;return call.apply(this,args);
         };
     }
 }
@@ -3531,7 +3806,7 @@ function scriptScanCommand(cmd,next,priority){
         var notice=notificationPlan(a);
         if(notice){rememberUi(notice,priority);return;}
     }
-    if(cmd.code===122){rememberDisplayLiteral(cmd,priority);return;}
+    if(cmd.code===122){scanStatusAssignment(cmd);rememberDisplayLiteral(cmd,priority);return;}
     if(cmd.code===357&&enabledTextPicture()&&a[0]==="TextPicture"&&a[1]==="set"&&a[3]&&typeof a[3].text==="string"){
         // Dynamic pictures are handled at presentation, not against
         // arbitrary variable values during the static inventory.
@@ -3546,7 +3821,7 @@ function scriptScanCommand(cmd,next,priority){
 function hookAuthoredMZ(){
     hookPhoneInterpreter();
     if(!isMZ)return;
-    hookNotificationMZ();
+    hookNotificationMZ();hookStatusPresentation();
     if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&typeof Game_Interpreter.prototype.setup==="function"){
         var setup=Game_Interpreter.prototype.setup;
         Game_Interpreter.prototype.setup=function(list){
@@ -4544,7 +4819,76 @@ function questValues(value,depth){
     // Explicit display fields only; no executable plugin code or object traversal.
     registerQuestText(value);
 }
+var visuQuestScanned=false;
+function boundedQuestJson(value,limit){
+    if(typeof value!=="string"||value.length>limit||!value.trim())return null;
+    try{return JSON.parse(value);}catch(_){return null;}
+}
+function registerVisuQuestField(raw,priority){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||csvExecutableSyntax(raw)||
+       /\[\[[A-Za-z]+\]\]|(?:\\|\x1b)(?:js|eval|script)\b/i.test(raw))return;
+    var e=questEnvelope(raw),body=e.body;
+    if(!body.trim()||actorNames[body]||visuQuestFixed(body)!==null)return;
+    var source=languageFor(body);
+    if(!source&&!isJapanese(body)&&/^[A-Za-z][A-Za-z0-9 .,'’!?:\/\-]{0,119}$/.test(body)&&!/[áéíóúüñ¿¡]/i.test(body))source="en";
+    if(!source)return;
+    if(!questTexts.has(body)){questTexts.set(body,source);questStats.fields++;}
+    addPrefetch(body,priority,source);
+    if(body.indexOf("\n")>=0)body.split(/\r?\n/).forEach(function(line){
+        if(line!==body&&line.trim())registerVisuQuestField(line,priority);
+    });
+}
+function scanVisuQuestParameters(){
+    if(visuQuestScanned||!visuQuestEnabled()||typeof $plugins==="undefined")return;
+    visuQuestScanned=true;
+    var plugin=$plugins.filter(function(v){return v&&v.status&&v.name==="VisuMZ_2_QuestSystem";})[0],p=plugin&&plugin.parameters;
+    if(!p)return;
+    var active=Object.create(null),general=boundedQuestJson(p["General:struct"],262144);
+    if(general&&typeof general==="object"&&!Array.isArray(general)){
+        ["KnownQuests:arraystr","CompletedQuests:arraystr","FailedQuests:arraystr"].forEach(function(k){
+            var keys=boundedQuestJson(general[k],65536);
+            if(Array.isArray(keys))keys.slice(0,1000).forEach(function(key){if(typeof key==="string")active[key]=true;});
+        });
+        if(typeof general["TrackedQuest:str"]==="string")active[general["TrackedQuest:str"]]=true;
+        ["CommandWindow_Known_Text:str","CommandWindow_Completed_Text:str","CommandWindow_Failed_Text:str",
+         "EmptyTitleLabel:str","NoQuestListed:str","ButtonAssistPageUpDown:str","questButtonAssistActive:str",
+         "ButtonAssistExpand:str","ButtonAssistCollapse:str"].forEach(function(k){registerVisuQuestField(general[k],true);});
+        var empty=boundedQuestJson(general["LogEmpty:json"],32768);
+        if(typeof empty==="string")registerVisuQuestField(empty,true);
+        // LogFmt contains [[Title]] and other executable-format markers:
+        // translate the visible headers at rendering, never that template.
+    }
+    var cats=boundedQuestJson(p["Categories:arraystruct"],4*1024*1024);
+    if(!Array.isArray(cats)||cats.length>200)return;
+    cats.forEach(function(encoded){
+        var cat=boundedQuestJson(encoded,1024*1024);
+        if(!cat||typeof cat!=="object"||Array.isArray(cat))return;
+        registerVisuQuestField(cat["CategoryName:str"],true);
+        var rows=boundedQuestJson(cat["Quests:arraystruct"],1024*1024);
+        if(!Array.isArray(rows)||rows.length>2000)return;
+        rows.forEach(function(encodedRow){
+            var row=boundedQuestJson(encodedRow,65536);
+            if(!row||typeof row!=="object"||Array.isArray(row))return;
+            questStats.records++;
+            var priority=!!active[row["Key:str"]];
+            ["Title:str","Difficulty:str"].forEach(function(k){registerVisuQuestField(row[k],priority);});
+            // From is an identity field. Translate generic place captions,
+            // but not an arbitrary name of a quest giver or location.
+            var loc=row["Location:str"];
+            if(typeof loc==="string"&&/\b(?:castle|forest|village|town|city|garden|market|river|hall|library|temple|room|gate|school|park|station|bridge)\b/i.test(loc))
+                registerVisuQuestField(loc,priority);
+            ["Description:arrayjson","Objectives:arrayjson","Rewards:arrayjson","Subtext:arrayjson","Quotes:arrayjson"].forEach(function(k){
+                var list=boundedQuestJson(row[k],65536);
+                if(Array.isArray(list)&&list.length<=300)list.forEach(function(v){
+                    var raw=boundedQuestJson(v,16384);
+                    if(typeof raw==="string")registerVisuQuestField(raw,priority);
+                });
+            });
+        });
+    });
+}
 function scanQuestParameters(done){
+    scanVisuQuestParameters();
     if(typeof $plugins==="undefined"||!Array.isArray($plugins)){done();return;}
     var tasks=[],taskAt=0;
     $plugins.forEach(function(plugin){
@@ -5115,6 +5459,9 @@ function scanLocaleCsv(raw,done){
 }
 function scanExtraSources(dataDir,done){
     var tasks=[],inkDir=path.join(dataDir,"ink"),localeDir=path.join(dataDir,"localization");
+    var hudDir=path.join(dataDir,"plugin"),hudFile=path.join(hudDir,"UltraHUD.json");
+    if(ultraHudEnabled()&&directoryUnder(dataDir,hudDir)&&regularUnder(hudDir,hudFile,2*1024*1024))
+        tasks.push({file:hudFile,type:"ultra",base:hudDir});
     // main.json is a conventional compiled story, not a source script or
     // test/backup. Additional ambiguous formats are not guessed or executed.
     var main=path.join(inkDir,"main.json");
@@ -5134,6 +5481,7 @@ function scanExtraSources(dataDir,done){
                 if(err||typeof raw!=="string"){scanStats.skipped++;next();return;}
                 try{
                     if(t.type==="ink")walkInkStory(JSON.parse(raw.replace(/^\uFEFF/,"")),next);
+                    else if(t.type==="ultra"){scanUltraHud(JSON.parse(raw.replace(/^\uFEFF/,"")));next();}
                     else scanLocaleCsv(raw,next);
                 }catch(_){scanStats.skipped++;next();}
             });
@@ -5279,12 +5627,13 @@ function scanDatabase(name,data){
         if(name==="Actors.json"){
             if(typeof row.name==="string"&&row.name.length<=100)actorNames[row.name]=true;
             if(typeof row.nickname==="string"&&row.nickname.length<=100)actorNames[row.nickname]=true;
-            addPrefetch(row.profile,true);return;
+            addPrefetch(row.profile,true);scanStatusActor(row);return;
         }
         ["name","description","message1","message2","message3","message4"].forEach(function(k){
             if(typeof row[k]==="string")addPrefetch(row[k],false);
         });
     });
+    if(name==="Actors.json")scanVisuQuestParameters();
 }
 // Parse a large top-level JSON array one entry at a time. JSON.parse(raw)
 // would block MV's render/event loop for the full CommonEvents.json file.

@@ -230,19 +230,19 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R13-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R14-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R13-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R14-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
           'Servidor v2: modelo propio CT2 OPUS; MV y MZ, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v4
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R13-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R14-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error
