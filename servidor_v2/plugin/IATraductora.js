@@ -3078,7 +3078,7 @@ function hookChauPopups(){
         proto.addPopupSprite=function(){
             var queue=this[field]&&this[field]._popupRequests,item=queue&&queue[0];
             try{
-                if(!inputFormActive()&&state.connected&&item&&queue.length<=4&&
+                if(!inputFormActive()&&item&&queue.length<=4&&
                    typeof item.text==="string"&&!/[\\\x1b]/.test(item.text)){
                     var r=chauPopupRead(item.text,true),now=Date.now(),scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
                     var gate=this._iaChauGate;
@@ -3086,7 +3086,7 @@ function hookChauPopups(){
                         gate=this._iaChauGate={item:item,scene:scene,started:now};
                     // No interpreter wait, no duplicate requests or delayed
                     // variable evaluation. Only a short bounded visual wait.
-                    if(r.waiting&&now-gate.started<900)return;
+                    if(r.waiting&&now-gate.started<(state.connected?900:350))return;
                 }
             }catch(_){state.errors++;}
             this._iaChauGate=null;
