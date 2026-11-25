@@ -2533,6 +2533,60 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR11NevDialogUiAlignmentLateRedraw(){
+    const body="We are ready to open the gate.";
+    const raw="\\AC "+body;
+    const response={};response[body]="Estamos listos para abrir la puerta.";
+    const f=fixture(55,{responses:response,nativeWait:true,nativePaint:true,
+        configure:function(c){c.Window_Message.prototype._textAlignment="center";}});
+    await wait(30);
+    const c=f.context;c.SceneManager._scene=new c.Scene_Map();
+    const m=new c.Window_Message();f.$gameMessage._texts=[raw];m.startMessage();
+    if(m.contents)m.contents._iaOwnerWindow=m;
+    assert.equal(m.originalStarts,1);
+    m.finishPage();
+    await wait(140);
+    m.update();
+    assert.ok(f.posts.some(function(p){return p.text===body;}),"the alignment control must be preserved while translating the prose");
+    assert.ok(m.contents.ops.some(function(op){return op.text.indexOf("Estamos listos")>=0;}),
+        "NEV_DialogUI centered text must receive a late Spanish repaint");
+    assert.ok(!m.contents.ops.some(function(op){return op.text.indexOf(body)>=0;}),
+        "the English line must not remain under the Spanish repaint");
+}
+
+async function testR11QteBitmapFirstPaint(){
+    const responses={
+        "POPUP":"AVISO",
+        "Click each target before its ring closes in. A wrong click":"Haz clic en cada objetivo antes de que se cierre su anillo. Un clic incorrecto",
+        "means instant fail.":"significa un fallo inmediato.",
+        "Press any key or click to start":"Pulsa cualquier tecla o haz clic para comenzar.",
+        "Shop":"Tienda"
+    };
+    const originals=Object.keys(responses);
+    const expected=Object.keys(responses).map(function(k){return responses[k];});
+    const f=fixture(35,{responses:responses});
+    await wait(30);
+    const c=f.context;c.SceneManager._scene=new c.Scene_Map();
+    const b=new c.Bitmap(800,220);
+    b.drawText("POPUP",20,0,760,36,"center");
+    b.drawText("Click each target before its ring closes in. A wrong click",20,45,760,36,"center");
+    b.drawText("means instant fail.",20,85,760,36,"center");
+    b.drawText("Press any key or click to start",20,150,760,36,"center");
+    const cleared=new c.Bitmap(200,40);
+    cleared.drawText("Shop",0,0,200,40);
+    cleared.clearRect(0,0,200,40);
+    const deadline=Date.now()+4500;
+    while(Date.now()<deadline&&!expected.slice(0,4).every(function(v){return b.ops.some(function(op){return op.text===v;});}))
+        await wait(25);
+    assert.ok(expected.slice(0,4).every(function(v){return b.ops.some(function(op){return op.text===v;});}),
+        "one-shot QTE Bitmap text must repaint in the first tutorial screen without reopening it");
+    assert.ok(!b.ops.some(function(op){return originals.slice(0,4).indexOf(op.text)>=0;}),
+        "the original QTE English labels and instructions must be replaced");
+    await wait(120);
+    assert.ok(!cleared.ops.some(function(op){return op.text==="Tienda";}),
+        "clearing a custom bitmap must cancel its pending translation repaint");
+}
+
 async function testR8GeneralDisplaySurfaces(){
     const root=path.join("/tmp","servidor-qa-juego-日本語"),dir=path.join(root,"data");
     const profile="Sophia is my \\N[7], a woman of breathtaking beauty and elegance.\nShe has always been incredibly kind, She holds herself to an impossibly high standard, always perfectly composed.";
@@ -2646,11 +2700,13 @@ async function testR8GeneralDisplaySurfaces(){
     await wait(30);
     const mvBitmap=new mv.context.Bitmap(200,40);
     mvBitmap.drawText("Shop",0,0,200,40);
-    await until(()=>{mvBitmap.drawText("Shop",0,0,200,40);return mvBitmap.lastText==="Tienda";});
+    await until(()=>mvBitmap.lastText==="Tienda");
 }
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR11NevDialogUiAlignmentLateRedraw();
+    await testR11QteBitmapFirstPaint();
     await testR7AuthoredScriptAndPicture();
     await testR7VerifiedVariableSurfaces();
     await testR6FirstViewNativeGate(false);
