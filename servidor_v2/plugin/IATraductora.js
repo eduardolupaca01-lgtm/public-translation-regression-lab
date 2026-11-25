@@ -3483,7 +3483,7 @@ function questValues(value,depth){
 }
 function scanQuestParameters(done){
     if(typeof $plugins==="undefined"||!Array.isArray($plugins)){done();return;}
-    var tasks=[];
+    var tasks=[],taskAt=0;
     $plugins.forEach(function(plugin){
         if(!plugin||!plugin.status||!/^YEP_(?:QuestJournal|X_MoreQuests\d+)$/.test(plugin.name)||!plugin.parameters)return;
         Object.keys(plugin.parameters).forEach(function(k){
@@ -3504,8 +3504,8 @@ function scanQuestParameters(done){
     });
     function slice(){
         var cap=12;
-        while(tasks.length&&cap--){
-            var value=tasks.shift();
+        while(taskAt<tasks.length&&cap--){
+            var value=tasks[taskAt++];
             try{
                 var entry=typeof value==="string"&&value.length<=65536?JSON.parse(value):value;
                 if(!entry||typeof entry!=="object"||Array.isArray(entry))continue;
@@ -3524,7 +3524,7 @@ function scanQuestParameters(done){
             }catch(_){}
         }
         nextPrefetch();
-        if(tasks.length)setTimeout(slice,0);else done();
+        if(taskAt<tasks.length)setTimeout(slice,0);else done();
     }
     slice();
 }
@@ -3913,9 +3913,9 @@ function scanRootCsvFile(relative,raw,done){
 }
 function scanRootCsv(done){
     if(!tableStats.root){done();return;}
-    var base=path.join(content,"csv"),dirs=[{path:base,depth:0}],tasks=[];
+    var base=path.join(content,"csv"),dirs=[{path:base,depth:0}],dirAt=0,tasks=[],taskAt=0;
     function enumerate(){
-        if(!dirs.length){
+        if(dirAt>=dirs.length){
             tableStats.rootTotal=tasks.length;scanStats.totalFiles+=tasks.length;
             // Main narrative and common events before generic databases.
             function order(v){
@@ -3927,9 +3927,9 @@ function scanRootCsv(done){
                 return 4;
             }
             tasks.sort(function(a,b){return order(a)-order(b)||a.relative.localeCompare(b.relative);});
-            next();return;
+            taskAt=0;next();return;
         }
-        var d=dirs.shift();
+        var d=dirs[dirAt++];
         fs.readdir(d.path,function(err,names){
             if(err){scanStats.skipped++;tableStats.rootSkipped++;enumerate();return;}
             names.sort().forEach(function(n){
@@ -3943,10 +3943,10 @@ function scanRootCsv(done){
         });
     }
     function next(){
-        if(!tasks.length){
+        if(taskAt>=tasks.length){
             tableStats.rootDone=true;done();return;
         }
-        var task=tasks.shift();
+        var task=tasks[taskAt++];
         fs.readFile(task.file,"utf8",function(err,raw){
             if(err||typeof raw!=="string"||raw.indexOf("\uFFFD")>=0){scanStats.skipped++;tableStats.rootSkipped++;next();return;}
             try{scanRootCsvFile(task.relative,raw,next);}catch(_){scanStats.skipped++;tableStats.rootSkipped++;next();}
@@ -4060,9 +4060,10 @@ function scanExtraSources(dataDir,done){
     }
     function run(){
         scanStats.totalFiles+=tasks.length;
+        var taskAt=0;
         function next(){
-            if(!tasks.length){done();return;}
-            var t=tasks.shift();
+            if(taskAt>=tasks.length){done();return;}
+            var t=tasks[taskAt++];
             if(!regularUnder(t.base,t.file,t.type==="ink"?20*1024*1024:2*1024*1024)){
                 scanStats.skipped++;setTimeout(next,0);return;
             }
@@ -4336,13 +4337,14 @@ function startFullScan(){
         });
         scanStats.totalFiles=files.length+(tsv.detected?1:0);
         inkStats.detected=directoryUnder(dataDir,path.join(dataDir,"ink"))&&regularUnder(path.join(dataDir,"ink"),path.join(dataDir,"ink","main.json"),20*1024*1024);
+        var fileAt=0;
         function step(){
-            if(!files.length){
+            if(fileAt>=files.length){
                 var finish=function(){scanQuestParameters(function(){scanExtraSources(dataDir,function(){scanStats.done=true;nextPrefetch();});});};
                 if(tableStats.root&&!tableStats.rootDone){scanRootCsv(finish);return;}
                 finish();return;
             }
-            var name=files.shift(),file=path.join(dataDir,name);
+            var name=files[fileAt++],file=path.join(dataDir,name);
             try{
                 var st=fs.lstatSync(file);
                 if(!st.isFile()||st.isSymbolicLink()||st.size>16*1024*1024)
