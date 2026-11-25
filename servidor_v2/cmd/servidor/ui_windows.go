@@ -113,7 +113,6 @@ type iaFileDialog struct{
 type iaUI struct{
     hwnd uintptr
     gameFile string
-    screenFile string
     input uintptr
     browse uintptr
     closeBtn uintptr
@@ -166,11 +165,9 @@ func iaSafeInstallCode(message string)string{
 func iaFriendlyInstall(code string)string{
     switch code{
     case cookToolPackedCode:
-        return "Halva detectado. El modo visual traduce con OPUS sin modificar los paquetes."
+        return "RPG Maker Dragonhouse/Halva detectado. Requiere una exportación o integración autorizada; no se han modificado los paquetes."
     case cookToolUnsafeCode:
         return "Estructura Dragonhouse/Halva incompleta o insegura. No se ha modificado el juego."
-    case "IA_OCR_NO_SE_PUEDE_LANZAR","IA_OCR_CACHE_NO_DISPONIBLE","IA_OCR_FORMATO_NO_ADMITIDO":
-        return "No se pudo abrir el modo visual. Revisa el diagnóstico y los permisos de tu carpeta local."
     case "IA_DESTINO_CREACION_DENEGADA":
         return "Windows bloqueó la creación de IA Traductora. No se modificó el registro."
     case "IA_DESTINO_SIN_PERMISO":
@@ -232,7 +229,7 @@ func iaChooseEXE(owner uintptr)(selected string,err error){
 }
 func iaStartInstall(){
     ui:=&iaCurrentUI
-    if ui.gameFile==""&&ui.screenFile==""{
+    if ui.gameFile==""{
         iaLog("[IA_EXE_REQUERIDO] Selecciona primero Game.exe.")
         return
     }
@@ -243,8 +240,6 @@ func iaStartInstall(){
     iaSet(ui.status,"Preparando IA Traductora...")
     iaLog("[IA_INICIANDO] Verificando el paquete propio y los modelos.")
     game:=ui.gameFile
-    visual:=ui.screenFile!=""
-    if visual{game=ui.screenFile}
     go func(){
         info:="IA_ERROR_NO_CLASIFICADO"
         defer func(){
@@ -257,10 +252,6 @@ func iaStartInstall(){
             pkg,err:=readPackage(executable)
             if err!=nil{info=err.Error()}else{
                 defer pkg.Close()
-                if visual{
-                    if err=launchScreen(game,pkg);err!=nil{info=err.Error()}else{info="IA_OCR_PROCESO_LANZADO"}
-                    return
-                }
                 err=Install(game,pkg)
                 if err!=nil{info=err.Error()}else{
                     identity,verifyErr:=installedPackageIdentity(game,pkg)
@@ -331,25 +322,18 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             }else if file!=""{
                 if _,content,e:=detectGame(file);e!=nil{
                     // An invalid new selection must never leave a different game armed for installation.
-                    ui.gameFile="";ui.screenFile="";iaSet(ui.input,"")
-                    iaSet(ui.install,"2. INSTALAR TRADUCTOR AUTOMÁTICO")
+                    ui.gameFile="";iaSet(ui.input,"")
                     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
                     code:=iaSafeInstallCode(e.Error())
                     if code==cookToolPackedCode||code==cookToolUnsafeCode{
                         iaLog("[IA_RPG_HALVA_DETECTADO] "+e.Error())
-                        if code==cookToolPackedCode{
-                            ui.screenFile=file;iaSet(ui.input,file)
-                            iaSet(ui.install,"2. ABRIR TRADUCTOR VISUAL (OCR)")
-                            iaEnableWindow.Call(ui.install,1)
-                        }
                         iaSet(ui.status,iaFriendlyInstall(code))
                     }else{
                         iaLog("[IA_EXE_NO_COMPATIBLE] "+code)
                         iaSet(ui.status,"Selecciona un EXE de una copia de RPG Maker MV o MZ.")
                     }
                 }else{
-                    ui.gameFile=file;ui.screenFile="";iaSet(ui.input,file)
-                    iaSet(ui.install,"2. INSTALAR TRADUCTOR AUTOMÁTICO")
+                    ui.gameFile=file;iaSet(ui.input,file)
                     iaEnableWindow.Call(ui.install,1);iaEnableWindow.Call(ui.recoverBtn,1)
                     iaSet(ui.status,"Juego "+engineAt(content)+" seleccionado. Listo para instalar.")
                     iaLog("[IA_EXE_SELECCIONADO] Motor "+engineAt(content)+" verificado.")
@@ -378,13 +362,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         ui.mu.Lock();result:=ui.result;ui.mu.Unlock()
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
-        if ui.gameFile!=""{iaEnableWindow.Call(ui.recoverBtn,1)}else{iaEnableWindow.Call(ui.recoverBtn,0)}
+        iaEnableWindow.Call(ui.recoverBtn,1)
         code:=iaSafeInstallCode(result)
-        if code=="IA_OCR_PROCESO_LANZADO"{
-            iaLog("[IA_OCR_PROCESO_LANZADO] Abre el juego normalmente y selecciona su ventana en el panel visual. No se modificó el juego.")
-            iaSet(ui.status,"Modo visual iniciado; sigue las indicaciones del panel.")
-            iaEnableWindow.Call(ui.install,1)
-        }else if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
+        if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
             iaLog("[IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA] Registro original restaurado. Los archivos del traductor se conservaron.")
             iaSet(ui.status,"Registro RPG original recuperado. Abre la copia del juego.")
             iaEnableWindow.Call(ui.install,0)
@@ -442,7 +422,7 @@ func runUI(){
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
-    iaLog("[IA_TRADUCTORA_LISTA] "+installerBuildID+". MV/MZ y MZ comprimida: instalación. Dragonhouse/Halva: modo visual experimental (OCR). El motor es local.")
+    iaLog("[IA_TRADUCTORA_LISTA] "+installerBuildID+". MV/MZ y MZ comprimida: instalación. Dragonhouse/Halva: integración nativa aún no verificada. El motor es local.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

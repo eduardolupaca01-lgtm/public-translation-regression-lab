@@ -471,12 +471,8 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
     return root,layouts[0]
 
 class Service:
-    def __init__(self,game:Path,engine:Path,neural=None,*,screen_profile=False):
-        if screen_profile:
-            if game.is_symlink() or not game.is_dir():raise ValueError("IA_OCR_PERFIL_INVALIDO")
-            self.game=game.resolve(strict=True);self.content=None
-        else:
-            self.game,self.content=game_root(game)
+    def __init__(self,game:Path,engine:Path,neural=None):
+        self.game,self.content=game_root(game)
         engine=engine.resolve(strict=True)
         if engine.is_symlink() or not engine.is_relative_to(self.game):
             raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
@@ -731,23 +727,10 @@ def main():
     p.add_argument("--game-root",type=Path)
     p.add_argument("--parent-pid",type=int,default=0)
     p.add_argument("--check-models",action="store_true")
-    p.add_argument("--screen-root",type=Path)
-    p.add_argument("--screen-selftest",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
     args=p.parse_args()
     engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
     try:
-        if args.screen_selftest:
-            from screen_ocr import screen_selftest
-            status=screen_selftest(NeuralOPUS(engine))
-            write_startup_code(args.diagnostic_file,status)
-            return
-        if args.screen_root is not None:
-            from screen_ocr import run_screen
-            service=Service(args.screen_root,engine,screen_profile=True)
-            try:run_screen(service)
-            finally:service.close()
-            return
         if args.check_models:
             neural = NeuralOPUS(engine)
             neural.check_all()

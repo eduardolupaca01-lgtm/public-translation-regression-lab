@@ -128,7 +128,7 @@ jobs:
       - name: Congelar el NUEVO motor Python CT2 con nombre propio y sin ventanas secundarias
         shell: pwsh
         run: |
-          python -m pip install --disable-pip-version-check pyinstaller==6.16.0 ctranslate2==4.6.0 sentencepiece==0.2.1 pillow==11.3.0
+          python -m pip install --disable-pip-version-check pyinstaller==6.16.0 ctranslate2==4.6.0 sentencepiece==0.2.1
           if ($LASTEXITCODE -ne 0) { throw "IA_DEPENDENCIAS_INFERENCIA_NUEVA_NO_DISPONIBLES" }
           python -m PyInstaller --noconfirm --clean --onefile --noconsole --name IATraductora --collect-all ctranslate2 --collect-all sentencepiece servidor_v2/worker/IATraductora.py
           if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath "dist/IATraductora.exe")) {
@@ -146,13 +146,6 @@ jobs:
           $diagnostic=Join-Path $env:RUNNER_TEMP "ia-v2-frozen-model-preflight.json"
           python servidor_v2/tools/run_verified_worker.py --worker dist/IATraductora.exe --check-models --diagnostic-file $diagnostic --timeout-seconds 150
           if ($LASTEXITCODE -ne 0) { throw "IA_MOTOR_CONGELADO_NO_CARGA_PESOS_REALES" }
-          $ocrDiagnostic=Join-Path $env:RUNNER_TEMP "ia-v2-screen-preflight.json"
-          $ocrProcess=Start-Process -FilePath (Resolve-Path "dist/IATraductora.exe") -ArgumentList @("--screen-selftest","--diagnostic-file",("`""+$ocrDiagnostic+"`"")) -PassThru -Wait
-          if ($ocrProcess.ExitCode -ne 0 -or !(Test-Path $ocrDiagnostic)) { throw "IA_OCR_AUTOPRUEBA_FALLIDA" }
-          $ocrCode=(Get-Content $ocrDiagnostic -Raw | ConvertFrom-Json).code
-          if ($ocrCode -notin @("IA_OCR_AUTOPRUEBA_REAL_LISTA","IA_OCR_AUTOPRUEBA_MODELO_LISTO_IDIOMA_FALTANTE")) { throw "IA_OCR_AUTOPRUEBA_FALLIDA" }
-          Write-Host $ocrCode
-          if ($ocrCode -ne "IA_OCR_AUTOPRUEBA_REAL_LISTA") { Write-Warning "Windows runner has no English OCR language: recognition requires a desktop test." }
           Remove-Item "dist/models" -Recurse -Force -ErrorAction Stop
           Write-Host "IA_NUEVO_BINARIO_CT2_CON_MODELOS_REALES_PASO"
 
@@ -286,19 +279,19 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R23-P2-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R23-P3-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R23-P2-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R23-P3-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
           'Servidor v2: modelo propio CT2 OPUS; MV y MZ, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v4
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R23-P2-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R23-P3-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error

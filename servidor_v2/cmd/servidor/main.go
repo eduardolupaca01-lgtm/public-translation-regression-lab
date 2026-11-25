@@ -25,7 +25,7 @@ const (
  packageMagic="SERVIDOR2ZIPSHA1" // exactamente 16 bytes
  brandFolder="IA Traductora"
  pluginName="IATraductora"
- installerBuildID="RPG-MVMZ-R23-P2-20261125"
+ installerBuildID="RPG-MVMZ-R23-P3-20261125"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -359,9 +359,7 @@ func main(){
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
  recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV/MZ (no necesita modelos)")
  inspect:=flag.Bool("inspect",false,"Diagnóstico RPG de solo lectura, sin modelos ni ejecución del juego")
- screen:=flag.Bool("screen",false,"Abrir traducción visual local para un juego Halva, sin instalar complementos")
  flag.Parse()
- if *screen&&(*inspect||*recoverGame||*exe==""){fmt.Fprintln(os.Stderr,"IA_OCR_ARGUMENTOS_INVALIDOS");os.Exit(1)}
  if *inspect {
   if *exe==""||*recoverGame{fmt.Fprintln(os.Stderr,"IA_INSPECCION_GAME_EXE_REQUERIDO");os.Exit(1)}
   _,content,e:=detectGame(*exe)
@@ -380,7 +378,6 @@ func main(){
  p,err:=readPackage(source)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  defer p.Close()
- if *screen{if err=launchScreen(*exe,p);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Println("IA_OCR_PROCESO_LANZADO");return}
  if err=Install(*exe,p);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  identity,err:=installedPackageIdentity(*exe,p)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
