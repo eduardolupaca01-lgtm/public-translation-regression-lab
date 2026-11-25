@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R8-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R9-20261124"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -677,7 +677,7 @@ function displaySource(text,context){
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
-var controlRE=/(?:\\|\x1b)[Tt][Ll]\{[^{}\r\n]{1,300}\}|\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!.,|^<>$])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<(?!\/?[Ii][Ff]\s+[^<>]{1,80}\s+[Cc]apped>)[\/]?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|[<>]|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
+var controlRE=/(?:\\|\x1b)[Tt][Ll]\{[^{}\r\n]{1,300}\}|\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|(?:fi|fb|fr|lson|lsoff|playtime|msgreset|auto)(?=[A-Za-z])|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!.,|^<>$])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<(?!\/?[Ii][Ff]\s+[^<>]{1,80}\s+[Cc]apped>)[\/]?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|[<>]|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
 // Brackets at a segment's edges are presentation, not instructions for OPUS.
 // Preserve them byte-for-byte, including an opening/closing bracket on separate
 // native lines. Internal punctuation stays in the sentence for grammar.
@@ -2329,10 +2329,24 @@ function displayLate(win){
 }
 // R6: defer native message and choice presentation, not the game loop.
 // All asynchronous results go into the existing validated cache.
-var FIRST_VIEW_LIMIT=30000,FIRST_VIEW_OFFLINE=8000;
+var FIRST_VIEW_LIMIT=8000,FIRST_VIEW_OFFLINE=1500;
 function firstViewRequest(source,text){
-    if(!source)return;
-    csvRequestLive(source,text);
+    if(!source||typeof text!=="string"||!text)return;
+    addPrefetch(text,true,source);
+    var key=source+"\u0000"+text;
+    // The message/choice currently blocking presentation bypasses disk-cache
+    // warmup and the background-prefetch cap. translate() still deduplicates
+    // requests and enforces its hard foreground concurrency limit.
+    if(!state.connected||csvLiveRequests.has(key)||rejectedKeys.get(key)>Date.now()){
+        nextPrefetch();return;
+    }
+    if(csvLiveRequests.size>=96){nextPrefetch();return;}
+    csvLiveRequests.set(key,true);
+    requestVisible(source,text).then(function(){
+        csvLiveRequests.delete(key);nextPrefetch();
+    },function(){
+        csvLiveRequests.delete(key);state.errors++;nextPrefetch();
+    });
     nextPrefetch();
 }
 function choiceDisplay(win,raw,requestMissing){
