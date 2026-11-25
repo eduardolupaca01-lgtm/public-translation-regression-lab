@@ -3408,6 +3408,12 @@ async function testR8GeneralDisplaySurfaces(){
         [path.join(dir,"CommonEvents.json")]:JSON.stringify(common),
         [path.join(dir,"Map001.json")]:JSON.stringify(map)
     },dirs:{[dir]:true}};
+    // Simulate a wrongly cached translation from the previous build. The
+    // journal must be retained, but this entry must never be presented.
+    const cacheDir=path.join(root,"IA Traductora",".local","Rpg","cache");
+    const journal=path.join(cacheDir,"translations-ja-en-es-v2.jsonl");
+    const legacy=JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:"Dar un cumplido",translated:"Buenos días.",composed:false})+"\n";
+    fsState.dirs[cacheDir]=true;fsState.files[journal]=legacy;
     const responses={
         "Accept":"Aceptar","Let me Out!!":"¡Déjame salir!","Shop":"Tienda","Read Me":"Léeme",
         "Change Relationship":"Cambiar relación","Change \"Sophia\" Name":"Cambiar nombre de \"Sophia\"",
@@ -3477,10 +3483,13 @@ async function testR8GeneralDisplaySurfaces(){
     }
     assert.ok(choiceReady,"R8 display translation did not become ready: "+
         JSON.stringify({painted:choice.painted,requests:f.posts.map(p=>p.text)}));
+    assert.ok(!f.posts.some(p=>p.text==="Dar un cumplido"||p.text==="¿Qué piensas de mí?"),
+        "Spanish choices must not enter OPUS as English");
     assert.deepEqual(choice._list.map(item=>item.name),choices,
         "all original choice labels must remain untouched");
     assert.deepEqual(choice._list.map(item=>item.ext),choices.map((_,index)=>index),
         "choice branch indices must remain untouched");
+    assert.ok(fsState.files[journal].startsWith(legacy),"legacy journal must not be deleted or rewritten");
 
     const profileExpanded=profile.replace("\\N[7]","Stepmom");
     const profileBitmap=new c.Bitmap(900,400);
@@ -3676,6 +3685,13 @@ async function testR25MZBufferedMessageFlowAndShortLabels(){
     assert.equal(t.r22EnglishSource("Indeed!","message"),"en");
     assert.equal(t.r22EnglishSource("Quiet corner","choice"),"en");
     assert.equal(t.r22EnglishSource("The traveler’s shelter","message"),"en");
+    for(const value of ["Dar un cumplido","Buenos dias","No me importa","Guardar partida","Volver","¿Qué piensas de mí?"]){
+        assert.equal(t.r22EnglishSource(value,"choice"),null,"Spanish source protected: "+value);
+        assert.equal(t.displaySource(value,"choice"),null,"Spanish display protected: "+value);
+    }
+    assert.equal(t.r22EnglishSource("The city of Los Angeles","message"),"en");
+    assert.equal(t.r22EnglishSource("Marta Lopez","choice"),null,"unknown multiword name is not necessarily English");
+    assert.equal(t.r22EnglishSource("Sword","data"),"en");
     assert.equal(t.r22EnglishSource("Mattew","message"),null);
     assert.equal(t.r22EnglishSource("sprite.png","message"),null);
     assert.equal(t.r22EnglishSource("$gameVariables.value(2)","message"),null);

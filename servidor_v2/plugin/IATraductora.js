@@ -360,6 +360,7 @@ function flushWire(){
 }
 function translate(source,text,priority){
     if(externalLocalizationReference(text))return Promise.resolve(null);
+    if(source==="en"&&r25ClearlySpanish(text)&&!r25DeclaredEnglish(text))return Promise.resolve(text);
     priority=!!(priority||foregroundDepth);
     var key=source+"\u0000"+text;
     var fixed=stableDisplay(text,false);
@@ -427,6 +428,7 @@ function validTranslation(source,original,result,composed){
        result.length>Math.max(100,Math.min(5400,original.length*5+80))||
        /\uFFFD|\u0000/.test(result)||numbersIn(original)!==numbersIn(result))
         return false;
+    if(source==="en"&&r25ClearlySpanish(original)&&!r25DeclaredEnglish(original))return false;
     var fixed=stableDisplay(original,false);
     if(fixed!==null&&fixed!==result)return false;
     if(source==="ja"&&(spuriousLaughter(original,result)||spuriousApplause(original,result)||r24FragmentNoise(original,result)))return false;
@@ -624,6 +626,41 @@ var englishUi={"Yes":"Sí","No":"No","New Game":"Nueva partida","Continue":"Cont
 // R22: scoped English UI, authored MV display strings and native line flow.
 var r22Labels={"Fast Travel":"Viaje rápido","Quest Log":"Diario de misiones","Item":"Objetos","Items":"Objetos","Skill":"Habilidades","Skills":"Habilidades","Equip":"Equipo","Equipment":"Equipo","Status":"Situación","Formation":"Formación","Save/Load":"Guardar/Cargar","CG room":"Galería CG","Skilltree":"Árbol de habilidades","Skill Tree":"Árbol de habilidades","[Options]":"[Opciones]","[Fixes/Cheats]":"[Ajustes/Trucos]","Party Menu":"Menú del grupo","Common Event 5":"Evento común 5","Common Event 2":"Evento común 2","Game End":"Salir del juego","Fight":"Luchar","Escape":"Huir","Attack":"Atacar","Guard":"Defender","Weapon":"Arma","Armor":"Armadura","Key Item":"Objeto clave","Optimize":"Optimizar","Clear":"Limpiar","Buy":"Comprar","Sell":"Vender","To Title":"Volver al título","Load":"Cargar","Save":"Guardar","Options":"Opciones","Continue":"Continuar","Cancel":"Cancelar","New Game":"Nueva partida"};
 var r22EnglishLocale=false,r22Authored=new Set();
+// R25 correction: a declared English game can contain Spanish UI,
+// translated content, bilingual choices and names. Locale alone is not
+// evidence that each display value is English.
+function r25ClearlySpanish(raw){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>5400)return false;
+    var prose=visibleProse(raw).trim();
+    if(!prose||isJapanese(prose)||englishLabel(prose)!==null)return false;
+    if(/[¿¡]/.test(prose))return true;
+    var words=prose.toLowerCase().match(/[a-záéíóúüñ]+/g)||[];
+    if(!words.length)return false;
+    // Preserve English sentences containing Spanish names/places or loanwords.
+    // Do not treat shared words such as "no", "me", "a" and "idea" as
+    // conclusive evidence in either direction.
+    var english=/^(?:the|your|you|yours|our|ours|their|they|them|this|that|these|those|with|without|would|could|should|have|has|had|will|must|where|when|what|which|why|please|thank|from|into|before|after|about|and|but|because|quiet|shelter)$/;
+    if(words.some(function(w){return english.test(w);}))return false;
+    var spanish=/^(?:cumplido|cumplidos|guardar|cargar|partida|partidas|volver|salir|viajar|hablar|interactuar|continuar|cancelar|aceptar|inventario|diario|ajustes|configuracion|configuración|misiones|mision|misión|objetos|habilidades|equipo|equipamiento|ayuda|gracias|hola|adios|adiós|buenos|buenas|dias|días|tardes|noches|bienvenido|bienvenida|necesito|necesitas|quiero|quieres|puedo|puedes|puerta|camino|encuentra|encuentro|derecha|izquierda|adelante|atras|atrás|importa|regresar|recorrido|distancia|afinidad|registro|cerrar|abrir|siguiente|anterior|confirmar|comprar|vender|descansar|dormir|jugar)$/;
+    if(words.some(function(w){return spanish.test(w);}))return true;
+    // Multiple Spanish grammatical markers, not an isolated ambiguous word
+    // or a name such as Los Angeles, are evidence of already-localized prose.
+    var grammar=/^(?:un|una|unos|unas|el|la|los|las|del|al|de|que|con|por|para|sin|desde|hasta|entre|sobre|este|esta|estos|estas|ese|esa|esos|esas|aunque|porque|pero|tambien|también|usted|ustedes|nosotros|nosotras)$/;
+    var count=0;words.forEach(function(w){if(grammar.test(w))count++;});
+    return count>=2&&words.length>=3;
+}
+function r25DeclaredEnglish(text){
+    var entry=typeof tsv!=="undefined"&&tsv?tsvEntry(text):null;
+    return !!(entry&&entry.source==="en"||
+        typeof csvKnown!=="undefined"&&csvKnown&&csvKnown.get(text)==="en"||
+        typeof iavra!=="undefined"&&iavra&&iavra.textSources&&iavra.textSources.get(text)==="en");
+}
+function r25NativeEnglishEvidence(prose){
+    if(languageFor(prose)==="en")return true;
+    var words=(prose.toLowerCase().match(/[a-z]+/g)||[]);
+    var clue=/^(?:quiet|corner|sword|dagger|blade|shield|armor|armour|boots|staff|wand|potion|healing|health|mana|strength|agility|defense|defence|damage|attack|travel|journey|village|forest|mountain|shelter|river|road|path|gate|castle|weapon|weapons|skill|skills|item|items|quest|quests|inventory|equipment|status|formation|map|journal|settings|option|options|profile|chapter|level|score|reward|rewards|points|gold|money|shop|merchant|choose|select|enter|leave|accept|decline|return|continue|open|close|wait|look|search|inspect|walk|run|talk|sleep|rest|read|save|load|help|explore|teleport|fast|world|main|menu|new|game|games|previous|next|back|forward|locked|unlocked|enabled|disabled|empty|available|complete|completed|begin|finish|difficulty|easy|hard|normal|indeed|thanks|welcome)$/;
+    return words.some(function(w){return clue.test(w);});
+}
 function r22EnglishSource(raw,kind){
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||
        remNativeSpanishText(raw)||externalLocalizationReference(raw)||tsvExcluded(raw)||csvExecutableSyntax(raw))return null;
@@ -631,6 +668,7 @@ function r22EnglishSource(raw,kind){
     // script and localization adapters retain their own source contracts.
     if(isMZ&&(externalTables()||remNative.detected||cte.enabled||
        !/^(?:message|choice|command|data)$/.test(kind)))return null;
+    if(r25ClearlySpanish(raw))return null;
     if(r22Authored.has(raw))return "en";
     if(!(r22EnglishLocale||(typeof $dataSystem!=="undefined"&&$dataSystem&&/^en(?:[_-]|$)/i.test($dataSystem.locale||""))))return null;
     var prose=visibleProse(raw).replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
@@ -639,12 +677,12 @@ function r22EnglishSource(raw,kind){
        /[{}=$@#<>_]|^\s*(?:\/\/|\/|\d)|\.(?:png|jpe?g|webp|ogg|wav|mp3|js|json|csv|tsv|webm|mp4)$/i.test(prose))return null;
     var words=prose.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g)||[];
     if(!words.length||!/[A-Za-z]{2}/.test(prose))return null;
-    if(words.length>1)return "en";
+    if(words.length>1)return !isMZ||r25NativeEnglishEvidence(prose)?"en":null;
     // A single bare word in narrative can be a name: only common words or
     // explicitly typed UI/data labels; never use this on arbitrary scripts.
     if(englishLabel(prose)!==null||Object.prototype.hasOwnProperty.call(r22Labels,prose)||displayUiWords[prose.toLowerCase()]||
        /^(?:okay|ok|thanks|indeed|sure|really|sorry|welcome|hello|goodbye|hmm|huh|hey|phew|oops|ouch|wow|fine|impossible|maybe|enough|stop|wait|listen|run|attack|danger|careful|leave|stay|rest|sleep|nothing|excellent|perfect|congratulations)[.!?]*$/i.test(prose))return "en";
-    if((kind==="command"||kind==="choice"||kind==="data")&&/^[A-Za-z][a-zA-Z'-]{1,39}$/.test(prose)&&!(/^[A-Z]{2,}$/.test(prose)))return "en";
+    if((kind==="command"||kind==="choice"||kind==="data")&&/^[A-Za-z][a-zA-Z'-]{1,39}$/.test(prose)&&!(/^[A-Z]{2,}$/.test(prose))&&(!isMZ||r25NativeEnglishEvidence(prose)))return "en";
     return null;
 }
 function r22Remember(raw,priority,kind){
@@ -857,6 +895,7 @@ function languageFor(s){
     if(typeof csvKnown!=="undefined"&&csvKnown.has(s)&&!actorNames[s])return csvKnown.get(s);
     if(isJapanese(s))return "ja";
     if(actorNames[s])return null;
+    if(r25ClearlySpanish(s)&&!r25DeclaredEnglish(s))return null;
     if(r22Authored.has(s)&&(!isMZ||!externalTables()&&!remNative.detected&&!cte.enabled))return "en";
     if((typeof questTexts!=="undefined"&&questTexts.has(s))||
        (typeof discovered!=="undefined"&&discovered.has("en\u0000"+s)))return "en";
@@ -884,6 +923,7 @@ function displaySource(text,context){
        remNativeSpanishText(text)||externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
     var source=languageFor(text);if(source)return source;
+    if(r25ClearlySpanish(text)&&!r25DeclaredEnglish(text))return null;
     if(context==="message"||context==="choice"||context==="command"){var authored=r22EnglishSource(text,context);if(authored)return authored;}
     var prose=visibleProse(text).replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
         .replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...").replace(/\u00a0/g," ")
@@ -1354,7 +1394,7 @@ function aliasDisplay(source,text){
     return validTranslation(source,text,out,true)?out:null;
 }
 function cachedPart(source,text){
-    if(remNativeSpanishText(text))return text;
+    if(remNativeSpanishText(text)||source==="en"&&r25ClearlySpanish(text)&&!r25DeclaredEnglish(text))return text;
     var key=source+"\u0000"+text;
     if(approvedKeys.has(key))return approvedKeys.get(key);
     var fixed=stableDisplay(text,false);
@@ -6800,6 +6840,7 @@ function addPrefetch(text,priority,trustedLang){
     if(tsvExcluded(text))return;
     learnReadings(text);
     var catalogSource=iavra.textSources.has(text)?iavra.textSources.get(text):null;
+    if(r25ClearlySpanish(text)&&!r25DeclaredEnglish(text))return;
     var source=authoredDisplay.get(text)||catalogSource||languageFor(text)||displaySource(text,"inventory")||
         (trustedLang==="en"&&/^[A-Za-z][A-Za-z0-9 .,\'!?\-]{0,79}$/.test(text)&&!actorNames[text]?"en":null);
     if(!source)return;
@@ -7534,7 +7575,8 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         done:function(){return scanStats.done;},
         limited:function(){return scanStats.limited;},
         r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
-        r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise
+        r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise,
+        displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish
     };
 }
 })();
