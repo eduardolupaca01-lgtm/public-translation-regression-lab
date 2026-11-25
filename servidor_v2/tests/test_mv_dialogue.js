@@ -13,7 +13,7 @@ function fixture(translationDelay=0,options={}){
     const read=state.files,dirs=state.dirs;
     const source=fs.readFileSync(
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
-    const root=path.join("/tmp","servidor-qa-juego-日本語");
+    const root=options.root||path.join("/tmp","servidor-qa-juego-日本語");
     const content=options.mz?root:path.join(root,"www");
     const descriptor=path.join(content,"data","IATraductora","bridge.json");
     if(options.mz){
@@ -1986,7 +1986,7 @@ async function testIavraExternalJsonCatalogAndKeyFallback(){
         parameters:{"File Path":"System/{lang}.json","Languages":"en, jp","Escape Code":"#{{key}}"}
     };
     const f=fixture(120,{
-        fsState,plugins:[plugin],
+        root,fsState,plugins:[plugin],
         responses:{
             [japanese]:"La historia comienza cuando sale el sol.",
             [englishFallback]:"El siguiente capítulo comienza después de la tormenta."
