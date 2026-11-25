@@ -14,6 +14,8 @@ func TestScreenSidecarOutsideGameStableAcrossLaunchersAndVersions(t *testing.T){
  }
  p,e:=readPackage(fakePackage(t));if e!=nil{t.Fatal(e)};defer p.Close()
  profile,worker,e:=prepareScreen(filepath.Join(root,"Game.exe"),cache,p);if e!=nil{t.Fatal(e)}
+ if len(filepath.Base(profile))!=32{t.Fatal("profile path identifier is too long")}
+ if len(filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(worker)))))))!=32{t.Fatal("version path identifier is too long")}
  again,w2,e:=prepareScreen(filepath.Join(root,"Dragonhouse.GameBootstrapper.exe"),cache,p)
  if e!=nil||again!=profile||worker!=w2||!ordinary(worker){t.Fatalf("screen profile not reusable: %v",e)}
  p2,e:=readPackage(fakePackageWith(t,[]byte("◆ IA Traductora · F10 new"),[]byte("different worker")));if e!=nil{t.Fatal(e)};defer p2.Close()

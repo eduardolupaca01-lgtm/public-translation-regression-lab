@@ -227,12 +227,9 @@ def run_screen(service):
     ttk.Button(controls,text="Copiar",command=lambda:(root.clipboard_clear(),root.clipboard_append(target.get("1.0","end-1c")))).pack(side="left")
     lang.trace_add("write",invalidate);mode.trace_add("write",invalidate)
     def tick():
-        nonlocal busy,candidate,last_display,last_frame,previous_key,active
+        nonlocal busy,candidate,last_display,last_frame,active
         if closing:return
         foreground=bool(selected and reader.foreground()==selected[0] and reader.pid(selected[0])==selected[1])
-        key=reader.f10() if foreground else False
-        if key and not previous_key and region:toggle()
-        previous_key=key
         try:
             while True:
                 g,kind,payload=results.get_nowait();busy=False
@@ -273,7 +270,16 @@ def run_screen(service):
     def close():
         nonlocal closing,active
         closing=True;active=False;invalidate();root.destroy()
-    root.protocol("WM_DELETE_WINDOW",close);root.after(250,tick);root.mainloop()
+    def poll_f10():
+        nonlocal previous_key
+        if closing:return
+        focus=bool(selected and reader.foreground()==selected[0] and reader.pid(selected[0])==selected[1])
+        key=reader.f10() if focus else False
+        if key and not previous_key and region:toggle()
+        previous_key=key
+        root.after(35,poll_f10)
+    root.bind("<F10>",lambda event:toggle())
+    root.protocol("WM_DELETE_WINDOW",close);root.after(250,tick);root.after(35,poll_f10);root.mainloop()
     for job in jobs:job.join()
 
 def screen_selftest(neural):

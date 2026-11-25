@@ -17,9 +17,10 @@ func prepareScreen(gameEXE,cacheRoot string,pkg *packageReader)(profile,worker s
  if runtime.GOOS=="windows"{root=strings.ToLower(root)}
  st,e:=os.Lstat(cacheRoot)
  if e!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{return "","",errors.New("IA_OCR_CACHE_NO_DISPONIBLE")}
- rel:=filepath.Join(brandFolder,"RpgScreen",hash([]byte(root)))
+ // 128-bit path identifiers keep native model paths well below legacy MAX_PATH.
+ rel:=filepath.Join(brandFolder,"RpgScreen",hash([]byte(root))[:32])
  profile=filepath.Join(cacheRoot,rel)
- ver:=hash([]byte(pkg.manifest.Files["IATraductora.exe"]+":"+pkg.manifest.Files["IATraductora.js"]))
+ ver:=hash([]byte(pkg.manifest.Files["IATraductora.exe"]+":"+pkg.manifest.Files["IATraductora.js"]))[:32]
  versionRoot:=filepath.Join(profile,"versions",ver)
  if e=iaMakeSafeDirs(cacheRoot,filepath.Join(rel,"versions",ver));e!=nil{return "","",e}
  if e=iaMakeSafeDirs(cacheRoot,filepath.Join(rel,brandFolder,".local","Rpg"));e!=nil{return "","",e}
