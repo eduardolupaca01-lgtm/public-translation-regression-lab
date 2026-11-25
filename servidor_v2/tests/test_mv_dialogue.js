@@ -1981,55 +1981,46 @@ async function testR6FirstViewNativeGate(mz){
             else if(c.$gameMessage._choices.length&&!this._choice)this.startInput();
         };
         function Choice(messageWindow){
-            this._messageWindow=messageWindow;
-            this._list=[];
-            this.painted=[];
-            this.started=false;
+            this._messageWindow=messageWindow;this._list=[];this.painted=[];this.started=false;
         }
         Choice.prototype.start=function(){
             this.started=true;
-            this._list=c.$gameMessage._choices.map(function(name,index){
-                return {name:name,ext:index,enabled:true};
-            });
+            this._list=c.$gameMessage._choices.map(function(name,index){return {name:name,ext:index,enabled:true};});
             this._list.forEach((_,index)=>this.drawItem(index));
         };
-        Choice.prototype.drawItem=function(index){
-            const item=this._list[index];
-            this.painted.push(item.name);
-        };
+        Choice.prototype.drawItem=function(index){this.painted.push(this._list[index].name);};
         c.Window_ChoiceList=Choice;
     }});
     const c=f.context,m=f.$gameMessage;
     m.add(text);
     const w=new c.Window_Message();
     w.update();
-    assert.equal(w.originalStarts,0,(mz?"MZ":"MV")+" must hold the first message before its first paint");
+    assert.equal(w.originalStarts,0,(mz?"MZ":"MV")+" waits before the first message paint");
     await wait(170);
     w.update();
-    assert.equal(w.originalStarts,1,(mz?"MZ":"MV")+" must start the first message after translation");
-    assert.ok(w._textState.text.includes("¿Adónde vas?"),"first-view dialogue is translated in the native message window");
-    assert.equal(m.allText(),text,"first-view projection does not mutate the game's source message");
+    assert.equal(w.originalStarts,1,(mz?"MZ":"MV")+" starts the message after translation");
+    assert.ok(w._textState.text.includes("¿Adónde vas?"),"the first-view dialogue is Spanish in the native window");
+    assert.equal(m.allText(),text,"the game's original message data is unchanged");
     w.finishPage();
     m.setChoices([choice],0,0);
     w.startInput();
-    assert.ok(w._choice&&!w._choice.started,"choice window start is deferred while its first-view translations are pending");
+    assert.ok(w._choice&&!w._choice.started,"native choice start is deferred while labels are pending");
     await wait(170);
-    assert.ok(w._choice.started,"native choice window starts after its labels are ready");
-    assert.deepEqual(w._choice._list.map(x=>x.name),["Por favor, abre la puerta."],"first choice paint uses translated labels");
-    assert.deepEqual(w._choice._list.map(x=>x.ext),[0],"choice branch indices remain unchanged");
-    assert.deepEqual(m._choices,[choice],"original Game_Message choice labels are restored after native start");
-
+    assert.ok(w._choice.started,"choice window starts after first-view translations are ready");
+    assert.deepEqual(w._choice._list.map(x=>x.name),["Por favor, abre la puerta."]);
+    assert.deepEqual(w._choice._list.map(x=>x.ext),[0],"choice branch index is preserved");
+    assert.deepEqual(m._choices,[choice],"source choice labels are restored after native start");
     m.clear();
     m.setChoices([cold],0,0);
     const only=new c.Window_Message();
     only.update();
-    assert.ok(!only._choice||!only._choice.started,"standalone MV/MZ choices do not paint before translation");
+    assert.ok(!only._choice||!only._choice.started,"standalone choices do not paint before translation");
     await wait(170);
     only.update();
-    assert.ok(only._choice&&only._choice.started,"standalone choice window opens after its first-view translation");
+    assert.ok(only._choice&&only._choice.started,"standalone choice appears after first-view translation");
     assert.deepEqual(only._choice._list.map(x=>x.name),["Por favor, cierra la ventana."]);
     assert.deepEqual(only._choice._list.map(x=>x.ext),[0]);
-    assert.deepEqual(m._choices,[cold],"standalone choice source remains unchanged");
+    assert.deepEqual(m._choices,[cold]);
 }
 
 async function testR9BuiltinNameInputProtected(){
@@ -2039,13 +2030,10 @@ async function testR9BuiltinNameInputProtected(){
         c.Scene_Name.prototype.start=function(){this.started=true;};
         c.Scene_Name.prototype.terminate=function(){this.terminated=true;};
         function NameEdit(){c.Window_Base.call(this);}
-        NameEdit.prototype=Object.create(c.Window_Base.prototype);
-        NameEdit.prototype.constructor=NameEdit;
+        NameEdit.prototype=Object.create(c.Window_Base.prototype);NameEdit.prototype.constructor=NameEdit;
         function NameInput(){c.Window_Base.call(this);}
-        NameInput.prototype=Object.create(c.Window_Base.prototype);
-        NameInput.prototype.constructor=NameInput;
-        c.Window_NameEdit=NameEdit;
-        c.Window_NameInput=NameInput;
+        NameInput.prototype=Object.create(c.Window_Base.prototype);NameInput.prototype.constructor=NameInput;
+        c.Window_NameEdit=NameEdit;c.Window_NameInput=NameInput;
     }});
     const c=f.context,m=f.$gameMessage;
     const scene=new c.Scene_Name();
@@ -2057,19 +2045,19 @@ async function testR9BuiltinNameInputProtected(){
     scene._inputWindow.drawText("A",0,0,40);
     scene._inputWindow.drawText("OK",0,0,40);
     await wait(60);
-    assert.deepEqual(scene._editWindow.drawn,["Player"],"native name-edit contents remain untouched");
-    assert.deepEqual(scene._inputWindow.drawn,["A","OK"],"native name-input character grid and commands remain untouched");
-    assert.equal(f.posts.length,0,"name input surfaces are never submitted for translation");
+    assert.deepEqual(scene._editWindow.drawn,["Player"],"native name edit is not rewritten");
+    assert.deepEqual(scene._inputWindow.drawn,["A","OK"],"native name input grid and commands are not rewritten");
+    assert.equal(f.posts.length,0,"native name input text is not sent to translation");
     scene.terminate();
     c.SceneManager._scene=new c.Scene_Map();
     m.add("What should I call you?");
     const message=new c.Window_Message();
     message.update();
-    assert.equal(message.originalStarts,0,"the prompt before Scene_Name still waits for translation");
+    assert.equal(message.originalStarts,0,"the dialogue prompt still waits for translation");
     await wait(80);
     message.update();
-    assert.equal(message.originalStarts,1,"the normal dialogue path resumes after leaving Scene_Name");
-    assert.ok(message._textState.text.includes("¿Cómo debería llamarte?"),"the name prompt is translated without touching the input screen");
+    assert.equal(message.originalStarts,1,"normal dialogue resumes after leaving Scene_Name");
+    assert.ok(message._textState.text.includes("¿Cómo debería llamarte?"),"the name prompt is translated outside the input screen");
 }
 
 async function testR6OfflineDeadlineAndForm(){
