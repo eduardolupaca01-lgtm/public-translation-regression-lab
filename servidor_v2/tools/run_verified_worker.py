@@ -46,7 +46,8 @@ def launch(exe: Path, arguments: list[str], diagnostic_file: Path, timeout: int)
             print("IA_GAME_ROOT_NO_ESPECIFICADO")
             return 1
         game = Path(arguments[arguments.index("--game-root") + 1]).resolve(strict=True)
-        bridge = bridge_file(game)
+        halva = "--halva-content" in arguments
+        bridge = bridge_file(game,halva=halva)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if proc.poll() is not None:
@@ -54,7 +55,7 @@ def launch(exe: Path, arguments: list[str], diagnostic_file: Path, timeout: int)
                 return 1
             if read_bridge(bridge) is not None:
                 try:
-                    prove_spanish(game)
+                    prove_spanish(game,halva=halva)
                     return 0
                 except Exception as exc:
                     code=str(exc)
@@ -78,6 +79,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", type=Path, required=True)
     parser.add_argument("--game-root", type=Path)
+    parser.add_argument("--halva-content", type=Path)
     parser.add_argument("--diagnostic-file", type=Path, required=True)
     parser.add_argument("--check-models", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, default=150)
@@ -90,6 +92,8 @@ def main():
     elif args.game_root:
         argv = ["--game-root", str(args.game_root.resolve(strict=True)),
                 "--parent-pid", str(os.getpid())]
+        if args.halva_content:
+            argv += ["--halva-content",str(args.halva_content.resolve(strict=True))]
     else:
         print("IA_WORKER_ARGUMENTOS_INVALIDOS")
         return 1

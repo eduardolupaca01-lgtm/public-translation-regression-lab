@@ -166,6 +166,10 @@ func iaFriendlyInstall(code string)string{
     switch code{
     case cookToolPackedCode:
         return "RPG Maker Dragonhouse/Halva detectado. Requiere una exportación o integración autorizada; no se han modificado los paquetes."
+    case "IA_HALVA_VERSION_EXISTENTE_CONSERVADA":
+        return "Hay una versión Halva previa. No se sobrescribieron los modelos ni la memoria."
+    case "IA_HALVA_PAQUETE_CAMBIADO","IA_HALVA_RESPALDO_ALTERADO","IA_HALVA_COPIA_ALTERADA":
+        return "El paquete o respaldo cambió. Se conserva intacto; usa una copia original verificada."
     case cookToolUnsafeCode:
         return "Estructura Dragonhouse/Halva incompleta o insegura. No se ha modificado el juego."
     case "IA_DESTINO_CREACION_DENEGADA":
@@ -320,7 +324,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 iaLog("[IA_SELECTOR_ERROR] "+err.Error())
                 iaSet(ui.status,"No se pudo abrir el selector. Servidor sigue abierto.")
             }else if file!=""{
-                if _,content,e:=detectGame(file);e!=nil{
+                if kind,e:=detectInstallTarget(file);e!=nil{
                     // An invalid new selection must never leave a different game armed for installation.
                     ui.gameFile="";iaSet(ui.input,"")
                     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
@@ -335,8 +339,12 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 }else{
                     ui.gameFile=file;iaSet(ui.input,file)
                     iaEnableWindow.Call(ui.install,1);iaEnableWindow.Call(ui.recoverBtn,1)
-                    iaSet(ui.status,"Juego "+engineAt(content)+" seleccionado. Listo para instalar.")
-                    iaLog("[IA_EXE_SELECCIONADO] Motor "+engineAt(content)+" verificado.")
+                    iaSet(ui.status,"Juego "+kind+" seleccionado. Listo para instalar.")
+                    iaLog("[IA_EXE_SELECCIONADO] Motor "+kind+" verificado.")
+                    if strings.HasSuffix(kind," Halva"){
+                        iaLog("[IA_HALVA_NATIVO_PRUEBA] Copia cerrada; solo se modifica EnginePackage con respaldo. Abre mediante el lanzador habitual.")
+                        iaSet(ui.status,"Halva plano compatible con instalación de prueba; arranque por comprobar.")
+                    }
                 }
             }else{
                 iaLog("[IA_SELECTOR_CANCELADO] Puedes volver a pulsar EXE.")
@@ -365,8 +373,8 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         iaEnableWindow.Call(ui.recoverBtn,1)
         code:=iaSafeInstallCode(result)
         if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
-            iaLog("[IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA] Registro original restaurado. Los archivos del traductor se conservaron.")
-            iaSet(ui.status,"Registro RPG original recuperado. Abre la copia del juego.")
+            iaLog("[IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA] Registro o paquete original restaurado. Los archivos del traductor se conservaron.")
+            iaSet(ui.status,"Inicio RPG original recuperado. Abre la copia del juego.")
             iaEnableWindow.Call(ui.install,0)
         }else if code=="IA_INSTALACION_COMPLETADA_VERIFICADA"{
             iaLog("[IA_INSTALACION_COMPLETADA_VERIFICADA] Listo para iniciar la copia del juego.")
@@ -422,7 +430,7 @@ func runUI(){
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
-    iaLog("[IA_TRADUCTORA_LISTA] "+installerBuildID+". MV/MZ y MZ comprimida: instalación. Dragonhouse/Halva: integración nativa aún no verificada. El motor es local.")
+    iaLog("[IA_TRADUCTORA_LISTA] "+installerBuildID+". MV/MZ y MZ comprimida: instalación. Halva Brotli/ZIP: instalación nativa experimental en copia cerrada. El motor es local.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

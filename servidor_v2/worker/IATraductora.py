@@ -470,9 +470,42 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
         raise ValueError("IA_SOLAMENTE_RPG_MV_MZ")
     return root,layouts[0]
 
+def verified_halva_runtime(game:Path, runtime:Path):
+    # Only a declared, owned installation; the launcher may provide an
+    # external temporary content directory. No scanning for unrelated caches.
+    if game.is_symlink() or runtime.is_symlink():
+        raise ValueError("IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA")
+    root=game.resolve(strict=True)
+    _,content=game_root(runtime)
+    if content!=runtime.resolve(strict=True):
+        raise ValueError("IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA")
+    sidecar=root/"IA Traductora"
+    receipt=sidecar/"install"/"halva"/"receipt.json"
+    owner=sidecar/"owner-v1.json"
+    packed=root/"GamePackages"/"EnginePackage.halva"
+    def bounded(file,limit):
+        if file.is_symlink() or not file.is_file() or not 0<file.stat().st_size<=limit:
+            raise ValueError("IA_HALVA_INSTALACION_NO_VERIFICADA")
+        return file.read_bytes()
+    for folder in (sidecar,sidecar/"install",receipt.parent,root/"GamePackages"):
+        if folder.is_symlink() or not folder.is_dir() or not folder.resolve().is_relative_to(root):
+            raise ValueError("IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA")
+    bounded(root/"GameConfig.sbcf",1024*1024)
+    r=json.loads(bounded(receipt,4096));o=json.loads(bounded(owner,2048))
+    script=content/"js"/"plugins"/"IATraductora.js"
+    if not script.resolve().is_relative_to(content):
+        raise ValueError("IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA")
+    if r.get("schema")!="ia-traductora-halva-install-v1" or o.get("schema")!="ia-traductora-owner-v1" or \
+       r.get("plugin_sha256")!=o.get("plugin_sha256") or \
+       hashlib.sha256(bounded(script,1024*1024)).hexdigest()!=r.get("plugin_sha256") or \
+       hashlib.sha256(bounded(packed,64*1024*1024)).hexdigest()!=r.get("after_sha256"):
+        raise ValueError("IA_HALVA_INSTALACION_NO_VERIFICADA")
+    return root,content
+
 class Service:
-    def __init__(self,game:Path,engine:Path,neural=None):
-        self.game,self.content=game_root(game)
+    def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None):
+        self.halva=halva_content is not None
+        self.game,self.content=verified_halva_runtime(game,halva_content) if self.halva else game_root(game)
         engine=engine.resolve(strict=True)
         if engine.is_symlink() or not engine.is_relative_to(self.game):
             raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
@@ -617,7 +650,7 @@ def make_handler(service:Service):
     return Handler
 
 def publish(service,port):
-    folder=service.content/"data"/"IATraductora"
+    folder=service.game/"IA Traductora"/".local"/"Rpg" if getattr(service,"halva",False) else service.content/"data"/"IATraductora"
     folder.mkdir(exist_ok=True,mode=0o700)
     if folder.is_symlink() or not folder.resolve().is_relative_to(service.game):
         raise RuntimeError("IA_PUENTE_INSEGURO")
@@ -680,7 +713,8 @@ def safe_startup_code(error):
     allowed={"IA_JUEGO_NO_VALIDO","IA_GAME_ROOT_FALTANTE","IA_SOLAMENTE_RPG_MV_MZ",
              "IA_RPG_RUTAS_AMBIGUAS","IA_RPG_MZ_COMPRIMIDO_NO_VALIDO",
              "IA_MOTOR_FUERA_DEL_JUEGO","IA_MODELO_INCOMPLETO",
-             "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO"}
+             "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO",
+             "IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA","IA_HALVA_INSTALACION_NO_VERIFICADA"}
     if str(error) in allowed:return str(error)
     if isinstance(error,sqlite3.Error):return "IA_CACHE_PERSISTENTE_INACCESIBLE"
     if "version" in raw and ("model" in raw or "binary" in raw):
@@ -725,6 +759,7 @@ def write_startup_code(filename, code):
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--game-root",type=Path)
+    p.add_argument("--halva-content",type=Path)
     p.add_argument("--parent-pid",type=int,default=0)
     p.add_argument("--check-models",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
@@ -740,7 +775,7 @@ def main():
         if args.game_root is None:
             raise ValueError("IA_GAME_ROOT_FALTANTE")
         write_startup_code(args.diagnostic_file,"IA_VALIDANDO_ESTRUCTURA_RPG")
-        service=Service(args.game_root,engine)
+        service=Service(args.game_root,engine,halva_content=args.halva_content)
         write_startup_code(args.diagnostic_file,"IA_MODELOS_CARGADOS_SERVICIO_INICIANDO")
         run(service,args.parent_pid)
     except Exception as exc:

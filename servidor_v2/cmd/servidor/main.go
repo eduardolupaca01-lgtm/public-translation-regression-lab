@@ -25,7 +25,7 @@ const (
  packageMagic="SERVIDOR2ZIPSHA1" // exactamente 16 bytes
  brandFolder="IA Traductora"
  pluginName="IATraductora"
- installerBuildID="RPG-MVMZ-R23-P3-20261125"
+ installerBuildID="RPG-MVMZ-R23-P4-20261125"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -231,12 +231,15 @@ func checkEntries(entries []map[string]json.RawMessage)(bool,error){
  return installed,nil
 }
 func appendRegistry(reg []byte)([]byte,error){
+ return appendRegistryParams(reg,map[string]string{})
+}
+func appendRegistryParams(reg []byte,params map[string]string)([]byte,error){
  finish,entries,err:=parseRegistry(reg);if err!=nil{return nil,err}
  already,err:=checkEntries(entries);if err!=nil{return nil,err}
  if already{return nil,errors.New("IA_PLUGIN_YA_REGISTRADO")}
  obj:=map[string]any{"name":pluginName,"status":true,
   "description":"IA Traductora: japonés/inglés a español (local)",
-  "parameters":map[string]string{}}
+  "parameters":params}
  raw,_:=json.Marshal(obj)
  // Insert exactly before closing bracket. The original bytes are kept intact.
  prefix:=reg[:finish];suffix:=reg[finish:]
@@ -264,7 +267,13 @@ func prepareSidecar(game string,pkg *packageReader)(string,error){
  return iaPrepareAndPublishSidecar(game,pkg)
 }
 func Install(gameEXE string,pkg *packageReader)error{
- root,content,err:=detectGame(gameEXE);if err!=nil{return err}
+ root,content,err:=detectGame(gameEXE)
+ if err!=nil{
+  if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{
+   if _,_,e:=halvaInspect(packed);e==nil{return installHalva(packed,pkg)}
+  }
+  return err
+ }
  registry:=filepath.Join(content,"js","plugins.js")
  jsfile:=filepath.Join(content,"js","plugins",pluginName+".js")
  old,err:=os.ReadFile(registry);if err!=nil||len(old)>4*1024*1024{
@@ -330,7 +339,11 @@ func Install(gameEXE string,pkg *packageReader)error{
 // The receipt may be valid for an older version. Verify the bytes against
 // the selected package before announcing successful installation.
 func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
- root,content,err:=detectGame(gameEXE);if err!=nil{return "",err}
+ root,content,err:=detectGame(gameEXE)
+ if err!=nil{
+  if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{return halvaIdentity(packed,pkg)}
+  return "",err
+ }
  script:=filepath.Join(content,"js","plugins",pluginName+".js")
  worker:=filepath.Join(root,brandFolder,".local","Rpg","engine","IATraductora.exe")
  if !ordinary(script)||!ordinary(worker){return "",errors.New("IA_INSTALACION_VERSION_NO_VERIFICADA")}
@@ -362,9 +375,9 @@ func main(){
  flag.Parse()
  if *inspect {
   if *exe==""||*recoverGame{fmt.Fprintln(os.Stderr,"IA_INSPECCION_GAME_EXE_REQUERIDO");os.Exit(1)}
-  _,content,e:=detectGame(*exe)
+  kind,e:=detectInstallTarget(*exe)
   if e!=nil{fmt.Println(e.Error());os.Exit(2)}
-  fmt.Println("IA_RPG_RECURSOS_ACCESIBLES motor="+engineAt(content)+" version="+installerBuildID)
+  fmt.Println("IA_RPG_RECURSOS_ACCESIBLES motor="+kind+" version="+installerBuildID)
   return
  }
  if *recoverGame{

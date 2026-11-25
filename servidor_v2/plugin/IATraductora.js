@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R23-P3-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R23-P4-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -20,7 +20,7 @@ try{
 }catch(_){return;}
 if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
-var porCompressed=false;
+var porCompressed=false,halvaMode=false;
 var remNative={detected:false,images:false,configured:false,spanish:new Set(),fallback:new Map()};
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
@@ -125,12 +125,38 @@ function owner(){
         throw Error("Registro de instalación inválido");
     return data;
 }
+// For an installed plain Halva package, game files may be unpacked by
+// the vendor into a disposable cache. Use the installer's verified, explicit
+// root instead of guessing a cache location or changing the launcher.
+function halvaPersistentRoot(found){
+    if(typeof PluginManager==="undefined"||typeof PluginManager.parameters!=="function")return null;
+    var raw=(PluginManager.parameters("IATraductora")||{}).iaHalvaRoot;
+    if(!raw)return null;
+    if(typeof raw!=="string"||raw.length>4096||!path.isAbsolute(raw))throw Error("IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA");
+    var root=fs.realpathSync(raw);
+    var folder=path.join(root,BRAND),install=path.join(folder,"install"),record=path.join(install,"halva");
+    var packed=path.join(root,"GamePackages","EnginePackage.halva");
+    var script=path.join(found.content,"js","plugins","IATraductora.js");
+    var receipt=path.join(record,"receipt.json"),marker=path.join(folder,"owner-v1.json");
+    if(!directoryUnder(root,folder)||!directoryUnder(root,install)||!directoryUnder(root,record)||
+       !directoryUnder(root,path.dirname(packed))||!regularUnder(root,path.join(root,"GameConfig.sbcf"),1024*1024)||
+       !regularUnder(root,packed,64*1024*1024)||!regularUnder(root,receipt,4096)||
+       !regularUnder(root,marker,2048)||!regularUnder(found.content,script,1024*1024))
+        throw Error("IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA");
+    var r=JSON.parse(fs.readFileSync(receipt,"utf8")),o=JSON.parse(fs.readFileSync(marker,"utf8"));
+    var digest=function(file){return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");};
+    if(r.schema!=="ia-traductora-halva-install-v1"||o.schema!=="ia-traductora-owner-v1"||
+       !/^[0-9a-f]{64}$/.test(r.plugin_sha256)||r.plugin_sha256!==o.plugin_sha256||
+       !/^[0-9a-f]{64}$/.test(r.after_sha256)||digest(script)!==r.plugin_sha256||
+       digest(packed)!==r.after_sha256)throw Error("IA_HALVA_INSTALACION_NO_VERIFICADA");
+    return root;
+}
 function initPaths(){
-    var found=resolveMVGame();
-    game=found.root;content=found.content;porCompressed=porCompressedAt(content);
+    var found=resolveMVGame(),persistent=halvaPersistentRoot(found);
+    halvaMode=!!persistent;game=persistent||found.root;content=found.content;porCompressed=porCompressedAt(content);
     sidecar=path.join(game,"IA Traductora");
     worker=path.join(sidecar,".local","Rpg","engine","IATraductora.exe");
-    descriptorFile=path.join(content,"data","IATraductora","bridge.json");
+    descriptorFile=halvaMode?path.join(sidecar,".local","Rpg","bridge.json"):path.join(content,"data","IATraductora","bridge.json");
     startupFile=path.join(sidecar,".local","Rpg","startup-status.json");
 }
 function integer(v){
@@ -221,8 +247,9 @@ function startWorker(){
                 if(!tempInfo.isDirectory()||tempInfo.isSymbolicLink())
                     throw Error("IA_TEMP_NO_SEGURO");
                 env.LOCALAPPDATA=local;env.TEMP=tmp;env.TMP=tmp;env.TMPDIR=tmp;
-                proc=spawn(worker,["--game-root",game,"--parent-pid",String(process.pid),
-                    "--diagnostic-file",startupFile],
+                var argv=["--game-root",game,"--parent-pid",String(process.pid),"--diagnostic-file",startupFile];
+                if(halvaMode)argv.push("--halva-content",content);
+                proc=spawn(worker,argv,
                     {cwd:game,env:env,windowsHide:true,detached:false,shell:false,stdio:"ignore"});
                 proc.on("error",function(){state.status="IA no pudo iniciarse";state.errors++;starting=false;proc=null;});
                 proc.on("exit",function(){state.connected=false;state.status=startupCode()||"Motor detenido";starting=false;proc=null;});

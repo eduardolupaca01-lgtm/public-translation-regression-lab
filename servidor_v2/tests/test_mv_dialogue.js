@@ -15,7 +15,21 @@ function fixture(translationDelay=0,options={}){
         path.join(__dirname,"..","plugin","IATraductora.js"),"utf8");
     const root=options.root||path.join("/tmp","servidor-qa-juego-日本語");
     const content=options.mz||options.noWww?root:path.join(root,"www");
-    const descriptor=path.join(content,"data","IATraductora","bridge.json");
+    const persistent=options.halvaRoot;
+    const descriptor=persistent?path.join(persistent,"IA Traductora",".local","Rpg","bridge.json"):path.join(content,"data","IATraductora","bridge.json");
+    if(persistent){
+        const folder=path.join(persistent,"IA Traductora"),record=path.join(folder,"install","halva");
+        [folder,path.join(folder,"install"),record,path.join(persistent,"GamePackages"),
+            path.join(folder,".local"),path.join(folder,".local","Rpg")].forEach(d=>{dirs[d]=true;});
+        const packed=path.join(persistent,"GamePackages","EnginePackage.halva");
+        read[packed]="synthetic packed engine only";
+        read[path.join(persistent,"GameConfig.sbcf")]="synthetic config";
+        read[path.join(content,"js","plugins","IATraductora.js")]=source;
+        const sha=s=>crypto.createHash("sha256").update(s).digest("hex");
+        read[path.join(folder,"owner-v1.json")]=JSON.stringify({schema:"ia-traductora-owner-v1",plugin_sha256:sha(source),worker_sha256:"a".repeat(64)});
+        read[path.join(record,"receipt.json")]=JSON.stringify({schema:"ia-traductora-halva-install-v1",plugin_sha256:sha(source),after_sha256:sha(read[packed])});
+        if(options.halvaRestored)read[packed]="restored original";
+    }
     if(options.mz){
         for(const n of ["rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows"])read[path.join(content,"js",n+".js")]="// MZ synthetic fixture";
         if(!options.compressed)read[path.join(content,"data","System.json")]=read[path.join(content,"data","System.json")]||"{}";
@@ -249,6 +263,7 @@ function fixture(translationDelay=0,options={}){
         SceneManager:{_scene:null},
         $gameMessage,$plugins:options.plugins||[]
     };
+    if(persistent)context.PluginManager={parameters(name){return name==="IATraductora"?{iaHalvaRoot:persistent}:{};}};
     if(options.configure)options.configure(context);
     vm.runInNewContext(source,context,{filename:"IATraductora.js"});
     return {context,posts,batches,$gameMessage,jsonParseSizes,spawnCount:()=>spawnCount};
@@ -2663,7 +2678,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R23-P3-20261125"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R23-P4-20261125"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -3540,7 +3555,32 @@ async function testR22MvPhysicalKeyMenusAndNativeFlow(){
     assert.equal(seen,raw.replace(/\x1b(?:C\[\d+\]|I\[\d+\]|\.)/g,""));
 }
 
+async function testHalvaNativePersistentBridge(){
+    const runtime=path.join("/tmp","vendor-temporary-rpg"),persistent=path.join("/tmp","original-rpg-folder");
+    const data=path.join(runtime,"data"),state={files:{},dirs:{[data]:true}};
+    const en="Open the wooden gate.",ja="橋を渡ってください。";
+    const source="\\C[2]"+en+"\\C[0]";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"en_US"});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[
+        {code:101,parameters:["",0,0,2,"Haruka"]},{code:401,parameters:[source]},
+        {code:101,parameters:["",0,0,2,"Haruka"]},{code:401,parameters:[ja]}
+    ]}]}]});
+    const f=fixture(1,{root:runtime,halvaRoot:persistent,mz:true,fsState:state,batch:true,responses:{[en]:"Abre la puerta de madera.",[ja]:"Cruza el puente."}});
+    const scene=new f.context.Scene_Map();f.context.SceneManager._scene=scene;scene.createAllWindows();scene.update();
+    const until=Date.now()+5000;
+    while(Date.now()<until&&(!f.posts.some(v=>v.text===en)||!f.posts.some(v=>v.text===ja)))await wait(30);
+    await wait(160);
+    f.$gameMessage._texts=[source];new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),"\\C[2]Abre la puerta de madera.\\C[0]");
+    const persistentCache=Object.keys(state.files).find(v=>v.endsWith("translations-ja-en-es-v2.jsonl"));
+    assert.ok(persistentCache&&persistentCache.startsWith(persistent+path.sep),"Halva journal stays outside the vendor cache");
+    assert.equal(f.spawnCount(),0);
+    const restored=fixture(1,{root:runtime,halvaRoot:persistent,mz:true,halvaRestored:true,fsState:{files:{},dirs:{}}});
+    await wait(60);assert.equal(restored.posts.length,0,"stale plugin must not translate after restoring the package");
+    console.log("IA_HALVA_NATIVE_BRIDGE_PERSISTENT_PASS");
+}
 (async()=>{
+    await testHalvaNativePersistentBridge();
     await testR22MvPhysicalKeyMenusAndNativeFlow();
     await testR8GeneralDisplaySurfaces();
     await testR21CteNativeContextFirstPresentation();

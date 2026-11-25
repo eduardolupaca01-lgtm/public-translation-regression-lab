@@ -12,7 +12,10 @@ import(
 
 func RecoverGame(gameEXE string)error{
  root,content,err:=detectGame(gameEXE)
- if err!=nil{return err}
+ if err!=nil{
+  if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{return recoverHalva(packed)}
+  return err
+ }
  sidecar:=filepath.Join(root,brandFolder)
  ownerFile:=filepath.Join(sidecar,"owner-v1.json")
  receiptFile:=filepath.Join(sidecar,"install","receipt.json")

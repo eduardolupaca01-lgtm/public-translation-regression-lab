@@ -414,4 +414,41 @@ class CompressedMZWorkerTests(unittest.TestCase):
         self.assertEqual(ia.safe_startup_code(ValueError("IA_RPG_MZ_COMPRIMIDO_NO_VALIDO")),"IA_RPG_MZ_COMPRIMIDO_NO_VALIDO")
         self.assertEqual(ia.safe_startup_code(ValueError("unknown private path")),"IA_MOTOR_ERROR_NO_CLASIFICADO")
 
+class HalvaNativeWorkerTests(unittest.TestCase):
+    def test_runtime_cache_survives_vendor_directory_replacement(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);root=base/"game";runtime=base/"unpacked"
+            side=root/"IA Traductora";engine=side/".local"/"Rpg"/"engine"
+            engine.mkdir(parents=True)
+            record=side/"install"/"halva";record.mkdir(parents=True)
+            (root/"GamePackages").mkdir()
+            (root/"GameConfig.sbcf").write_bytes(b"synthetic")
+            packed=root/"GamePackages"/"EnginePackage.halva";packed.write_bytes(b"synthetic engine")
+            source=b"synthetic translator"
+            sha=lambda x:hashlib.sha256(x).hexdigest()
+            (side/"owner-v1.json").write_text(json.dumps({"schema":"ia-traductora-owner-v1","plugin_sha256":sha(source)}))
+            (record/"receipt.json").write_text(json.dumps({"schema":"ia-traductora-halva-install-v1","plugin_sha256":sha(source),"after_sha256":sha(packed.read_bytes())}))
+            def make_runtime(where):
+                (where/"js"/"plugins").mkdir(parents=True)
+                (where/"data").mkdir()
+                for name in ("rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows","plugins"):
+                    (where/"js"/(name+".js")).write_text("{}")
+                (where/"data"/"System.json").write_text("{}")
+                (where/"js"/"plugins"/"IATraductora.js").write_bytes(source)
+            make_runtime(runtime)
+            service=ia.Service(root,engine,neural=FakeNeural(),halva_content=runtime)
+            try:
+                self.assertEqual(ia.publish(service,24123),engine.parent/"bridge.json")
+                self.assertEqual(service.translate("en","Good morning."),"Buen día")
+            finally:service.close()
+            import shutil
+            shutil.rmtree(runtime)
+            runtime=base/"unpacked2";make_runtime(runtime)
+            service=ia.Service(root,engine,neural=FakeNeural(),halva_content=runtime)
+            try:self.assertEqual(service.translate("en","Good morning."),"Buen día");self.assertEqual(service.translations,0)
+            finally:service.close()
+            packed.write_bytes(b"restored original")
+            with self.assertRaises(ValueError):ia.Service(root,engine,neural=FakeNeural(),halva_content=runtime)
+
 if __name__=="__main__":unittest.main()

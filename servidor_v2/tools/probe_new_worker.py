@@ -26,15 +26,16 @@ def call(opener,url,token,object=None):
         body=response.read(65537)
         if len(body)>65536: raise RuntimeError("IA_RESPUESTA_EXCESIVA")
     return json.loads(body.decode("utf8"))
-def bridge_file(game:Path):
+def bridge_file(game:Path,halva=False):
+    if halva:return game/"IA Traductora"/".local"/"Rpg"/"bridge.json"
     candidates=[folder for folder in (game/"www",game)
                 if any((folder/"js"/name).is_file() for name in ("rpg_core.js","rmmz_core.js"))]
     if len(candidates)!=1:raise RuntimeError("IA_PROBE_RPG_RUTA_AMBIGUA")
     return candidates[0]/"data"/"IATraductora"/"bridge.json"
 
-def run(game:Path):
+def run(game:Path,halva=False):
     game=game.resolve(strict=True)
-    bridge=bridge_file(game)
+    bridge=bridge_file(game,halva=halva)
     if not (game/"IA Traductora"/".local"/"Rpg"/"engine"/"IATraductora.exe").is_file():
         raise RuntimeError("IA_MOTOR_PROPIO_FALTANTE")
     opener=build_opener(ProxyHandler({}))

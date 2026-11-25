@@ -42,7 +42,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "IA_PLUGIN_REGRESSION_FAIL" }
           Push-Location servidor_v2
           try {
-            go test ./cmd/servidor -run "TestMZCompressedNativeDetectionAndInstallation|TestMZDetectionAndInstallation" -count=1
+            go test ./cmd/servidor -run "TestMZCompressedNativeDetectionAndInstallation|TestMZDetectionAndInstallation|TestHalva" -count=1
             if ($LASTEXITCODE -ne 0) { throw "IA_R17_COMPRESSED_INSTALL_FAIL" }
           } finally { Pop-Location }
       - name: Bloqueo si no se dispone de origen privado cifrado
@@ -272,6 +272,69 @@ jobs:
           if ($null -eq $p -or $p.ExitCode -ne 0) { throw "IA_R20_CTE_INSTALL_FAIL" }
           node servidor_v2/tests/test_mv_real_worker.js $game --cte
           if ($LASTEXITCODE -ne 0) { throw "IA_R20_CTE_REAL_PRESENTATION_FAIL" }
+      - name: Instalar Halva plano .NET Brotli/ZIP y probar puente persistente con OPUS real
+        shell: pwsh
+        run: |
+          $game=Join-Path $env:RUNNER_TEMP "ia-v2-halva-real-日本語"
+          $source=Join-Path $env:RUNNER_TEMP "ia-v2-halva-fixture-source"
+          $runtime=Join-Path $env:RUNNER_TEMP "ia-v2-halva-disposable-runtime"
+          $packages=Join-Path $game "GamePackages"
+          $js=Join-Path $source "engine/js"
+          $data=Join-Path $source "database/data"
+          New-Item -ItemType Directory -Force -Path $packages,(Join-Path $js "plugins"),$data,$runtime | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $game "Game.exe"),[byte[]]@(77,90,0,0))
+          'synthetic config; not a vendor config' | Set-Content -LiteralPath (Join-Path $game "GameConfig.sbcf") -Encoding utf8
+          'var $plugins = [];' | Set-Content -LiteralPath (Join-Path $js "plugins.js") -Encoding utf8
+          'PluginManager.setup($plugins);' | Set-Content -LiteralPath (Join-Path $js "main.js") -Encoding utf8
+          foreach($n in @("rmmz_core","rmmz_managers","rmmz_objects","rmmz_scenes","rmmz_windows")){
+            '// synthetic fixture' | Set-Content -LiteralPath (Join-Path $js "$n.js") -Encoding utf8
+          }
+          '{"locale":"en_US"}' | Set-Content -LiteralPath (Join-Path $data "System.json") -Encoding utf8
+          function Pack-Halva($folder,$dest) {
+            $tmp="$dest.zip"
+            [IO.Compression.ZipFile]::CreateFromDirectory($folder,$tmp,[IO.Compression.CompressionLevel]::NoCompression,$false)
+            $inputStream=[IO.File]::OpenRead($tmp)
+            $outStream=[IO.File]::Create($dest)
+            try{
+              $br=[IO.Compression.BrotliStream]::new($outStream,[IO.Compression.CompressionLevel]::Optimal)
+              try{$inputStream.CopyTo($br)}finally{$br.Dispose()}
+            }finally{$inputStream.Dispose();$outStream.Dispose()}
+            Remove-Item -LiteralPath $tmp
+          }
+          function Expand-Halva($file,$dest) {
+            $tmp="$file.fixture.zip"
+            $inputStream=[IO.File]::OpenRead($file)
+            $outStream=[IO.File]::Create($tmp)
+            try{
+              $br=[IO.Compression.BrotliStream]::new($inputStream,[IO.Compression.CompressionMode]::Decompress)
+              try{$br.CopyTo($outStream)}finally{$br.Dispose()}
+            }finally{$inputStream.Dispose();$outStream.Dispose()}
+            [IO.Compression.ZipFile]::ExtractToDirectory($tmp,$dest,$true)
+            Remove-Item -LiteralPath $tmp
+          }
+          Pack-Halva (Join-Path $source "engine") (Join-Path $packages "EnginePackage.halva")
+          Pack-Halva (Join-Path $source "database") (Join-Path $packages "DatabasePackage.halva")
+          $before=(Get-FileHash -LiteralPath (Join-Path $packages "EnginePackage.halva")).Hash
+          $databaseBefore=(Get-FileHash -LiteralPath (Join-Path $packages "DatabasePackage.halva")).Hash
+          $exe=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          $output=Join-Path $env:RUNNER_TEMP "ia-halva-install.txt"
+          $errors=Join-Path $env:RUNNER_TEMP "ia-halva-errors.txt"
+          $arg='--game "'+(Join-Path $game "Game.exe")+'"'
+          $p=Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru -RedirectStandardOutput $output -RedirectStandardError $errors -ErrorAction Stop
+          if ($p.ExitCode -ne 0) { throw "IA_HALVA_EXE_NO_INSTALA" }
+          Expand-Halva (Join-Path $packages "EnginePackage.halva") $runtime
+          Expand-Halva (Join-Path $packages "DatabasePackage.halva") $runtime
+          $worker=Join-Path $game "IA Traductora/.local/Rpg/engine/IATraductora.exe"
+          $diagnostic=Join-Path $env:RUNNER_TEMP "ia-halva-runtime-status.json"
+          python servidor_v2/tools/run_verified_worker.py --worker $worker --game-root $game --halva-content $runtime --diagnostic-file $diagnostic --timeout-seconds 190
+          if ($LASTEXITCODE -ne 0) { throw "IA_HALVA_OPUS_REAL_FAIL" }
+          $cache=Join-Path $game "IA Traductora/.local/Rpg/cache/translation-memory-v2.sqlite3"
+          if (!(Test-Path -LiteralPath $cache)) { throw "IA_HALVA_CACHE_NO_PERSISTENTE" }
+          if ((Get-FileHash -LiteralPath (Join-Path $packages "DatabasePackage.halva")).Hash -ne $databaseBefore) { throw "IA_HALVA_DB_ALTERADA" }
+          $p=Start-Process -FilePath $exe -ArgumentList ('--recover '+$arg) -Wait -PassThru -RedirectStandardOutput $output -RedirectStandardError $errors -ErrorAction Stop
+          if ($p.ExitCode -ne 0 -or (Get-FileHash -LiteralPath (Join-Path $packages "EnginePackage.halva")).Hash -ne $before) { throw "IA_HALVA_RECUPERACION_FAIL" }
+          if (!(Test-Path -LiteralPath $cache)) { throw "IA_HALVA_CACHE_ELIMINADA" }
+          Write-Host "IA_HALVA_NATIVE_OPUS_REAL_AND_RECOVERY_PASS"
       - name: Cifrar siempre la versión final antes de publicarla en GitHub
         shell: pwsh
         run: |
@@ -279,19 +342,20 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R23-P3-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R23-P4-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R23-P3-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R23-P4-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
           'Servidor v2: modelo propio CT2 OPUS; MV y MZ, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
+          Copy-Item -LiteralPath "servidor_v2/LICENSE-BROTLI.txt" -Destination (Join-Path $dir "LICENSE-BROTLI.txt")
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v4
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R23-P3-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R23-P4-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error
