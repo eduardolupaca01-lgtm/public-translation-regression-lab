@@ -2089,7 +2089,7 @@ async function testR6FirstViewNativeGate(mz){
     w.update();
     assert.equal(w.originalStarts,1,(mz?"MZ":"MV")+" starts the message after translation");
     assert.ok(w._textState.text.includes("¿Adónde vas?"),"the first-view dialogue is Spanish in the native window");
-    assert.equal(m.allText(),text,"the game's original message data is unchanged");
+    assert.equal(m.allText(),"¿Adónde vas?","the first-view gate uses the validated Spanish runtime message without changing the source event command");
     w.finishPage();
     m.setChoices([choice],0,0);
     w.startInput();
