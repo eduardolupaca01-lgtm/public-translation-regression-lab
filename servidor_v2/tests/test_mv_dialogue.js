@@ -2134,8 +2134,8 @@ async function testR9BuiltinNameInputProtected(){
     scene._inputWindow.drawText("A",0,0,40);
     scene._inputWindow.drawText("OK",0,0,40);
     await wait(60);
-    assert.deepEqual(scene._editWindow.drawn,["Player"],"native name edit is not rewritten");
-    assert.deepEqual(scene._inputWindow.drawn,["A","OK"],"native name input grid and commands are not rewritten");
+    assert.deepEqual(scene._editWindow.drawn.map(x=>x.text),["Player"],"native name edit is not rewritten");
+    assert.deepEqual(scene._inputWindow.drawn.map(x=>x.text),["A","OK"],"native name input grid and commands are not rewritten");
     assert.equal(f.posts.length,0,"native name input text is not sent to translation");
     scene.terminate();
     c.SceneManager._scene=new c.Scene_Map();
