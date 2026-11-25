@@ -2080,6 +2080,7 @@ async function testR6FirstViewNativeGate(mz){
         Choice.prototype.drawItem=function(index){this.painted.push(this._list[index].name);};
         c.Window_ChoiceList=Choice;
     }});
+    await wait(25); // let the local status handshake finish before the connected-path test
     const c=f.context,m=f.$gameMessage;
     m.add(text);
     const w=new c.Window_Message();
@@ -2116,6 +2117,18 @@ async function testR9BuiltinNameInputProtected(){
     const f=fixture(5,{nativePaint:true,responses:{
         "What should I call you?":"¿Cómo debería llamarte?"
     },configure:function(c){
+        const p=c.Window_Message.prototype;
+        p.canStart=function(){return c.$gameMessage.hasText();};
+        p.startMessage=function(){
+            this.originalStarts++;
+            this._textState={text:c.$gameMessage.allText(),index:0};
+            this.pause=false;
+        };
+        p.update=function(){
+            this.updates++;
+            if(this.updateWait())return;
+            if(this.canStart())this.startMessage();
+        };
         c.Scene_Name.prototype.start=function(){this.started=true;};
         c.Scene_Name.prototype.terminate=function(){this.terminated=true;};
         function NameEdit(){c.Window_Base.call(this);}
