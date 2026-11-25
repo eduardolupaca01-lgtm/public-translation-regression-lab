@@ -4377,7 +4377,7 @@ function startFullScan(){
                             files.splice(p,1);
                             var commonIndex=files.indexOf("CommonEvents.json");
                             if(scriptSystemContract(data)&&commonIndex>=0)files.splice(commonIndex+1,0,first);
-                            else files.unshift(first);
+                            else files.splice(fileAt,0,first);
                         }
                     }
                     scanDatabase(name,data);
