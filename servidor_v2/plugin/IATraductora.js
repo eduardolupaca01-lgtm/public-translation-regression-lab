@@ -3129,10 +3129,10 @@ function iavraFile(code){
     try{
         for(var i=0;i<parts.length-1;i++){
             current=path.join(current,parts[i]);
-            if(!directoryUnder(content,current)||path.normalize(fs.realpathSync(current))!==path.normalize(current))return null;
+            if(!directoryUnder(content,current))return null;
         }
         var file=path.join.apply(path,[content].concat(parts));
-        if(!regularUnder(content,file,16*1024*1024)||path.normalize(fs.realpathSync(file))!==path.normalize(file))return null;
+        if(!regularUnder(content,file,16*1024*1024))return null;
         return file;
     }catch(_){return null;}
 }
