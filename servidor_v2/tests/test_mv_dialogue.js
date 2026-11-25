@@ -2678,7 +2678,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R24-20261125"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R25-20261125"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -3641,7 +3641,73 @@ async function testR24WholeDynamicPicturesAndGlyphs(){
         console.log("IA_R24_DTEXT_"+(mz?"MZ":"MV")+"_WHOLE_LABEL_PASS");
     }
 }
+async function testR25MZBufferedMessageFlowAndShortLabels(){
+    const f=fixture(1,{mz:true,testHooks:true,configure(c){
+        c.$dataSystem={locale:"en_US"};
+        // Model the native MZ buffer and page contract. No game scripts or
+        // images are needed to reproduce the difference from MV glyph paint.
+        c.Window_Message.prototype.textWidth=function(value){return String(value).length*8;};
+        c.Window_Message.prototype.flushTextState=function(ts){
+            if(ts.buffer){
+                const w=this.textWidth(ts.buffer);
+                assert.ok(ts.x+w<=112,"buffer escaped visible text area");
+                this.seen+=ts.buffer;ts.x+=w;ts.buffer="";
+            }
+        };
+        c.Window_Message.prototype.processCharacter=function(ts){
+            const ch=ts.text[ts.index++];
+            if(ch==="\n"){
+                this.flushTextState(ts);ts.x=ts.startX;ts.y+=ts.height;
+                if(ts.y+ts.height>this.contents.height){this.pages++;ts.y=0;}
+                this.lines++;return;
+            }
+            if(ch==="\x1b"){
+                this.flushTextState(ts);
+                const ctrl=/^(?:C\[\d+\]|I\[\d+\]|\.)/.exec(ts.text.slice(ts.index));
+                assert.ok(ctrl,"control was split or changed");ts.index+=ctrl[0].length;
+                if(/^I/.test(ctrl[0])){assert.ok(ts.x+36<=112);ts.x+=36;this.icons++;}
+                if(ctrl[0]===".")this.waits++;
+                return;
+            }
+            ts.buffer+=ch;
+        };
+    }});
+    const c=f.context,t=c.window.__IA_TRADUCTORA_TEST__;
+    assert.equal(t.r22EnglishSource("Indeed!","message"),"en");
+    assert.equal(t.r22EnglishSource("Quiet corner","choice"),"en");
+    assert.equal(t.r22EnglishSource("The traveler’s shelter","message"),"en");
+    assert.equal(t.r22EnglishSource("Mattew","message"),null);
+    assert.equal(t.r22EnglishSource("sprite.png","message"),null);
+    assert.equal(t.r22EnglishSource("$gameVariables.value(2)","message"),null);
+    assert.equal(t.r22EnglishSource("Situación","command"),null);
+    const b=new c.Bitmap(200,50);b.drawText("Travel",0,0,200,32);
+    assert.equal(b.lastText,"Viajar");
+    const raw="Una frase larga que conserva toda la información. \x1bC[2]Extraordinariamenteextensa \x1bI[7] después.\x1b.";
+    for(const fast of [false,true]){
+        const win=new c.Window_Message();
+        win.contents=new c.Bitmap(240,64);
+        win.contents.outlineWidth=2;win.innerWidth=124;
+        win.seen="";win.lines=0;win.pages=1;win.icons=0;win.waits=0;
+        const ts=win._textState={text:raw,index:0,x:16,startX:16,y:0,height:32,width:100,buffer:"",drawing:true,rtl:false};
+        let steps=0;
+        while(ts.index<ts.text.length&&steps++<1000){
+            win.processCharacter(ts);
+            if(!fast)win.flushTextState(ts);
+        }
+        win.flushTextState(ts);
+        assert.ok(steps<1000&&win.lines>3&&win.pages>1);
+        assert.equal(win.icons,1);assert.equal(win.waits,1);
+        assert.equal(ts.text.replace(/\n/g,""),raw,"only display newlines are inserted");
+        assert.equal(win.seen,raw.replace(/\x1b(?:C\[\d+\]|I\[\d+\]|\.)/g,""),"every original visible character preserved");
+    }
+    // An already-localized or non-English game must not activate broad
+    // English guessing in its native message/choice fields.
+    const es=fixture(1,{mz:true,testHooks:true,configure(c){c.$dataSystem={locale:"es_ES"};}});
+    assert.equal(es.context.window.__IA_TRADUCTORA_TEST__.r22EnglishSource("Buenos dias","message"),null);
+    console.log("IA_R25_MZ_BUFFER_WIDTH_PAGING_AND_LABELS_PASS");
+}
 (async()=>{
+    await testR25MZBufferedMessageFlowAndShortLabels();
     await testR24WholeDynamicPicturesAndGlyphs();
     await testHalvaNativePersistentBridge();
     await testR22MvPhysicalKeyMenusAndNativeFlow();
