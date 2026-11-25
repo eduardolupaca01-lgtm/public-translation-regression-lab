@@ -1907,7 +1907,7 @@ async function testLargeCommonEventsJsonIsParsedIncrementally(){
         while(!f.context.scanStats.done&&Date.now()<deadline)await wait(10);
     }finally{clearInterval(heartbeat);}
     assert.ok(f.context.scanStats.done,"large CommonEvents inventory must finish");
-    assert.ok(f.context.discovered.has("en\\u0000"+finalText),
+    assert.ok(f.context.discovered.has("en\u0000"+finalText),
         "last CommonEvents entry must be parsed and inventoried even while bulk prefetch is paused");
     assert.ok(f.jsonParseSizes.length>=events.length,
         "CommonEvents entries must be parsed individually, not as one giant array");
@@ -1942,7 +1942,7 @@ async function testInventoryHasNoFortyThousandTextCeiling(){
     assert.ok(f.context.scanStats.done,"full inventory must finish without a candidate-count cutoff");
     assert.ok(f.context.discovered.size>40000,
         "the inventory must exceed the former 40,000-text ceiling");
-    assert.ok(f.context.discovered.has("en\\u0000"+lastText),
+    assert.ok(f.context.discovered.has("en\u0000"+lastText),
         "the final unique event text must be present after the former cutoff");
     assert.equal(f.context.scanStats.limited,false,
         "a large number of valid texts must not be reported as a truncated inventory");
