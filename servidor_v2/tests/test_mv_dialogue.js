@@ -2534,24 +2534,31 @@ async function testR7VerifiedVariableSurfaces(){
 
 
 async function testR11NevDialogUiAlignmentLateRedraw(){
-    const body="We are ready to open the gate.";
-    const raw="\\AC "+body;
-    const response={};response[body]="Estamos listos para abrir la puerta.";
-    const f=fixture(55,{responses:response,nativeWait:true,nativePaint:true,
-        configure:function(c){c.Window_Message.prototype._textAlignment="center";}});
-    await wait(30);
-    const c=f.context;c.SceneManager._scene=new c.Scene_Map();
-    const m=new c.Window_Message();f.$gameMessage._texts=[raw];m.startMessage();
-    if(m.contents)m.contents._iaOwnerWindow=m;
-    assert.equal(m.originalStarts,1);
-    m.finishPage();
-    await wait(140);
-    m.update();
-    assert.ok(f.posts.some(function(p){return p.text===body;}),"the alignment control must be preserved while translating the prose");
-    assert.ok(m.contents.ops.some(function(op){return op.text.indexOf("Estamos listos")>=0;}),
-        "NEV_DialogUI centered text must receive a late Spanish repaint");
-    assert.ok(!m.contents.ops.some(function(op){return op.text.indexOf(body)>=0;}),
-        "the English line must not remain under the Spanish repaint");
+    for(const [code,mode] of [["\\AC","center"],["\\AR","right"],["\\AL","left"],["\\ALIGN[center]","center"]]){
+        const body="We are ready to open the gate.";
+        const spanish="Estamos listos para abrir la puerta.";
+        const raw=code+" "+body;
+        const f=fixture(55,{mz:true,responses:{[body]:spanish},nativeWait:true,nativePaint:true,
+            configure:function(c){c.Window_Message.prototype._textAlignment=mode;}});
+        await wait(30);
+        const c=f.context;c.SceneManager._scene=new c.Scene_Map();
+        const m=new c.Window_Message();f.$gameMessage._texts=[raw];m.startMessage();
+        if(m.contents)m.contents._iaOwnerWindow=m;
+        assert.equal(m.originalStarts,1);
+        m.finishPage();
+        const deadline=Date.now()+3000;
+        while(Date.now()<deadline&&!m.contents.ops.some(op=>op.text==="Estamos")){await wait(40);m.update();}
+        assert.ok(f.posts.some(p=>p.text===body),"only prose must be sent; alignment is protected");
+        const lines=m.contents.ops.filter(op=>op.text!=="FACE");
+        assert.equal(lines.map(op=>op.text).join(" "),spanish,"the complete Spanish message is drawn in native word runs");
+        assert.ok(!lines.some(op=>op.text.includes(body)||op.text.includes(code)));
+        assert.equal(m.originalStarts,1,"no repeated scene or message start");
+        assert.equal(f.$gameMessage.allText(),raw,"game message remains original during late repaint");
+        assert.ok(m.contents.ops.some(op=>op.text==="FACE"),"portrait is preserved");
+        const natural=spanish.length*12;
+        const expected=168+(mode==="left"?0:Math.floor((m.contents.width-168-natural)/(mode==="center"?2:1)));
+        assert.equal(lines[0].x,expected,"Spanish is aligned using its own measured width");
+    }
 }
 
 async function testR11QteBitmapFirstPaint(){
@@ -2585,6 +2592,58 @@ async function testR11QteBitmapFirstPaint(){
     await wait(120);
     assert.ok(!cleared.ops.some(function(op){return op.text==="Tienda";}),
         "clearing a custom bitmap must cancel its pending translation repaint");
+}
+
+
+async function testR11DirectCanvasAtomicFirstView(){
+    const responses={"Press any key to start":"Pulsa una tecla para empezar.","Click to continue":"Haz clic para continuar."};
+    function install(c){
+        Object.defineProperty(c.Bitmap.prototype,"context",{configurable:true,get:function(){
+            if(this._context)return this._context;
+            const b=this,w=b.width,h=b.height;
+            let pixels=new Uint8ClampedArray(w*h*4);
+            const ctx={font:"12px GameFont",textAlign:"left",textBaseline:"top",
+                fillStyle:"#ffffff",strokeStyle:"#000000",globalCompositeOperation:"source-over",
+                globalAlpha:1,save(){},restore(){},getTransform(){return {a:1,b:0,c:0,d:1,e:0,f:0};},
+                measureText(s){return {width:String(s).length*2};},
+                getImageData(){return {width:w,height:h,data:new Uint8ClampedArray(pixels)};},
+                putImageData(im){pixels=new Uint8ClampedArray(im.data);},
+                clearRect(){pixels.fill(0);},
+                mark(x,y){pixels[(y*w+x)*4]=231;pixels[(y*w+x)*4+3]=255;}};
+            function paint(t,x,y,stroke){
+                Array.from(String(t)).forEach((ch,i)=>{
+                    const px=x+i,py=y+(stroke?0:1);if(px>=w||py>=h)return;
+                    const at=(py*w+px)*4;pixels[at]=ch.charCodeAt(0)%251;pixels[at+1]=stroke?20:40;pixels[at+3]=255;
+                });
+            }
+            ctx.strokeText=(t,x,y)=>paint(t,x,y,true);
+            ctx.fillText=(t,x,y)=>paint(t,x,y,false);
+            b._context=ctx;return ctx;
+        }});
+    }
+    const f=fixture(55,{mz:true,responses,plugins:[{name:"NEV_GameHub",status:true,parameters:{}}],configure:install});
+    await wait(35);
+    const c=f.context;c.SceneManager._scene=new c.Scene_Map();
+    const draw=(b,text,y)=>vm.runInNewContext("b.context.strokeText(text,3,y,90);b.context.fillText(text,3,y,90);",{b,text,y},{filename:"NEV_GameHub.js"});
+    const b=new c.Bitmap(120,50);b.context.mark(1,1);
+    draw(b,"Press any key to start",5);draw(b,"Click to continue",20);
+    const expected=new c.Bitmap(120,50);expected.context.mark(1,1);
+    draw(expected,responses["Press any key to start"],5);draw(expected,responses["Click to continue"],20);
+    const until=async pred=>{const end=Date.now()+3500;while(!pred()&&Date.now()<end)await wait(40);assert.ok(pred());};
+    const bytes=x=>Buffer.from(x.context.getImageData().data);
+    await until(()=>bytes(b).equals(bytes(expected)));
+    assert.ok(f.posts.some(p=>p.text==="Press any key to start")&&f.posts.some(p=>p.text==="Click to continue"));
+    assert.ok(bytes(b).equals(bytes(expected)),"both outline and fill are replaced on the original bitmap; background remains");
+    const stale=fixture(80,{mz:true,responses,plugins:[{name:"NEV_GameHub",status:true,parameters:{}}],configure:install});
+    await wait(30);const sc=stale.context;sc.SceneManager._scene=new sc.Scene_Map();
+    const removed=new sc.Bitmap(120,50);draw(removed,"Press any key to start",5);removed.context.clearRect();
+    const reused=new sc.Bitmap(120,50);draw(reused,"Click to continue",5);reused.context.mark(110,40);
+    const old=bytes(reused);
+    await wait(350);
+    assert.ok(bytes(removed).every(x=>x===0),"a cleared canvas never gets old text back");
+    assert.ok(bytes(reused).equals(old),"any intervening paint prevents stale pixel replacement");
+    const unchanged=new c.Bitmap(120,50);draw(unchanged,"12345",5);draw(unchanged,"Aldren",20);
+    assert.ok(!f.posts.some(p=>p.text==="12345"||p.text==="Aldren"),"numbers and arbitrary names are not translated");
 }
 
 async function testR8GeneralDisplaySurfaces(){
@@ -2707,6 +2766,7 @@ async function testR8GeneralDisplaySurfaces(){
     await testR8GeneralDisplaySurfaces();
     await testR11NevDialogUiAlignmentLateRedraw();
     await testR11QteBitmapFirstPaint();
+    await testR11DirectCanvasAtomicFirstView();
     await testR7AuthoredScriptAndPicture();
     await testR7VerifiedVariableSurfaces();
     await testR6FirstViewNativeGate(false);

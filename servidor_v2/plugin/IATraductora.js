@@ -665,8 +665,8 @@ function languageFor(s){
 // sentence-like. Restrict one-word inference to a conservative UI vocabulary;
 // multiword labels use explicit English signals and never inspect script text.
 var displayUiWords=Object.create(null),displaySignalWords=Object.create(null);
-("accept back shop read help options save load continue exit quit cancel confirm yes no start next previous return retry resume pause menu settings close open buy sell talk interact select choose skip inventory equipment status profile journal quests quest map guide information details more less done finish apply reset default enabled disabled agree decline reject gift compliment popup rules bet shoe chips flowers prize grab round level score").split(" ").forEach(function(w){displayUiWords[w]=true;});
-("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door click press key target ring closes wrong means instant fail start").split(" ").forEach(function(w){displaySignalWords[w]=true;});
+("accept back shop read help options save load continue exit quit cancel confirm yes no start next previous return retry resume pause menu settings close open buy sell talk interact select choose skip inventory equipment status profile journal quests quest map guide information details more less done finish apply reset default enabled disabled agree decline reject gift compliment popup rules bet shoe chips flowers prize grab round level score mash timing swipe arrows rotate tracking reaction hold release").split(" ").forEach(function(w){displayUiWords[w]=true;});
+("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door click press key target ring closes wrong means instant fail start tap space fill bar time runs lands green zone drag cursor path arrows matching arrow charge gauge release inside target band rotate moving capture reaction marker clicking").split(" ").forEach(function(w){displaySignalWords[w]=true;});
 function displaySource(text,context){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
        externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
@@ -687,7 +687,7 @@ function displaySource(text,context){
     return null;
 }
 // Never send game control sequences (including character names) to OPUS.
-var controlRE=/(?:\\|\x1b)[Tt][Ll]\{[^{}\r\n]{1,300}\}|\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|(?:fi|fb|fr|lson|lsoff|playtime|msgreset|auto)(?=[A-Za-z])|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!.,|^<>$])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<(?!\/?[Ii][Ff]\s+[^<>]{1,80}\s+[Cc]apped>)[\/]?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|[<>]|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
+var controlRE=/(?:\\|\x1b)(?:[Aa][CcLlRr](?![A-Za-z])|[Aa][Ll][Ii][Gg][Nn]\[[A-Za-z]{1,10}\])|(?:\\|\x1b)[Tt][Ll]\{[^{}\r\n]{1,300}\}|\\(?:[A-Za-z]{1,12}\[[^\]\r\n]{0,120}\]|[A-Za-z]{1,12}<[^>\r\n]{1,120}>|(?:fi|fb|fr|lson|lsoff|playtime|msgreset|auto)(?=[A-Za-z])|[A-Za-z]{1,12}\b|[{}!.,|^<>$\\])|\x1b(?:[mM]\[[A-Za-z0-9 _\-]{1,60}\]|[A-Za-z]+\[[0-9]{1,8}\]|[{}!.,|^<>$])|%(?:[0-9]{1,3}|[sdf])|\$\{[A-Za-z0-9_]{1,50}\}|\r?\n|<(?!\/?[Ii][Ff]\s+[^<>]{1,80}\s+[Cc]apped>)[\/]?[A-Za-z][A-Za-z0-9 _.,:'"=\/#%+\-]{0,100}>|[<>]|\([A-Za-z]{1,10}:[^()\r\n]{1,100}\)/g;
 // Brackets at a segment's edges are presentation, not instructions for OPUS.
 // Preserve them byte-for-byte, including an opening/closing bracket on separate
 // native lines. Internal punctuation stays in the sentence for grammar.
@@ -2125,7 +2125,7 @@ function hookNativeSurface(){
     }
     if(typeof Bitmap!=="undefined"&&Bitmap.prototype&&typeof Bitmap.prototype.drawText==="function"){
         var bitmapDraw=Bitmap.prototype.drawText;
-        var bitmapReplayDepth=0,bitmapJobs=[],bitmapPollScheduled=false;
+        var bitmapReplayDepth=0,bitmapNativeDepth=0,bitmapJobs=[],bitmapPollScheduled=false;
         function bitmapTextRect(bitmap,args){
             var x=Number(args[1]),y=Number(args[2]),mw=Number(args[3]),lh=Number(args[4]);
             if(!isFinite(x)||!isFinite(y)||!integer(bitmap.width)||!integer(bitmap.height)||
@@ -2186,7 +2186,7 @@ function hookNativeSurface(){
             if(!bitmap||bitmapJobs.length>=64||typeof Bitmap!=="function"||
                typeof bitmap.blt!=="function"||typeof bitmap.clearRect!=="function")return null;
             var rect=bitmapTextRect(bitmap,args);if(!rect)return null;
-            invalidateBitmapJobs(bitmap,rect,true);
+            invalidateBitmapJobs(bitmap,rect,false);
             var backup=null;
             try{
                 backup=new Bitmap(rect.w,rect.h);
@@ -2202,7 +2202,8 @@ function hookNativeSurface(){
             var job={
                 bitmap:bitmap,backup:backup,rect:rect,width:bitmap.width,height:bitmap.height,
                 source:source,original:raw,args:args.slice(),draw:bitmapDraw,style:style,
-                deadline:Date.now()+30000,valid:true,disposed:false
+                deadline:Date.now()+30000,valid:true,disposed:false,
+                scene:typeof SceneManager!=="undefined"?SceneManager._scene:null,formEpoch:formEpoch
             };
             if(!bitmap._iaDrawJobs)bitmap._iaDrawJobs=[];
             bitmap._iaDrawJobs.push(job);bitmapJobs.push(job);
@@ -2235,7 +2236,9 @@ function hookNativeSurface(){
             bitmapPollScheduled=false;
             var now=Date.now();
             bitmapJobs.slice().forEach(function(job){
-                if(!job.valid||!job.bitmap||job.bitmap.width!==job.width||job.bitmap.height!==job.height){
+                if(!job.valid||!job.bitmap||job.bitmap.width!==job.width||job.bitmap.height!==job.height||
+                   inputFormActive()||job.formEpoch!==formEpoch||
+                   (typeof SceneManager!=="undefined"&&SceneManager._scene!==job.scene)){
                     disposeBitmapJob(job);return;
                 }
                 var translated=null;
@@ -2262,7 +2265,8 @@ function hookNativeSurface(){
                 if(!bitmapReplayDepth){
                     var rect=null;
                     try{rect=rectFor?rectFor(this,arguments):null;}catch(_){}
-                    invalidateBitmapJobs(this,rect,true);
+                    invalidateBitmapJobs(this,rect,false);
+                    dropSurfaceGroup(this);
                 }
                 return original.apply(this,arguments);
             };
@@ -2292,10 +2296,221 @@ function hookNativeSurface(){
         ["clear","fillAll","destroy","resize"].forEach(function(name){
             hookBitmapMutator(name,function(){return null;});
         });
+
+        // Direct Canvas calls bypass Bitmap.drawText. Bind only the contexts
+        // of actual RPG Bitmap objects, never the global Canvas prototype.
+        // Late replacement is a bounded pixel-verified native redraw, not
+        // a new visible layer. The original surface must still be identical.
+        var nevCanvasPlugins=Object.create(null),surfaceGroups=[],surfacePoll=false;
+        if(isMZ&&typeof $plugins!=="undefined"&&Array.isArray($plugins)){
+            $plugins.forEach(function(p){
+                if(p&&p.status&&/^NEV_[A-Za-z0-9_]+$/.test(p.name))nevCanvasPlugins[p.name]=true;
+            });
+        }
+        var nevCanvasEnabled=Object.keys(nevCanvasPlugins).length>0;
+        var canvasStyles=["font","textAlign","textBaseline","direction","fillStyle","strokeStyle",
+            "globalAlpha","globalCompositeOperation","lineWidth","lineCap","lineJoin","miterLimit",
+            "shadowColor","shadowBlur","shadowOffsetX","shadowOffsetY","filter","fontKerning",
+            "fontStretch","fontVariantCaps","letterSpacing","wordSpacing","textRendering"];
+        function surfaceStyle(o,keys){
+            var style={};keys.forEach(function(k){if(o[k]!==undefined)style[k]=o[k];});return style;
+        }
+        function pixelEqual(a,b){
+            if(!a||!b||a.width!==b.width||a.height!==b.height||a.data.length!==b.data.length)return false;
+            for(var i=0;i<a.data.length;i++)if(a.data[i]!==b.data[i])return false;
+            return true;
+        }
+        function dropGroup(group){
+            if(!group||group.disposed)return;
+            group.disposed=true;
+            if(group.bitmap&&group.bitmap._iaSurfaceGroup===group)group.bitmap._iaSurfaceGroup=null;
+            var index=surfaceGroups.indexOf(group);if(index>=0)surfaceGroups.splice(index,1);
+            group.before=group.after=null;group.ops=[];
+        }
+        function dropSurfaceGroup(bitmap){if(bitmap)dropGroup(bitmap._iaSurfaceGroup);}
+        function rawContext(bitmap){
+            if(!nevCanvasEnabled||!bitmap||!integer(bitmap.width)||!integer(bitmap.height)||
+               bitmap.width<1||bitmap.height<1||bitmap.width*bitmap.height>262144)return null;
+            try{
+                var c=bitmap.context;
+                return c&&typeof c.getImageData==="function"&&typeof c.putImageData==="function"?c:null;
+            }catch(_){return null;}
+        }
+        function groupCurrent(group){
+            return !group.disposed&&group.bitmap._iaSurfaceGroup===group&&
+                group.bitmap.width===group.width&&group.bitmap.height===group.height&&
+                !group.bitmap._iaOwnerWindow&&group.bitmap.context===group.ctx&&
+                typeof SceneManager!=="undefined"&&SceneManager._scene===group.scene&&
+                !inputFormActive()&&group.formEpoch===formEpoch;
+        }
+        function groupPixels(group){return group.ctx.getImageData(0,0,group.width,group.height);}
+        function prepareSurfaceGroup(bitmap,ctx,source){
+            if(!ctx||bitmapReplayDepth||bitmapNativeDepth||inputFormActive()||
+               bitmap._iaOwnerWindow||typeof SceneManager==="undefined"||!SceneManager._scene)return null;
+            var group=bitmap._iaSurfaceGroup;
+            try{
+                if(group&&(!groupCurrent(group)||group.ctx!==ctx||group.ops.length>=24||
+                   !pixelEqual(group.after,groupPixels(group)))){dropGroup(group);group=null;}
+                if(group)return group;
+                if(!source||surfaceGroups.length>=4||Date.now()<(bitmap._iaSurfaceCooldown||0))return null;
+                group={bitmap:bitmap,ctx:ctx,scene:SceneManager._scene,formEpoch:formEpoch,
+                    width:bitmap.width,height:bitmap.height,deadline:Date.now()+30000,ops:[],disposed:false};
+                group.before=groupPixels(group);group.after=group.before;
+                bitmap._iaSurfaceGroup=group;surfaceGroups.push(group);
+                return group;
+            }catch(_){if(group)dropGroup(group);return null;}
+        }
+        function finishSurfaceGroup(group,op){
+            if(!group||group.disposed)return;
+            try{group.ops.push(op);group.after=groupPixels(group);}
+            catch(_){dropGroup(group);return;}
+            if(!surfacePoll){surfacePoll=true;setTimeout(pollSurfaceGroups,80);}
+        }
+        function canvasArgs(args,value,limit){
+            var result=args.slice();result[0]=value;
+            if(isFinite(limit)&&limit>0)result[3]=limit;
+            return result;
+        }
+        function replaySurfaceGroup(group,values){
+            var stage=null;
+            bitmapReplayDepth++;
+            try{
+                if(!groupCurrent(group)||!pixelEqual(group.after,groupPixels(group)))return false;
+                stage=new Bitmap(group.width,group.height);
+                var sc=stage.context;
+                if(!sc||typeof sc.putImageData!=="function"||typeof sc.getImageData!=="function")return false;
+                function render(translated){
+                    sc.putImageData(group.before,0,0);
+                    group.ops.forEach(function(op,i){
+                        var value=translated?values[i]:null;
+                        if(op.method==="bitmap"){
+                            nativeStyleKeys.forEach(function(k){if(op.style[k]!==undefined)stage[k]=op.style[k];});
+                            var a=op.args.slice();if(value!==null&&value!==undefined)a[0]=value;
+                            withQuestGlyphs(stage,a[0],function(){return bitmapDraw.apply(stage,a);});
+                        }else{
+                            sc.save();
+                            try{
+                                canvasStyles.forEach(function(k){if(op.style[k]!==undefined)sc[k]=op.style[k];});
+                                var a=value!==null&&value!==undefined?canvasArgs(op.args,value,op.limit):op.args;
+                                sc[op.method].apply(sc,a);
+                            }finally{sc.restore();}
+                        }
+                    });
+                    return sc.getImageData(0,0,group.width,group.height);
+                }
+                // A missing clip, transform, gradient or intervening paint
+                // must cause rejection, not deletion of the game's pixels.
+                if(!pixelEqual(render(false),group.after))return false;
+                var replacement=render(true);
+                if(!groupCurrent(group)||!pixelEqual(group.after,groupPixels(group)))return false;
+                group.ctx.putImageData(replacement,0,0);
+                var b=group.bitmap;
+                if(b._baseTexture&&typeof b._baseTexture.update==="function")b._baseTexture.update();
+                else if(typeof b._setDirty==="function")b._setDirty();
+                state.shown++;return true;
+            }catch(_){state.errors++;return false;}
+            finally{bitmapReplayDepth--;if(stage&&typeof stage.destroy==="function")try{stage.destroy();}catch(_){}}
+        }
+        function pollSurfaceGroups(){
+            surfacePoll=false;
+            surfaceGroups.slice().forEach(function(group){
+                try{
+                    if(!groupCurrent(group)){dropGroup(group);return;}
+                    var missing=false,changed=false,values=group.ops.map(function(op){
+                        if(!op.source)return null;
+                        var ready=readyText(op.source,op.args[0]);
+                        if(typeof ready==="string"&&validTranslation(op.source,op.args[0],ready,true)){
+                            changed=true;return ready;
+                        }
+                        if(rejectedKeys.get(op.source+"\u0000"+op.args[0])!==Infinity)missing=true;
+                        return null;
+                    });
+                    if(missing&&Date.now()<group.deadline)return;
+                    if(changed)replaySurfaceGroup(group,values);
+                    dropGroup(group);
+                }catch(_){dropGroup(group);}
+            });
+            if(surfaceGroups.length&&!surfacePoll){surfacePoll=true;setTimeout(pollSurfaceGroups,100);}
+        }
+        function canvasUiSource(raw){
+            if(typeof raw!=="string"||raw.length>240||!raw.trim()||actorNames[raw]||
+               /[\r\n\\\x1b<>{}\[\]]/.test(raw)||csvExecutableSyntax(raw))return null;
+            var value=raw.trim(),word=value.toLowerCase();
+            if(!(displayUiWords[word]||
+                /^(?:press|click|tap|hold|move|drag|select|choose|wait|open|close|return|use|keep|release|match|find)\s+\S/i.test(value)||
+                /^(?:game over|try again|time left|new game|game paused|game complete|next round|total score|round complete|time remaining)$/i.test(value)))return null;
+            // Only enabled, identified author UI plugins; exclude puzzle
+            // answers, login strings, editable labels and named characters.
+            var matches=String(new Error().stack||"").match(/\bNEV_[A-Za-z0-9_]+(?=\.js(?::|\?))/g)||[];
+            if(!matches.some(function(name){return nevCanvasPlugins[name]&&
+                !/(?:WifiLogin|WordScramble|Signature|ClueNote|Sport|PicturePosHelper|Tinker|Message|DialogUI)/i.test(name);}))return null;
+            return displaySource(raw,"surface")==="en"?"en":null;
+        }
+        function canvasCanStage(ctx){
+            try{
+                var m=ctx.getTransform();
+                return m.a===1&&m.b===0&&m.c===0&&m.d===1&&m.e===0&&m.f===0&&
+                    ctx.globalCompositeOperation==="source-over"&&
+                    typeof ctx.fillStyle==="string"&&typeof ctx.strokeStyle==="string";
+            }catch(_){return false;}
+        }
+        function bindCanvasContext(bitmap,ctx){
+            if(!nevCanvasEnabled||!ctx||ctx._iaCanvasBound)return ctx;
+            try{
+                Object.defineProperty(ctx,"_iaCanvasBound",{value:true});
+                ["fillText","strokeText"].forEach(function(method){
+                    var original=ctx[method];if(typeof original!=="function")return;
+                    ctx[method]=function(){
+                        if(this!==ctx||bitmapReplayDepth||bitmapNativeDepth||identityDrawDepth||surfaceDepth||
+                           bitmap._iaOwnerWindow||inputFormActive())return original.apply(this,arguments);
+                        var args=Array.prototype.slice.call(arguments),source=canvasUiSource(args[0]),limit=null;
+                        if(source){
+                            try{
+                                var natural=Number(ctx.measureText(args[0]).width),given=Number(args[3]);
+                                limit=isFinite(given)&&given>0?given:natural;
+                                var value=readyText(source,args[0]);
+                                if(value===null)value=englishLabel(args[0]);
+                                if(typeof value==="string"&&value!==args[0]){
+                                    args=canvasArgs(args,value,limit);source=null;
+                                    if(method==="fillText")state.shown++;
+                                }else if(value===null)firstViewRequest(source,args[0]);
+                                else source=null;
+                            }catch(_){source=null;}
+                        }
+                        var group=null;
+                        if(canvasCanStage(ctx)&&rawContext(bitmap)===ctx)group=prepareSurfaceGroup(bitmap,ctx,source);
+                        else dropSurfaceGroup(bitmap);
+                        if(bitmap._iaDrawJobs)invalidateBitmapJobs(bitmap,null,false);
+                        var style=group?surfaceStyle(ctx,canvasStyles):null,out;
+                        try{out=original.apply(ctx,args);}
+                        catch(e){dropGroup(group);throw e;}
+                        if(group)finishSurfaceGroup(group,{method:method,args:args,source:source,style:style,limit:limit});
+                        return out;
+                    };
+                });
+            }catch(_){}
+            return ctx;
+        }
+        if(nevCanvasEnabled){
+            var contextDescriptor=Object.getOwnPropertyDescriptor(Bitmap.prototype,"context");
+            if(contextDescriptor&&contextDescriptor.configurable&&typeof contextDescriptor.get==="function"){
+                Object.defineProperty(Bitmap.prototype,"context",{
+                    configurable:true,enumerable:contextDescriptor.enumerable,
+                    get:function(){return bindCanvasContext(this,contextDescriptor.get.call(this));}
+                });
+            }
+        }
+        function callBitmapDraw(bitmap,args){
+            bitmapNativeDepth++;
+            try{return withQuestGlyphs(bitmap,args[0],function(){return bitmapDraw.apply(bitmap,args);});}
+            finally{bitmapNativeDepth--;}
+        }
         Bitmap.prototype.drawText=function(){
-            if(inputFormActive())return bitmapDraw.apply(this,arguments);
+            if(bitmapReplayDepth||inputFormActive())return callBitmapDraw(this,arguments);
             var args=Array.prototype.slice.call(arguments),raw=typeof args[0]==="string"?args[0]:null;
-            var direct=!!(raw&&!surfaceDepth&&!identityDrawDepth&&!this._iaOwnerWindow),job=null;
+            var direct=!!(raw&&!surfaceDepth&&!identityDrawDepth&&!this._iaOwnerWindow),job=null,source=null,group=null;
+            if(!bitmapReplayDepth&&this._iaDrawJobs)invalidateBitmapJobs(this,bitmapTextRect(this,args),false);
+            if(!direct)dropSurfaceGroup(this);
             try{
                 if(!identityDrawDepth&&raw&&raw.length>=1){
                     var label=questCachedLabel(raw);
@@ -2303,12 +2518,17 @@ function hookNativeSurface(){
                     if(label===null)label=nativeDisplayProjection(raw,"surface",this);
                     args[0]=label!==null?label:translatedNativeLabel(raw,false);
                     if(direct&&label===null&&args[0]===raw){
-                        var source=displaySource(raw,"surface");
-                        if(source&&readyText(source,raw)===null)job=captureBitmapJob(this,args,source,raw);
+                        source=displaySource(raw,"surface");
+                        if(source&&readyText(source,raw)!==null)source=null;
                     }
                 }
             }catch(_){state.errors++;}
-            var bitmap=this,out=withQuestGlyphs(bitmap,args[0],function(){return bitmapDraw.apply(bitmap,args);});
+            var bitmap=this,ctx=direct?rawContext(bitmap):null;
+            if(ctx)group=prepareSurfaceGroup(bitmap,ctx,source);
+            else if(direct&&source&&!nevCanvasEnabled)job=captureBitmapJob(bitmap,args,source,raw);
+            var style=group?surfaceStyle(bitmap,nativeStyleKeys):null,out;
+            try{out=callBitmapDraw(bitmap,args);}catch(e){dropGroup(group);if(job)disposeBitmapJob(job);throw e;}
+            if(group)finishSurfaceGroup(group,{method:"bitmap",args:args,source:source,style:style});
             if(job)scheduleBitmapPoll();
             return out;
         };
@@ -2369,8 +2589,8 @@ function nativeRenderParts(text){
             text=head[1]+name+head[3]+text.slice(head[0].length);
         }
     }
-    var re=/<\/?wordwrap>|\\n[cr]?<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:AC|c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\]|i\[\d{1,4}\])|\r?\n|<br>/gi;
-    var parts=[],flat="",at=0,m,color=null,seen=false;
+    var re=/<\/?wordwrap>|\\n[cr]?<[^\\<>\r\n]{1,75}>|(?:\\|\x1b)(?:ALIGN\[(?:left|center|right)\]|A[CLR](?![A-Za-z])|c\[\d{1,3}\]|m\[[A-Za-z0-9 _\-]{1,60}\]|i\[\d{1,4}\])|\r?\n|<br>/gi;
+    var parts=[],flat="",at=0,m,color=null,seen=false,alignment=null;
     function prose(value){
         if(/[\\\x1b<>|\f]/.test(value))return false;
         if(value){parts.push({text:value,color:color});flat+=value;if(value.trim())seen=true;}
@@ -2381,8 +2601,15 @@ function nativeRenderParts(text){
         var code=m[0];at=re.lastIndex;
         if(/^\\n[cr]?</i.test(code)){if(seen)return null;continue;}
         if(/^<\/?wordwrap>$/i.test(code))continue;
-        // NEV_DialogUI uses the AC control for centered message text; its native text-state x already contains the center offset.
-        if(/^(?:\\|\x1b)AC$/i.test(code))continue;
+        // NEV_DialogUI processes alignment while rendering, after createTextState.
+        // Only a leading whole-message alignment is safe for a late repaint.
+        var align=/^(?:\\|\x1b)(?:A([CLR])|ALIGN\[(left|center|right)\])$/i.exec(code);
+        if(align){
+            if(seen)return null;
+            var mode=align[2]?align[2].toLowerCase():({C:"center",L:"left",R:"right"})[align[1].toUpperCase()];
+            if(alignment&&alignment!==mode)return null;
+            alignment=mode;continue;
+        }
         if(/^(?:\r?\n|<br>)$/i.test(code)){parts.push({text:"\n",color:color});flat+="\n";continue;}
         var icon=/^(?:\\|\x1b)i\[(\d{1,4})\]$/i.exec(code);
         if(icon){var id=Number(icon[1]);if(id>4095)return null;
@@ -2390,7 +2617,7 @@ function nativeRenderParts(text){
         color=formatColor(code);if(color===null)return null;
     }
     if(!prose(text.slice(at))||!flat.trim())return null;
-    return {parts:parts,flat:flat};
+    return {parts:parts,flat:flat,alignment:alignment};
 }
 function plainCompare(text){return text.replace(/\s+/g," ").trim();}
 var nativeStyleKeys=["fontFace","fontSize","fontBold","fontItalic","textColor","outlineColor","outlineWidth","paintOpacity"];
@@ -2412,12 +2639,26 @@ function snapshotMessage(win,ticket){
     }
     if(signature(original)!==signature(native))return;
     var x=typeof ts.x==="number"?ts.x:ts.left,y=ts.y,h=ts.height;
+    if(original.alignment&&native.alignment&&original.alignment!==native.alignment)return;
+    var alignment=original.alignment||native.alignment||
+        (Array.isArray(ts._lineOffsets)&&/^(?:left|center|right)$/.test(win._textAlignment||"")?win._textAlignment:null);
+    var rightPad=0;
+    if(alignment){
+        var pad=typeof win.itemPadding==="function"?Number(win.itemPadding()):0;
+        if(!isFinite(pad)||pad<0||pad>64)return;
+        rightPad=pad;
+        if(typeof ts._baseX==="number"&&isFinite(ts._baseX))x=ts._baseX;
+        // Explicit NEV controls calculate their base from itemPadding, not
+        // the original English line's offset. Never move into a face area.
+        if(original.alignment&&typeof ticket.message.faceName==="function"&&!ticket.message.faceName()&&
+           typeof win.itemPadding==="function"&&typeof ts._baseX==="number")x=pad;
+    }
     if(!isFinite(x)||!isFinite(y)||!isFinite(h)||x<0||y<0||h<8||h>128||
        x>=b.width||y>=b.height)return;
     var style={};
     nativeStyleKeys.forEach(function(k){if(b[k]!==undefined)style[k]=b[k];});
     ticket.geometry={bitmap:b,x:Math.floor(x),y:Math.floor(y),line:Math.ceil(h),
-        width:b.width,height:b.height,style:style,original:native.flat};
+        width:b.width,height:b.height,style:style,original:native.flat,align:alignment,rightPad:rightPad};
 }
 function planNativeWords(parsed,bitmap,win,geometry){
     var words=[],word=[],space=false;
@@ -2436,7 +2677,8 @@ function planNativeWords(parsed,bitmap,win,geometry){
     }
     flush();
     var left=geometry.x,top=geometry.y,line=geometry.line,
-        width=geometry.width-left,height=geometry.height-top,ops=[],x=0,y=0;
+        width=geometry.width-left-(geometry.rightPad||0),height=geometry.height-top,ops=[],x=0,y=0;
+    if(parsed.alignment&&parsed.alignment!==geometry.align)return null;
     if(width<=0||height<line)return null;
     var gap=bitmap.measureTextWidth(" ");
     for(var j=0;j<words.length;j++){
@@ -2451,9 +2693,14 @@ function planNativeWords(parsed,bitmap,win,geometry){
         for(var k=0;k<w.runs.length;k++){
             var r=w.runs[k],c=r.color===null?geometry.style.textColor:nativeTextColor(win,r.color);
             if(typeof c!=="string")return null;
-            ops.push({text:r.text,x:x,y:y,w:Math.max(1,Math.ceil(lengths[k])+4),color:c,icon:r.icon});
+            ops.push({text:r.text,x:x,y:y,w:Math.max(1,Math.ceil(lengths[k])+4),advance:lengths[k],color:c,icon:r.icon});
             x+=lengths[k];
         }
+    }
+    if(geometry.align==="center"||geometry.align==="right"){
+        var rowWidths=Object.create(null);
+        ops.forEach(function(op){rowWidths[op.y]=Math.max(rowWidths[op.y]||0,op.x+op.advance);});
+        ops.forEach(function(op){var free=Math.max(0,width-rowWidths[op.y]);op.x+=Math.floor(geometry.align==="center"?free/2:free);});
     }
     return ops.length?ops:null;
 }
