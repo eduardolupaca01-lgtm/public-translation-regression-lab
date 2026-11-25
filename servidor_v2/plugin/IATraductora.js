@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R11-20261124"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R12-20261125"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -934,6 +934,7 @@ var knownUi={
         "Consulta las tareas de cada personaje y el estado de ánimo de Natsumi."
 };
 var knownNames=Object.create(null),ownerNames=Object.create(null),actorNames=Object.create(null);
+var authoredSpeakerNames=Object.create(null),authoredKanaReadings=Object.create(null);
 knownNames["夏実"]="Natsumi";knownNames["隼人"]="Hayato";
 knownNames["保林 隼人"]="Hobayashi Hayato";knownNames["保林"]="Hobayashi";
 // Kana readings supplied by the game are evidence; do not invent kanji readings.
@@ -971,6 +972,18 @@ function romanizeKana(value){
 }
 function learnReadings(text){
     if(typeof text!=="string")return;
+    // Parenthetical kana is evidence only for a literal authored speaker.
+    // Keep ambiguous readings unresolved; never use these as model aliases.
+    if(isMZ&&text.length<=1800){
+        var marked=/([\u3400-\u9fff々]{1,12})[（(]([ぁ-ゖァ-ヶー]{1,24})[）)]/g,reading;
+        while((reading=marked.exec(text))!==null){
+            var k=reading[1],v=romanizeKana(reading[2]);
+            if(v&&Object.keys(authoredKanaReadings).length<2048){
+                if(!Object.prototype.hasOwnProperty.call(authoredKanaReadings,k))authoredKanaReadings[k]=v;
+                else if(authoredKanaReadings[k]!==v)authoredKanaReadings[k]=null;
+            }
+        }
+    }
     var patterns=[
         /デフォルト名は[『「]([^』」\r\n]{1,24})[』」]\s*[（(]([ぁ-ゖァ-ヶー]{1,30})[）)]/g,
         /苗字は[《〈]([^（(\r\n]{1,24})[（(]([ぁ-ゖァ-ヶー]{1,30})[）)][》〉]/g
@@ -1995,6 +2008,28 @@ function nativeTextColor(win,index){
         return ColorManager.textColor(index);
     return typeof win.textColor==="function"?win.textColor(index):null;
 }
+function literalSpeakerLabel(value){
+    if(typeof value!=="string"||!value.trim()||value.length>40||/[\r\n\\\x1b<>\[\]]/.test(value))return;
+    if(typeof $dataActors!=="undefined"&&Array.isArray($dataActors)&&
+       $dataActors.some(function(row){return row&&row.name===value;})||actorNames[value]||isJapanese(value))
+        authoredSpeakerNames[value]=true;
+}
+function projectedSpeakerName(raw){
+    if(!isMZ||inputFormActive()||typeof raw!=="string"||!authoredSpeakerNames[raw])return raw;
+    // A dynamic name (actor escape or actual player-entered actor 1) is not
+    // an authored name. Preserve it, even if it matches a role.
+    try{
+        var player=typeof $gameActors!=="undefined"&&$gameActors&&typeof $gameActors.actor==="function"?$gameActors.actor(1):null;
+        if(player&&typeof player.name==="function"&&player.name()===raw)return raw;
+    }catch(_){return raw;}
+    var roles={"ママ":"Mamá","お母さん":"Mamá","母":"Madre","パパ":"Papá","お父さん":"Papá","父":"Padre","先生":"Profesor","？？？":"???"};
+    if(Object.prototype.hasOwnProperty.call(roles,raw))return roles[raw];
+    if(ownerNames[raw]&&knownNames[raw])return knownNames[raw];
+    if(authoredKanaReadings[raw])return authoredKanaReadings[raw];
+    if(knownNames[raw])return knownNames[raw];
+    // No invented readings for kanji. Literal kana names are unambiguous.
+    return nameInSpanish(raw,true)||raw;
+}
 function protectMZName(value){
     if(typeof value==="string"&&value.trim()&&value.length<=100&&!/[\r\n\\\x1b<>]/.test(value))actorNames[value]=true;
 }
@@ -2016,10 +2051,25 @@ function hookMZPresentation(){
             p[method]=function(){
                 this._iaNameSurface=true;
                 if(method==="setName")protectMZName(arguments[0]);
+                var raw=this._name,paint=method==="refresh"||method==="windowWidth",
+                    shown=paint?projectedSpeakerName(raw):raw,changed=paint&&shown!==raw;
+                if(changed)this._name=shown;
+                if(method==="refresh")this._iaDisplayedSpeaker=shown;
                 identityDrawDepth++;
-                try{return original.apply(this,arguments);}finally{identityDrawDepth--;}
+                try{return original.apply(this,arguments);}
+                finally{identityDrawDepth--;if(changed)this._name=raw;}
             };
         });
+        var updateName=p.update;
+        if(typeof updateName==="function"&&typeof p.refresh==="function")p.update=function(){
+            var out=updateName.apply(this,arguments);
+            if(this.visible!==false&&this.openness!==0&&typeof this._name==="string"&&
+               (this._iaReadingTick=(this._iaReadingTick||0)+1)%15===0){
+                var shown=projectedSpeakerName(this._name);
+                if(this._iaDisplayedSpeaker!==shown&&shown!==this._name)this.refresh();
+            }
+            return out;
+        };
     }
     function protectIdentity(proto,method){
         if(!proto||typeof proto[method]!=="function")return;
@@ -2848,7 +2898,14 @@ function firstViewMissing(win,raw,choice){
     var source=displaySource(raw,choice?"choice":"message");if(!source)return false;
     if(readyText(source,raw)!==null||(tableStats.root&&csvKnownReady(raw)!==null))return false;
     if(rejectedKeys.get(source+"\u0000"+raw)===Infinity)return false;
-    firstViewRequest(source,raw);return true;
+    firstViewRequest(source,raw);
+    if(!choice&&raw.indexOf("\n")>=0){
+        raw.split(/\r?\n/).forEach(function(line){
+            if(hasProse(source,line)&&readyText(source,line)===null)
+                firstViewRequest(source,line);
+        });
+    }
+    return true;
 }
 function firstViewWait(win){
     if(inputFormActive()||win.pause||win._textState||typeof win.isAnySubWindowActive==="function"&&win.isAnySubWindowActive())return false;
@@ -3250,9 +3307,66 @@ function picturePlan(raw){
     var source=authoredSource(body,false);
     return source?{source:source,body:body,prefix:prefix,suffix:""}:null;
 }
+function notificationPlan(params){
+    if(!isMZ||!Array.isArray(params)||params[0]!=="LL_InfoPopupWIndow"||
+       params[1]!=="showMessage"||!pluginEnabled(/^LL_InfoPopupWIndow$/)||
+       !params[3]||typeof params[3]!=="object"||Array.isArray(params[3]))return null;
+    var raw=params[3].messageText;
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||
+       /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(raw))return null;
+    var source=authoredSource(raw,false)||displaySource(raw,"surface");
+    return source?{source:source,body:raw,prefix:"",suffix:""}:null;
+}
+function hookNotificationMZ(){
+    if(!isMZ||!pluginEnabled(/^LL_InfoPopupWIndow$/))return;
+    if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&
+       typeof Game_Interpreter.prototype.command357==="function"){
+        var p=Game_Interpreter.prototype,native357=p.command357;
+        p.command357=function(params){
+            var plan=notificationPlan(params);
+            if(!plan||inputFormActive()){
+                this._iaNoticeGate=null;
+                return native357.apply(this,arguments);
+            }
+            var shown=authoredRead(plan,true),raw=plan.body;
+            if(shown===null){
+                var now=Date.now(),g=this._iaNoticeGate,
+                    scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+                if(!g||g.list!==this._list||g.index!==this._index||g.scene!==scene||g.params!==params||g.raw!==raw)
+                    g=this._iaNoticeGate={list:this._list,index:this._index,scene:scene,params:params,raw:raw,started:now};
+                var permanentlyRejected=rejectedKeys.get(plan.source+"\u0000"+raw)===Infinity;
+                if(!permanentlyRejected&&now-g.started<(state.connected?FIRST_VIEW_LIMIT:FIRST_VIEW_OFFLINE))return false;
+            }
+            this._iaNoticeGate=null;
+            if(shown===null)return native357.apply(this,arguments);
+            var copy=params.slice(),fields={};
+            Object.keys(params[3]).forEach(function(k){if(k!=="__proto__")fields[k]=params[3][k];});
+            fields.messageText=shown;copy[3]=fields;
+            var args=Array.prototype.slice.call(arguments);args[0]=copy;
+            return native357.apply(this,args);
+        };
+    }
+    // Support script-originated plugin calls when their translations are
+    // already available. Never replay a command to refresh an expired toast.
+    if(typeof PluginManager!=="undefined"&&typeof PluginManager.callCommand==="function"){
+        var call=PluginManager.callCommand;
+        PluginManager.callCommand=function(self,name,command,fields){
+            if(inputFormActive())return call.apply(this,arguments);
+            var plan=notificationPlan([name,command,"",fields]),shown=plan?authoredRead(plan,true):null;
+            if(shown===null)return call.apply(this,arguments);
+            var args=Array.prototype.slice.call(arguments),copy={};
+            Object.keys(fields).forEach(function(k){if(k!=="__proto__")copy[k]=fields[k];});
+            copy.messageText=shown;args[3]=copy;return call.apply(this,args);
+        };
+    }
+}
 function scriptScanCommand(cmd,next,priority){
     if(!isMZ||!cmd||!Array.isArray(cmd.parameters))return;
     var a=cmd.parameters,plan=null;
+    if(cmd.code===357){
+        var notice=notificationPlan(a);
+        if(notice){authoredRemember(notice.source,notice.body,priority);return;}
+    }
     if(cmd.code===122){rememberDisplayLiteral(cmd,priority);return;}
     if(cmd.code===357&&enabledTextPicture()&&a[0]==="TextPicture"&&a[1]==="set"&&a[3]&&typeof a[3].text==="string"){
         // Dynamic pictures are handled at presentation, not against
@@ -3267,6 +3381,7 @@ function scriptScanCommand(cmd,next,priority){
 }
 function hookAuthoredMZ(){
     if(!isMZ)return;
+    hookNotificationMZ();
     if(typeof Game_Interpreter!=="undefined"&&Game_Interpreter.prototype&&typeof Game_Interpreter.prototype.setup==="function"){
         var setup=Game_Interpreter.prototype.setup;
         Game_Interpreter.prototype.setup=function(list){
@@ -4913,7 +5028,7 @@ function scanCommands(list,priority){
     for(var i=0;i<list.length;i++){
         var cmd=list[i];
         if(!cmd||!Array.isArray(cmd.parameters))continue;
-        if(isMZ&&cmd.code===101){protectMZName(cmd.parameters[4]);continue;}
+        if(isMZ&&cmd.code===101){protectMZName(cmd.parameters[4]);literalSpeakerLabel(cmd.parameters[4]);continue;}
         // Only registered display fields and verified literal dialects.
         if(isMZ&&(cmd.code===357||cmd.code===355||cmd.code===122)){
             scriptScanCommand(cmd,list[i+1],priority);continue;

@@ -2533,6 +2533,67 @@ async function testR7VerifiedVariableSurfaces(){
 }
 
 
+async function testR12NotificationFirstAppearance(){
+    const raw="\\C[2]新しい鍵を入手しました。\\C[0]",plain="新しい鍵を入手しました。";
+    const es="Has obtenido una llave nueva.",expected="\\C[2]"+es+"\\C[0]";
+    const params=["LL_InfoPopupWIndow","showMessage","",{messageText:raw,showCount:"180",windowX:"auto",windowY:"20",windowBackground:"0"}];
+    const data=path.join("/tmp","servidor-qa-juego-日本語","data");
+    const state={files:{},dirs:{[data]:true}};
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"ja_JP"});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[{code:357,parameters:params}]}]}]});
+    const untouched=JSON.stringify(params);
+    const f=fixture(90,{mz:true,fsState:state,responses:{[plain]:es},
+        plugins:[{name:"LL_InfoPopupWIndow",status:true,parameters:{}}],configure(c){
+            function Interpreter(){this._list=[{code:357,parameters:params}];this._index=0;this.calls=[];}
+            Interpreter.prototype.setup=function(){};
+            Interpreter.prototype.command357=function(p){this.calls.push(p);return true;};
+            c.Game_Interpreter=Interpreter;
+        }});
+    await wait(25);const c=f.context;c.SceneManager._scene=new c.Scene_Map();
+    const it=new c.Game_Interpreter();
+    assert.equal(it.command357(params),false,"the original notification command must not execute before translation");
+    assert.equal(it.calls.length,0);
+    const end=Date.now()+3000;
+    while(!it.calls.length&&Date.now()<end){await wait(30);it.command357(params);}
+    assert.equal(it.calls.length,1,"native popup command executes once, not repeated");
+    assert.equal(it.calls[0][3].messageText,expected);
+    for(const k of Object.keys(params[3]))if(k!=="messageText")assert.equal(it.calls[0][3][k],params[3][k]);
+    assert.equal(JSON.stringify(params),untouched);
+    const hide=["LL_InfoPopupWIndow","hideMessage","",{}];assert.equal(it.command357(hide),true);
+    assert.equal(it.calls[1],hide);
+}
+async function testR12NativeSpeakerPresentation(){
+    const data=path.join("/tmp","servidor-qa-juego-日本語","data");
+    const state={files:{},dirs:{[data]:true}};
+    const role="お母さん",name="春香",reading="春香（はるか）です。";
+    state.files[path.join(data,"System.json")]=JSON.stringify({startMapId:1,locale:"ja_JP"});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[
+        {code:101,parameters:["",0,0,2,role]},{code:401,parameters:[reading]},
+        {code:101,parameters:["",0,0,2,name]},{code:401,parameters:["こんにちは。"]}
+    ]}]}]});
+    const f=fixture(5,{mz:true,fsState:state,testHooks:true,configure(c){
+        function NameBox(){this.initialize(new c.Rectangle(0,0,300,60));}
+        NameBox.prototype=Object.create(c.Window_Base.prototype);
+        NameBox.prototype.setName=function(v){this._name=v;this.refresh();};
+        NameBox.prototype.refresh=function(){this.drawText(this._name,0,0,200);};
+        NameBox.prototype.windowWidth=function(){return this._name.length*10;};
+        c.Window_NameBox=NameBox;
+        c.Game_Message.prototype.setSpeakerName=function(v){this._speakerName=v;};
+    }});
+    const c=f.context;
+    new c.Scene_Title().start();
+    const end=Date.now()+4000;
+    while(!c.window.__IA_TRADUCTORA_TEST__.done()&&Date.now()<end)await wait(30);
+    await wait(60);
+    const box=new c.Window_NameBox();
+    c.$gameMessage.setSpeakerName(role);box.setName(role);
+    assert.equal(box.lastText,"Mamá");assert.equal(box._name,role);
+    assert.equal(c.$gameMessage._speakerName,role);
+    box.setName(name);assert.equal(box.lastText,"Haruka");assert.equal(box._name,name);
+    assert.equal(box.windowWidth(),60);
+    box.setName("\\N[1]");assert.equal(box.lastText,"\\N[1]");
+    box.setName("未確認");assert.equal(box.lastText,"未確認","unknown name is not guessed");
+}
 async function testR11NevDialogUiAlignmentLateRedraw(){
     for(const [code,mode] of [["\\AC","center"],["\\AR","right"],["\\AL","left"],["\\ALIGN[center]","center"]]){
         const body="We are ready to open the gate.";
@@ -2764,6 +2825,8 @@ async function testR8GeneralDisplaySurfaces(){
 
 (async()=>{
     await testR8GeneralDisplaySurfaces();
+    await testR12NotificationFirstAppearance();
+    await testR12NativeSpeakerPresentation();
     await testR11NevDialogUiAlignmentLateRedraw();
     await testR11QteBitmapFirstPaint();
     await testR11DirectCanvasAtomicFirstView();

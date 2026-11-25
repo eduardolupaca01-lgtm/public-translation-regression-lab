@@ -62,6 +62,40 @@ class EngineTests(unittest.TestCase):
                 self.assertEqual(ia.quality_reason(lang,original,output),reason)
         self.assertIsNone(ia.quality_reason("ja","08月24日","24 de agosto (8)"))
         self.assertIsNone(ia.quality_reason("ja","夏実は来た。","Natsumi llegó."))
+    def test_r12_numeric_recovery_requires_equal_counter(self):
+        cases=[
+            ("５年前に会った。","Nos vimos hace cinco años.","Nos vimos hace 5 años."),
+            ("今は５時です。","Son las cinco.","Son las 5."),
+            ("５年前に会った。","Nos vimos hace cuatro años.","Nos vimos hace cuatro años."),
+            ("５年後です。","Pasarán años.","Pasarán años."),
+            ("５年と２月です。","Cinco años y dos meses.","Cinco años y dos meses."),
+            ("５時です。","Son las cinco y media.","Son las cinco y media.")
+        ]
+        for original,generated,want in cases:
+            self.assertEqual(ia.recover_numeric_surface("ja",original,generated),want)
+        self.assertIsNone(ia.native_quality_reason("ja",cases[0][0],cases[0][2]))
+        self.assertEqual(ia.quality_reason("ja",cases[2][0],cases[2][2]),"IA_QUALITY_NUMBER_MISSING")
+        self.assertEqual(ia.quality_reason("ja",cases[3][0],cases[3][2]),"IA_QUALITY_NUMBER_MISSING")
+    def test_r12_retries_only_rejected_japanese_with_sentence_context(self):
+        class Tokenizer:
+            def encode(self,text,out_type):return [text]
+            def decode(self,hyp):return hyp[0]
+        class Model:
+            def __init__(self):self.calls=[]
+            def translate_batch(self,source,**kw):
+                self.calls.append(source)
+                texts={"おはよう。":"Buenos días.","今は5時です。":"Son las cinco.",
+                       "駅はどこ？":"¿Dónde está la estación?"}
+                return [SimpleNamespace(hypotheses=[[texts.get(t[0],"No sé.")]]) for t in source]
+        backend=ia.NeuralOPUS.__new__(ia.NeuralOPUS)
+        backend.lock=threading.RLock()
+        model=Model()
+        backend.models={"ja":(model,Tokenizer(),Tokenizer())}
+        backend.roots={}
+        backend.source_end_tokens={"ja":None}
+        self.assertEqual(backend.translate_many("ja",["おはよう。","今は５時です。駅はどこ？"]),
+                         ["Buenos días.","Son las 5. ¿Dónde está la estación?"])
+        self.assertTrue(all(["おはよう。"] not in call for call in model.calls[1:]))
     def test_source_eos_matches_packaged_marian_contract(self):
         class Tokenizer:
             def eos_id(self):return 2

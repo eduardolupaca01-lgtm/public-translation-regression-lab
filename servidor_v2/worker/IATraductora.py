@@ -12,6 +12,55 @@ MAX_TEXT=1800
 MODELS={"ja":"opus_ja_es","en":"opus_en_es"}
 CACHE_SCHEMA=2
 
+_ES_CARDINALS = {
+    "cero":0, "uno":1, "una":1, "un":1, "dos":2, "tres":3,
+    "cuatro":4, "cinco":5, "seis":6, "siete":7, "ocho":8,
+    "nueve":9, "diez":10, "once":11, "doce":12, "trece":13,
+    "catorce":14, "quince":15, "dieciséis":16, "diecisiete":17,
+    "dieciocho":18, "diecinueve":19, "veinte":20,
+    "veintiuno":21, "veintiuna":21, "veintiún":21, "veintidós":22,
+    "veintitrés":23, "veinticuatro":24, "veinticinco":25,
+    "veintiséis":26, "veintisiete":27, "veintiocho":28, "veintinueve":29,
+    "treinta":30
+}
+_ES_COUNTER = {
+    "年":r"años?", "時間":r"horas?", "分":r"minutos?",
+    "秒":r"segundos?", "日":r"días?", "週間":r"semanas?",
+    "回":r"veces|vez", "歳":r"años?", "円":r"yen(?:es)?",
+    "人":r"personas?", "ヶ月":r"mes(?:es)?", "か月":r"mes(?:es)?",
+    "キロ":r"kilómetros?|kilos?"
+}
+_ES_NUMBER_WORD = "|".join(sorted(_ES_CARDINALS,key=len,reverse=True))
+
+def recover_numeric_surface(lang, original, output):
+    """Only normalize an explicitly equal, unit-bound number written in words.
+    Do not invent a number that the model omitted or change a wrong value.
+    Ambiguous or multi-number cases go through the unchanged strict gate."""
+    if lang!="ja" or not isinstance(output,str):
+        return output
+    if re.search(r"[0-9０-９]",output):
+        return output
+    numbers=re.findall(r"[0-9０-９]+",original)
+    if len(numbers)!=1:
+        return output
+    m=re.search(r"([0-9０-９]+)\s*(時間|週間|ヶ月|か月|キロ|年|時|分|秒|日|回|歳|円|人)",original)
+    if not m:
+        return output
+    number=int(unicodedata.normalize("NFKC",m[1]))
+    unit=m[2]
+    if unit=="時":
+        pattern=r"\b(?:la|las)\s+(?P<number>"+_ES_NUMBER_WORD+r")\b(?!\s+y\s+(?:media|cuarto|"+_ES_NUMBER_WORD+r"))"
+    else:
+        pattern=r"\b(?P<number>"+_ES_NUMBER_WORD+r")\s+(?:"+_ES_COUNTER[unit]+r")\b"
+    hits=list(re.finditer(pattern,output,re.I))
+    if len(hits)!=1 or _ES_CARDINALS[hits[0]["number"].lower()]!=number:
+        return output
+    start,end=hits[0].span("number")
+    return output[:start]+str(number)+output[end:]
+
+def normalize_ja_digits(text):
+    return text.translate(str.maketrans("０１２３４５６７８９","0123456789"))
+
 def quality_reason(lang, original, output):
     """Conservative structural checks; semantic adequacy still needs bilingual QA."""
     if not isinstance(output,str) or not output.strip() or output.strip()==original.strip():
@@ -244,6 +293,7 @@ class NeuralOPUS:
             def choose(original,result):
                 for hypothesis in result.hypotheses:
                     output=unicodedata.normalize("NFC",target.decode(hypothesis)).strip()
+                    output=recover_numeric_surface(lang,original,output)
                     if native_quality_reason(lang,original,output) is None:
                         return output
                 return None
@@ -264,6 +314,51 @@ class NeuralOPUS:
                 except (RuntimeError,ValueError):
                     # Keep the first-pass successes even if recovery fails.
                     pass
+            # On rejected Japanese text only, retry with ASCII digits and
+            # then independent, complete sentences. No new marker is sent
+            # to OPUS. Every segment and the reconstructed text must pass QA.
+            if lang=="ja":
+                for i,answer in enumerate(answers):
+                    if answer is not None:
+                        continue
+                    original=texts[i]
+                    normalized=normalize_ja_digits(original)
+                    if normalized!=original:
+                        tokens=encode_source(source,normalized,eos)
+                        if tokens:
+                            try:
+                                retry=dict(kwargs,beam_size=5,num_hypotheses=5,disable_unk=True,
+                                           max_decoding_length=decoding_budget(lang,len(tokens)))
+                                candidates=model.translate_batch([tokens],**retry)
+                                if len(candidates)==1:
+                                    answers[i]=choose(original,candidates[0])
+                            except (RuntimeError,ValueError,TypeError):
+                                pass
+                    if answers[i] is not None:
+                        continue
+                    if len(original)>240 or re.search(r"[\r\n\\\x1b<>{}\[\]]",original):
+                        continue
+                    pieces=[p.strip() for p in re.findall(r"[^。！？!?]+[。！？!?]*",original) if p.strip()]
+                    if not 2<=len(pieces)<=4 or not all(re.search(r"[ぁ-ゖァ-ヶ\u3400-\u9fff]",p) for p in pieces):
+                        continue
+                    if "".join(pieces).replace(" ","")!=original.replace(" ",""):
+                        continue
+                    tokens=[encode_source(source,normalize_ja_digits(p),eos) for p in pieces]
+                    if any(not t for t in tokens):
+                        continue
+                    try:
+                        retry=dict(kwargs,beam_size=4,num_hypotheses=4,disable_unk=True,
+                                   max_decoding_length=max(decoding_budget(lang,len(t)) for t in tokens))
+                        candidates=model.translate_batch(tokens,**retry)
+                        if len(candidates)!=len(pieces):
+                            continue
+                        parts=[choose(p,c) for p,c in zip(pieces,candidates)]
+                        if all(p is not None for p in parts):
+                            combined=" ".join(parts)
+                            if native_quality_reason(lang,original,combined) is None:
+                                answers[i]=combined
+                    except (RuntimeError,ValueError,TypeError):
+                        pass
             # A beam can repeat despite the ordinary N-best search. For
             # rejected English only, try short per-sentence decoding with
             # independent budgets. A fallback must pass the same QA; never
