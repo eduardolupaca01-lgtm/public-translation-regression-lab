@@ -2125,17 +2125,186 @@ function hookNativeSurface(){
     }
     if(typeof Bitmap!=="undefined"&&Bitmap.prototype&&typeof Bitmap.prototype.drawText==="function"){
         var bitmapDraw=Bitmap.prototype.drawText;
+        var bitmapReplayDepth=0,bitmapJobs=[],bitmapPollScheduled=false;
+        function bitmapTextRect(bitmap,args){
+            var x=Number(args[1]),y=Number(args[2]),mw=Number(args[3]),lh=Number(args[4]);
+            if(!isFinite(x)||!isFinite(y)||!integer(bitmap.width)||!integer(bitmap.height)||
+               bitmap.width<1||bitmap.height<1)return null;
+            if(!isFinite(mw)||mw<=0||mw>bitmap.width)mw=bitmap.width-x;
+            if(!isFinite(lh)||lh<=0||lh>256)lh=Math.max(16,Number(bitmap.fontSize)||24)+8;
+            var pad=Math.min(12,Math.max(2,Math.ceil(Number(bitmap.outlineWidth)||0)+2));
+            var left=Math.max(0,Math.floor(x-pad)),top=Math.max(0,Math.floor(y-pad));
+            var right=Math.min(bitmap.width,Math.ceil(x+mw+pad));
+            var bottom=Math.min(bitmap.height,Math.ceil(y+lh+pad));
+            var w=right-left,h=bottom-top;
+            if(w<=0||h<=0||w*h>131072)return null;
+            return {x:left,y:top,w:w,h:h};
+        }
+        function bitmapOverlap(a,b){
+            return !!a&&!!b&&a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+        }
+        function disposeBitmapJob(job){
+            if(!job||job.disposed)return;
+            job.valid=false;job.disposed=true;
+            var list=job.bitmap&&job.bitmap._iaDrawJobs;
+            if(list){var at=list.indexOf(job);if(at>=0)list.splice(at,1);}
+            var globalAt=bitmapJobs.indexOf(job);if(globalAt>=0)bitmapJobs.splice(globalAt,1);
+            if(job.backup&&typeof job.backup.destroy==="function"){
+                try{job.backup.destroy();}catch(_){}
+            }
+            job.backup=null;
+        }
+        function restoreBitmapJob(job){
+            if(!job||!job.valid||!job.bitmap||!job.backup)return;
+            var b=job.bitmap,r=job.rect;
+            if(b.width!==job.width||b.height!==job.height||
+               typeof b.clearRect!=="function"||typeof b.blt!=="function")return;
+            bitmapReplayDepth++;
+            try{
+                b.paintOpacity=255;
+                b.clearRect(r.x,r.y,r.w,r.h);
+                b.blt(job.backup,0,0,r.w,r.h,r.x,r.y);
+            }catch(_){state.errors++;}
+            finally{bitmapReplayDepth--;}
+        }
+        function invalidateBitmapJobs(bitmap,rect,restore){
+            if(bitmapReplayDepth||!bitmap||!bitmap._iaDrawJobs)return;
+            bitmap._iaDrawJobs.slice().forEach(function(job){
+                if(!rect||bitmapOverlap(job.rect,rect)){
+                    if(restore)restoreBitmapJob(job);
+                    disposeBitmapJob(job);
+                }
+            });
+        }
+        function captureBitmapJob(bitmap,args,source,raw){
+            if(!bitmap||bitmapJobs.length>=64||typeof Bitmap!=="function"||
+               typeof bitmap.blt!=="function"||typeof bitmap.clearRect!=="function")return null;
+            var rect=bitmapTextRect(bitmap,args);if(!rect)return null;
+            invalidateBitmapJobs(bitmap,rect,true);
+            var backup=null;
+            try{
+                backup=new Bitmap(rect.w,rect.h);
+                if(!backup||typeof backup.blt!=="function")return null;
+                bitmapReplayDepth++;
+                backup.blt(bitmap,rect.x,rect.y,rect.w,rect.h,0,0);
+            }catch(_){
+                if(backup&&typeof backup.destroy==="function")try{backup.destroy();}catch(__){}
+                return null;
+            }finally{bitmapReplayDepth--;}
+            var style={};
+            nativeStyleKeys.forEach(function(k){if(bitmap[k]!==undefined)style[k]=bitmap[k];});
+            var job={
+                bitmap:bitmap,backup:backup,rect:rect,width:bitmap.width,height:bitmap.height,
+                source:source,original:raw,args:args.slice(),draw:bitmapDraw,style:style,
+                deadline:Date.now()+30000,valid:true,disposed:false
+            };
+            if(!bitmap._iaDrawJobs)bitmap._iaDrawJobs=[];
+            bitmap._iaDrawJobs.push(job);bitmapJobs.push(job);
+            return job;
+        }
+        function replayBitmapJob(job,translated){
+            if(!job||!job.valid||!job.bitmap||!job.backup)return false;
+            var b=job.bitmap,r=job.rect;
+            if(b.width!==job.width||b.height!==job.height||
+               typeof b.clearRect!=="function"||typeof b.blt!=="function")return false;
+            var current={};
+            nativeStyleKeys.forEach(function(k){if(b[k]!==undefined)current[k]=b[k];});
+            bitmapReplayDepth++;
+            try{
+                b.paintOpacity=255;
+                b.clearRect(r.x,r.y,r.w,r.h);
+                b.blt(job.backup,0,0,r.w,r.h,r.x,r.y);
+                nativeStyleKeys.forEach(function(k){if(job.style[k]!==undefined)b[k]=job.style[k];});
+                var args=job.args.slice();args[0]=translated;
+                withQuestGlyphs(b,translated,function(){return job.draw.apply(b,args);});
+                state.shown++;
+                return true;
+            }catch(_){state.errors++;return false;}
+            finally{
+                nativeStyleKeys.forEach(function(k){if(current[k]!==undefined)b[k]=current[k];});
+                bitmapReplayDepth--;
+            }
+        }
+        function pollBitmapJobs(){
+            bitmapPollScheduled=false;
+            var now=Date.now();
+            bitmapJobs.slice().forEach(function(job){
+                if(!job.valid||!job.bitmap||job.bitmap.width!==job.width||job.bitmap.height!==job.height){
+                    disposeBitmapJob(job);return;
+                }
+                var translated=null;
+                try{translated=readyText(job.source,job.original);}catch(_){}
+                if(typeof translated==="string"){
+                    if(validTranslation(job.source,job.original,translated,false))replayBitmapJob(job,translated);
+                    disposeBitmapJob(job);
+                }else if(now>=job.deadline||rejectedKeys.get(job.source+"\u0000"+job.original)===Infinity){
+                    disposeBitmapJob(job);
+                }
+            });
+            if(bitmapJobs.length&&!bitmapPollScheduled){
+                bitmapPollScheduled=true;setTimeout(pollBitmapJobs,100);
+            }
+        }
+        function scheduleBitmapPoll(){
+            if(bitmapPollScheduled||!bitmapJobs.length)return;
+            bitmapPollScheduled=true;setTimeout(pollBitmapJobs,80);
+        }
+        function hookBitmapMutator(name,rectFor){
+            var original=Bitmap.prototype[name];
+            if(typeof original!=="function"||original._iaBitmapMutationWrapped)return;
+            var wrapped=function(){
+                if(!bitmapReplayDepth){
+                    var rect=null;
+                    try{rect=rectFor?rectFor(this,arguments):null;}catch(_){}
+                    invalidateBitmapJobs(this,rect,true);
+                }
+                return original.apply(this,arguments);
+            };
+            wrapped._iaBitmapMutationWrapped=true;
+            Bitmap.prototype[name]=wrapped;
+        }
+        function rectArgs(args){
+            var x=Number(args[0]),y=Number(args[1]),w=Number(args[2]),h=Number(args[3]);
+            return isFinite(x)&&isFinite(y)&&isFinite(w)&&isFinite(h)&&w>0&&h>0?
+                {x:x,y:y,w:w,h:h}:null;
+        }
+        hookBitmapMutator("clearRect",function(bitmap,args){return rectArgs(args);});
+        hookBitmapMutator("fillRect",function(bitmap,args){return rectArgs(args);});
+        hookBitmapMutator("gradientFillRect",function(bitmap,args){return rectArgs(args);});
+        hookBitmapMutator("strokeRect",function(bitmap,args){return rectArgs(args);});
+        hookBitmapMutator("drawCircle",function(bitmap,args){
+            var x=Number(args[0]),y=Number(args[1]),r=Number(args[2]);
+            return isFinite(x)&&isFinite(y)&&isFinite(r)&&r>0?{x:x-r,y:y-r,w:r*2,h:r*2}:null;
+        });
+        hookBitmapMutator("blt",function(bitmap,args){
+            var x=Number(args[5]),y=Number(args[6]),w=Number(args[7]),h=Number(args[8]);
+            if(!isFinite(w)||w<=0)w=Number(args[3]);
+            if(!isFinite(h)||h<=0)h=Number(args[4]);
+            return isFinite(x)&&isFinite(y)&&isFinite(w)&&isFinite(h)&&w>0&&h>0?
+                {x:x,y:y,w:w,h:h}:null;
+        });
+        ["clear","fillAll","destroy","resize"].forEach(function(name){
+            hookBitmapMutator(name,function(){return null;});
+        });
         Bitmap.prototype.drawText=function(){
             if(inputFormActive())return bitmapDraw.apply(this,arguments);
-            var args=Array.prototype.slice.call(arguments);
+            var args=Array.prototype.slice.call(arguments),raw=typeof args[0]==="string"?args[0]:null;
+            var direct=!!(raw&&!surfaceDepth&&!identityDrawDepth&&!this._iaOwnerWindow),job=null;
             try{
-                if(!identityDrawDepth&&typeof args[0]==="string"&&args[0].length>=1)
-                    {var label=questCachedLabel(args[0]);
-                     if(label===null)label=csvPlainLabel(args[0]);
-                     if(label===null)label=nativeDisplayProjection(args[0],"surface",this);
-                     args[0]=label!==null?label:translatedNativeLabel(args[0],false);}
+                if(!identityDrawDepth&&raw&&raw.length>=1){
+                    var label=questCachedLabel(raw);
+                    if(label===null)label=csvPlainLabel(raw);
+                    if(label===null)label=nativeDisplayProjection(raw,"surface",this);
+                    args[0]=label!==null?label:translatedNativeLabel(raw,false);
+                    if(direct&&label===null&&args[0]===raw){
+                        var source=displaySource(raw,"surface");
+                        if(source&&readyText(source,raw)===null)job=captureBitmapJob(this,args,source,raw);
+                    }
+                }
             }catch(_){state.errors++;}
-            var bitmap=this;return withQuestGlyphs(bitmap,args[0],function(){return bitmapDraw.apply(bitmap,args);});
+            var bitmap=this,out=withQuestGlyphs(bitmap,args[0],function(){return bitmapDraw.apply(bitmap,args);});
+            if(job)scheduleBitmapPoll();
+            return out;
         };
         var measure=Bitmap.prototype.measureTextWidth;
         if(typeof measure==="function")Bitmap.prototype.measureTextWidth=function(text){
