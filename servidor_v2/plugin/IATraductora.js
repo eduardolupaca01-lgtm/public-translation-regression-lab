@@ -2131,11 +2131,13 @@ function hookNativeSurface(){
             if(!isFinite(x)||!isFinite(y)||!integer(bitmap.width)||!integer(bitmap.height)||
                bitmap.width<1||bitmap.height<1)return null;
             if(!isFinite(mw)||mw<=0||mw>bitmap.width)mw=bitmap.width-x;
-            if(!isFinite(lh)||lh<=0||lh>256)lh=Math.max(16,Number(bitmap.fontSize)||24)+8;
-            var pad=Math.min(12,Math.max(2,Math.ceil(Number(bitmap.outlineWidth)||0)+2));
-            var left=Math.max(0,Math.floor(x-pad)),top=Math.max(0,Math.floor(y-pad));
+            if(!isFinite(lh)||lh<=0||lh>bitmap.height)lh=Math.max(16,Number(bitmap.fontSize)||24)+8;
+            var fontSize=Math.max(8,Number(bitmap.fontSize)||24),outline=Math.max(0,Number(bitmap.outlineWidth)||0);
+            var baseline=Math.round(y+lh/2+fontSize*0.35);
+            var pad=Math.min(12,Math.max(2,Math.ceil(outline)+2));
+            var left=Math.max(0,Math.floor(x-pad)),top=Math.max(0,Math.floor(baseline-fontSize-outline-3));
             var right=Math.min(bitmap.width,Math.ceil(x+mw+pad));
-            var bottom=Math.min(bitmap.height,Math.ceil(y+lh+pad));
+            var bottom=Math.min(bitmap.height,Math.ceil(baseline+outline+4));
             var w=right-left,h=bottom-top;
             if(w<=0||h<=0||w*h>131072)return null;
             return {x:left,y:top,w:w,h:h};
