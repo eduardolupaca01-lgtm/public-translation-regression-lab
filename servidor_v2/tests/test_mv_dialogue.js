@@ -1995,7 +1995,7 @@ async function testUnresolvedIavraReferencesNeverReachTranslatorOrReuseStaleCach
     const raw="#{start.intro_part_one.0}";
     const stale="«start.intro_part_one.0»";
     const record={schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:stale,composed:false};
-    const journal=JSON.stringify(record)+"\\n";
+    const journal=JSON.stringify(record)+"\n";
     const fsState={files:{[cacheFile]:journal},dirs:{[cacheDir]:true}};
     const f=fixture(20,{root,noWww:true,fsState,configure:function(c){
         const p=c.Window_Message.prototype;
