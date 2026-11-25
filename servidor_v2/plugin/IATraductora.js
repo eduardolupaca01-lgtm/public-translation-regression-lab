@@ -308,6 +308,7 @@ function flushWire(){
     },function(error){jobs.forEach(function(job){job.reject(error);});finish();});
 }
 function translate(source,text,priority){
+    if(externalLocalizationReference(text))return Promise.resolve(null);
     priority=!!(priority||foregroundDepth);
     var key=source+"\u0000"+text;
     var fixed=stableDisplay(text,false);
@@ -360,9 +361,17 @@ function numbersIn(text){
         return String(c.charCodeAt(0)-65296);
     }).replace(/^0+(?=\d)/,"");}).sort().join("|");
 }
+// Iavra localization references are identifiers, not dialogue. Recognize the
+// stock syntax even if the plugin/catalog is not ready, plus configured variants.
+function externalLocalizationReference(text){
+    if(typeof text!=="string")return false;
+    if(/#\\{[A-Za-z0-9_.-]{1,300}\\}|«[A-Za-z0-9_.-]{1,300}»/.test(text))return true;
+    return typeof iavra!=="undefined"&&!!iavra&&iavra.detected&&iavraHasReference(text);
+}
 function validTranslation(source,original,result,composed){
     if(typeof original!=="string"||typeof result!=="string"||
        !original||!result.trim()||result===original||
+       externalLocalizationReference(original)||externalLocalizationReference(result)||
        result.length>Math.max(100,Math.min(5400,original.length*5+80))||
        /\uFFFD|\u0000/.test(result)||numbersIn(original)!==numbersIn(result))
         return false;
@@ -628,6 +637,7 @@ function repairDisplayTerms(source,original,result){
 }
 function languageFor(s){
     if(typeof s!=="string"||!s||s.length>1800)return null;
+    if(externalLocalizationReference(s))return null;
     if(tsvExcluded(s))return null;
     var declared=tsvEntry(s);if(declared&&!actorNames[s])return declared.source;
     if(typeof tableStats!=="undefined"&&(tableStats.root||isMZ)&&csvExecutableSyntax(s))return null;
@@ -659,7 +669,7 @@ var displayUiWords=Object.create(null),displaySignalWords=Object.create(null);
 ("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door").split(" ").forEach(function(w){displaySignalWords[w]=true;});
 function displaySource(text,context){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
-       tsvExcluded(text)||csvExecutableSyntax(text)||
+       externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return null;
     var source=languageFor(text);if(source)return source;
     var prose=visibleProse(text).replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"')
@@ -825,7 +835,7 @@ function englishPlanTranslate(text,plan,priority){
 function hasProse(source,text){return source==="ja"?hasJapaneseProse(text):/[A-Za-z]{2}/.test(visibleProse(text))&&!actorNames[text];}
 
 function translatePreservingControls(source,text,skipPlan,priority){
-    if(tsvRef(text)||tsvExcluded(text))return Promise.resolve(null);
+    if(externalLocalizationReference(text)||tsvRef(text)||tsvExcluded(text))return Promise.resolve(null);
     priority=!!(priority||foregroundDepth);
     var key=source+"\u0000"+text;
     var ready=readyText(source,text);
@@ -2333,7 +2343,7 @@ function displayLate(win){
 // All asynchronous results go into the existing validated cache.
 var FIRST_VIEW_LIMIT=8000,FIRST_VIEW_OFFLINE=1500;
 function firstViewRequest(source,text){
-    if(!source||typeof text!=="string"||!text)return;
+    if(!source||typeof text!=="string"||!text||externalLocalizationReference(text))return;
     addPrefetch(text,true,source);
     var key=source+"\u0000"+text;
     // The message/choice currently blocking presentation bypasses disk-cache
@@ -3150,7 +3160,7 @@ function iavraSkipSegment(segment){
 }
 function iavraCatalogText(source,text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
-       /[\u0000\uFFFD]/.test(text)||csvExecutableSyntax(text)||
+       externalLocalizationReference(text)||/[\u0000\uFFFD]/.test(text)||csvExecutableSyntax(text)||
        /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(text))return false;
     var prose=visibleProse(text).trim();
     if(!prose||prose.length>1600||/^[A-Z][0-9]{3,}$/i.test(prose)||
