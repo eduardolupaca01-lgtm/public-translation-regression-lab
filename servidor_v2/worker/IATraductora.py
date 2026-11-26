@@ -492,9 +492,16 @@ def verified_rgss3_runtime(game:Path)->tuple[Path,Path]:
     archive=root/"Game.rgss3a"
     data=root/"Data"
     packed=ordinary(archive)
-    if data.is_symlink():
+    if data.is_symlink() or (data.exists() and not data.is_dir()):
         raise ValueError("IA_RGSS3_RUTA_NO_VERIFICADA")
-    loose=ordinary(data/"System.rvdata2") or ordinary(data/"Scripts.rvdata2")
+    loose_files=[]
+    if data.is_dir():
+        for candidate in data.rglob("*.rvdata2"):
+            if candidate.is_symlink():
+                raise ValueError("IA_RGSS3_RUTA_NO_VERIFICADA")
+            if ordinary(candidate):
+                loose_files.append(candidate)
+    loose=bool(loose_files)
     if packed and loose:
         raise ValueError("IA_RGSS3_LAYOUT_AMBIGUO")
     if packed:
@@ -506,7 +513,7 @@ def verified_rgss3_runtime(game:Path)->tuple[Path,Path]:
         if header!=b"RGSSAD\x00\x03":
             raise ValueError("IA_RGSS3_ARCHIVE_NO_VALIDO")
     elif loose:
-        if not data.is_dir() or not ordinary(data/"System.rvdata2") or not ordinary(data/"Scripts.rvdata2"):
+        if not ordinary(data/"System.rvdata2") or not ordinary(data/"Scripts.rvdata2"):
             raise ValueError("IA_RGSS3_DATA_INCOMPLETA")
     else:
         raise ValueError("IA_RGSS3_DATOS_FALTANTES")
