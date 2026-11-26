@@ -1,4 +1,4 @@
-use super::{checked_root, decode_archive_path, sha256, MAX_ARCHIVE, MAX_ENTRIES, MAX_ENTRY, MAX_TOTAL_DATA};
+use super::{checked_root, decode_archive_path, has_loose_rvdata2, sha256, MAX_ARCHIVE, MAX_ENTRIES, MAX_ENTRY, MAX_TOTAL_DATA};
 use rpgmad_lib::{decrypt_from_reader, encrypt_to_vec, ArchiveEntry, Engine};
 use rvpacker_txt_rs_lib::{json, EngineType};
 use serde::{Deserialize, Serialize};
@@ -43,9 +43,7 @@ fn game_archive(root: &Path) -> Result<PathBuf, String> {
     if !archive.is_file() || archive.is_symlink() {
         return Err("IA_RGSS3_ARCHIVE_NO_VALIDO".into());
     }
-    if root.join("Data").join("System.rvdata2").is_file()
-        || root.join("Data").join("Scripts.rvdata2").is_file()
-    {
+    if has_loose_rvdata2(&root.join("Data"))? {
         return Err("IA_RGSS3_LAYOUT_AMBIGUO".into());
     }
     let size = fs::metadata(&archive)
