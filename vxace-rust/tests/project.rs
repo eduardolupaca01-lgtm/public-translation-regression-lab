@@ -6,6 +6,15 @@ use vxace_rgss3_core::project::{
     all_vxace_file_flags, apply_project_translation, extract_project_text, ProjectTextError,
 };
 
+fn japanese_scripts_file() -> Vec<u8> {
+    let scripts = Scripts::new(
+        vec![303],
+        vec!["$game_message.add('こんにちは')\\n".to_owned()],
+        vec!["Japanese".to_owned()],
+    );
+    dump(&Base::encode_scripts(&scripts))
+}
+
 fn scripts_file() -> Vec<u8> {
     let scripts = Scripts::new(
         vec![101],
@@ -255,7 +264,7 @@ fn actors_file() -> Vec<u8> {
     let mut arena = Arena::builder();
     let id = arena.push_fixnum(1);
     let name = arena.push_string("Actor One".to_owned());
-    let nickname = arena.push_string("Hero nickname".to_owned());
+    let nickname = arena.push_string("勇者".to_owned());
     let actor = arena
         .push_object(
             b"Object".to_vec(),
@@ -294,7 +303,7 @@ fn system_file() -> Vec<u8> {
     let terms = ruby_object(&mut arena, "RPG::System::Terms", &[("messages", messages)]);
 
     let currency_unit = arena.push_string("Gold".to_owned());
-    let game_title = arena.push_string("VX Ace Sample".to_owned());
+    let game_title = arena.push_string("サンプルゲーム".to_owned());
     let system = ruby_object(
         &mut arena,
         "RPG::System",
@@ -334,7 +343,7 @@ fn mapinfos_file() -> Vec<u8> {
 fn map_file() -> Vec<u8> {
     let mut arena = Arena::builder();
 
-    let message = arena.push_string("Hello from map".to_owned());
+    let message = arena.push_string("こんにちは、世界！".to_owned());
     let parameters = arena.push_array(&[message]).expect("build message parameters");
     let message_code = arena.push_fixnum(401);
     let indent = arena.push_fixnum(0);
@@ -426,7 +435,7 @@ fn all_vxace_file_groups_round_trip_through_an_isolated_workspace() {
         ("MapInfos.rvdata2", mapinfos_file()),
         ("Map001.rvdata2", map_file()),
         ("System.rvdata2", system_file()),
-        ("Scripts.rvdata2", scripts_file()),
+        ("Scripts.rvdata2", japanese_scripts_file()),
     ];
     for (name, bytes) in &originals {
         fs::write(data_dir.join(name), bytes).expect("write synthetic VX Ace file");
@@ -438,17 +447,17 @@ fn all_vxace_file_groups_round_trip_through_an_isolated_workspace() {
 
     replace_translation(
         &translation_dir.join("maps.txt"),
-        "Hello from map",
+        "こんにちは、世界！",
         "Hola mapa",
     );
     replace_translation(
         &translation_dir.join("actors.txt"),
-        "Hero nickname",
+        "勇者",
         "Héroe",
     );
     replace_translation(
         &translation_dir.join("system.txt"),
-        "VX Ace Sample",
+        "サンプルゲーム",
         "Juego de prueba",
     );
     replace_translation(
