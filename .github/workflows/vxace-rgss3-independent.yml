@@ -1,0 +1,40 @@
+name: VX Ace RGSS3 independent baseline
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "vxace/**"
+      - "vxace-rust/**"
+      - "tests/vxace/**"
+      - ".github/workflows/vxace-rgss3-independent.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vxace-rgss3-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fingerprint:
+    name: Read-only VX Ace fingerprint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile the independent fingerprint module
+        run: python -m compileall -q vxace tests/vxace
+      - name: Run the focused VX Ace fixture suite
+        run: python -m unittest discover -s tests/vxace -p "test_*.py" -v
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test bounded RGSS3A archive reader
+        run: cargo test --manifest-path vxace-rust/Cargo.toml
