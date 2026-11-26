@@ -57,7 +57,7 @@ module TenshixgameRGSS3
       get_pid = win_api("kernel32", "GetCurrentProcessId", "", "L")
       shell = win_api("shell32", "ShellExecuteW", "PPPPPL", "L")
       pid = get_pid.call
-      args = "--game-root #{wide(game_root)} --parent-pid #{pid}"
+      args = "--game-root \"#{game_root}\" --parent-pid #{pid}"
       result = shell.call(nil, wide("open"), wide(worker_path), wide(args), wide(game_root), 0)
       @status = result.to_i > 32 ? "CONECTANDO" : "ERROR AL INICIAR"
     rescue
@@ -94,14 +94,14 @@ module TenshixgameRGSS3
     info = bridge
     raise "IA_BRIDGE_NOT_READY" unless info
     open_api = win_api("winhttp", "WinHttpOpen", "PLPPL", "L")
-    connect_api = win_api("winhttp", "WinHttpConnect", "PLPL", "L")
-    request_api = win_api("winhttp", "WinHttpOpenRequest", "PPPPPPP", "L")
+    connect_api = win_api("winhttp", "WinHttpConnect", "PPLL", "L")
+    request_api = win_api("winhttp", "WinHttpOpenRequest", "PPPPPPL", "L")
     send_api = win_api("winhttp", "WinHttpSendRequest", "PLPLLLL", "L")
     receive_api = win_api("winhttp", "WinHttpReceiveResponse", "PP", "L")
     available_api = win_api("winhttp", "WinHttpQueryDataAvailable", "PP", "L")
-    read_api = win_api("winhttp", "WinHttpReadData", "PLPP", "L")
-    close_api = win_api("winhttp", "WinHttpCloseHandle", "L", "L")
-    timeout_api = win_api("winhttp", "WinHttpSetTimeouts", "LLLLL", "L")
+    read_api = win_api("winhttp", "WinHttpReadData", "PPLP", "L")
+    close_api = win_api("winhttp", "WinHttpCloseHandle", "P", "L")
+    timeout_api = win_api("winhttp", "WinHttpSetTimeouts", "PLLLL", "L")
 
     session = open_api.call(wide("TENSHIXGAME-RGSS3"), 1, nil, nil, 0)
     raise "IA_WINHTTP_OPEN" if session.to_i == 0
