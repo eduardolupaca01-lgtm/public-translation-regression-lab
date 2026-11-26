@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "vxace/**"
+      - "vxace-rust/**"
       - "tests/vxace/**"
       - ".github/workflows/vxace-rgss3-independent.yml"
   workflow_dispatch:
@@ -34,3 +35,6 @@ jobs:
         run: python -m compileall -q vxace tests/vxace
       - name: Run the focused VX Ace fixture suite
         run: python -m unittest discover -s tests/vxace -p "test_*.py" -v
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test bounded RGSS3A archive reader
+        run: cargo test --manifest-path vxace-rust/Cargo.toml
