@@ -21,12 +21,12 @@ struct Entry {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Receipt {
-    schema: String,
-    state: String,
-    original_sha256: String,
-    installed_sha256: String,
-    plugin_sha256: String,
-    backup: String,
+    pub schema: String,
+    pub state: String,
+    pub original_sha256: String,
+    pub installed_sha256: String,
+    pub plugin_sha256: String,
+    pub backup: String,
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -298,6 +298,48 @@ fn verify_archive_preservation(before: &[Entry], after: &[u8], scripts_path: &[u
     Ok(())
 }
 
+fn ensure_safe_dir(root: &Path, parts: &[&str]) -> Result<PathBuf, String> {
+    let mut current = root.to_path_buf();
+    for part in parts {
+        current.push(part);
+        if current.exists() {
+            let meta = fs::symlink_metadata(&current)
+                .map_err(|_| "IA_RGSS3_SIDECAR_PATH_INVALID".to_string())?;
+            if meta.file_type().is_symlink() || !meta.is_dir() {
+                return Err("IA_RGSS3_SIDECAR_PATH_INVALID".into());
+            }
+        } else {
+            fs::create_dir(&current)
+                .map_err(|_| "IA_RGSS3_SIDECAR_DIR_CREATE_FAILED".to_string())?;
+        }
+    }
+    Ok(current)
+}
+
+fn safe_backup_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
+    let rel = Path::new(relative);
+    if rel.is_absolute()
+        || rel.components().any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("IA_RGSS3_BACKUP_PATH_INVALID".into());
+    }
+    let full = root.join(rel);
+    if !full.starts_with(root) {
+        return Err("IA_RGSS3_BACKUP_PATH_INVALID".into());
+    }
+    let mut current = root.to_path_buf();
+    for component in rel.components() {
+        current.push(component.as_os_str());
+        if current.exists() && fs::symlink_metadata(&current)
+            .map_err(|_| "IA_RGSS3_BACKUP_PATH_INVALID".to_string())?
+            .file_type().is_symlink()
+        {
+            return Err("IA_RGSS3_BACKUP_PATH_INVALID".into());
+        }
+    }
+    Ok(full)
+}
+
 fn backup_path(root: &Path, original_sha: &str) -> PathBuf {
     root.join("IA Traductora")
         .join(".backups")
@@ -313,8 +355,14 @@ fn receipt_path(root: &Path) -> PathBuf {
 }
 
 fn write_backup(source: &Path, destination: &Path, expected_sha: &str) -> Result<(), String> {
+    ensure_safe_dir(
+        destination.parent().and_then(Path::parent).and_then(Path::parent).unwrap_or_else(|| Path::new(".")),
+        &["IA Traductora", ".backups", "rgss3"],
+    )?;
     if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|_| "IA_RGSS3_BACKUP_DIR_FAILED".to_string())?;
+        if !parent.is_dir() {
+            return Err("IA_RGSS3_BACKUP_DIR_FAILED".into());
+        }
     }
     if destination.exists() {
         if sha256(destination)? != expected_sha {
@@ -378,11 +426,8 @@ fn replace_path(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 fn write_receipt(root: &Path, receipt: &Receipt) -> Result<(), String> {
-    let path = receipt_path(root);
-    let parent = path
-        .parent()
-        .ok_or_else(|| "IA_RGSS3_RECEIPT_PATH_INVALID".to_string())?;
-    fs::create_dir_all(parent).map_err(|_| "IA_RGSS3_RECEIPT_DIR_FAILED".to_string())?;
+    let parent = ensure_safe_dir(root, &["IA Traductora", ".local", "Rpg"])?;
+    let path = parent.join("rgss3-install.json");
     let bytes = serde_json::to_vec_pretty(receipt)
         .map_err(|_| "IA_RGSS3_RECEIPT_SERIALIZE_FAILED".to_string())?;
     atomic_replace(&bytes, &path)
@@ -417,12 +462,23 @@ pub fn install(game: &Path, plugin_path: &Path) -> Result<Receipt, String> {
     }
 
     if receipt_path(&root).exists() {
-        let old = read_receipt(&root)?;
+        let mut old = read_receipt(&root)?;
+        let current_sha = sha256(&archive)?;
         if old.state == "INSTALLED" {
-            if sha256(&archive)? == old.installed_sha256 {
+            if current_sha == old.installed_sha256 {
                 return Err("IA_RGSS3_ALREADY_INSTALLED".into());
             }
             return Err("IA_RGSS3_INSTALLED_ARCHIVE_CHANGED".into());
+        }
+        if old.state == "PREPARED" {
+            if current_sha == old.installed_sha256 {
+                old.state = "INSTALLED".to_string();
+                write_receipt(&root, &old)?;
+                return Ok(old);
+            }
+            if current_sha != old.original_sha256 {
+                return Err("IA_RGSS3_PREPARED_ARCHIVE_CHANGED".into());
+            }
         }
     }
 
@@ -474,8 +530,8 @@ pub fn restore(game: &Path) -> Result<Receipt, String> {
     let root = checked_root(game)?;
     let archive = root.join("Game.rgss3a");
     let mut receipt = read_receipt(&root)?;
-    let backup = root.join(&receipt.backup);
-    if !backup.starts_with(&root) || backup.is_symlink() {
+    let backup = safe_backup_path(&root, &receipt.backup)?;
+    if !backup.is_file() || backup.is_symlink() {
         return Err("IA_RGSS3_BACKUP_PATH_INVALID".into());
     }
     if sha256(&backup)? != receipt.original_sha256 {
@@ -485,7 +541,14 @@ pub fn restore(game: &Path) -> Result<Receipt, String> {
     if receipt.state == "RESTORED" && current == receipt.original_sha256 {
         return Ok(receipt);
     }
-    if receipt.state != "INSTALLED" || current != receipt.installed_sha256 {
+    if receipt.state == "PREPARED" && current == receipt.original_sha256 {
+        receipt.state = "RESTORED".to_string();
+        write_receipt(&root, &receipt)?;
+        return Ok(receipt);
+    }
+    if !matches!(receipt.state.as_str(), "INSTALLED" | "PREPARED")
+        || current != receipt.installed_sha256
+    {
         return Err("IA_RGSS3_CURRENT_ARCHIVE_CHANGED".into());
     }
     let bytes = fs::read(&backup).map_err(|_| "IA_RGSS3_BACKUP_READ_FAILED".to_string())?;
