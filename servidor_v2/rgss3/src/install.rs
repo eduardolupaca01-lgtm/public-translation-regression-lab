@@ -354,11 +354,8 @@ fn receipt_path(root: &Path) -> PathBuf {
         .join("rgss3-install.json")
 }
 
-fn write_backup(source: &Path, destination: &Path, expected_sha: &str) -> Result<(), String> {
-    ensure_safe_dir(
-        destination.parent().and_then(Path::parent).and_then(Path::parent).unwrap_or_else(|| Path::new(".")),
-        &["IA Traductora", ".backups", "rgss3"],
-    )?;
+fn write_backup(root: &Path, source: &Path, destination: &Path, expected_sha: &str) -> Result<(), String> {
+    ensure_safe_dir(root, &["IA Traductora", ".backups", "rgss3"])?;
     if let Some(parent) = destination.parent() {
         if !parent.is_dir() {
             return Err("IA_RGSS3_BACKUP_DIR_FAILED".into());
@@ -501,7 +498,7 @@ pub fn install(game: &Path, plugin_path: &Path) -> Result<Receipt, String> {
     let installed_sha = hash_bytes(&rebuilt);
     let plugin_sha = hash_bytes(plugin.as_bytes());
     let backup = backup_path(&root, &original_sha);
-    write_backup(&archive, &backup, &original_sha)?;
+    write_backup(&root, &archive, &backup, &original_sha)?;
 
     let relative_backup = backup
         .strip_prefix(&root)
@@ -564,8 +561,6 @@ pub fn restore(game: &Path) -> Result<Receipt, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
-
     fn make_scripts_data() -> Vec<u8> {
         let temp = tempfile::tempdir().unwrap();
         let input = temp.path().join("json");
