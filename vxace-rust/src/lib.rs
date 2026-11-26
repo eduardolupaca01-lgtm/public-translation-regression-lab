@@ -5,6 +5,8 @@
 //! duplicate detection and bounded streaming of every entry. It never writes
 //! into the source game directory.
 
+pub mod text;
+
 use encoding_rs::SHIFT_JIS;
 use rpgmad_lib::{decrypt_from_reader, ArchiveEntry, Engine};
 use std::collections::HashSet;
