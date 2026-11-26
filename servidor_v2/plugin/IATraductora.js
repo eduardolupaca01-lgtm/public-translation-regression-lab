@@ -6218,7 +6218,7 @@ function scanVisuQuestParameters(){
 }
 function scanPluginParameterValue(value,key,depth,budget){
     if(!budget||budget.count++>=1600||depth>4)return;
-    if(key&&/(?:code|script|eval|expression|formula|function|regex|pattern|javascript)/i.test(key))return;
+    if(key&&/(?:code|script|eval|expression|formula|function|regex|pattern|javascript|known|tracked|internal|onload|questkey|(?:^|[^a-z])id(?:[^a-z]|$)|(?:^|[^a-z])js(?:[^a-z]|$))/i.test(key))return;
     if(typeof value==="string"){
         if(value.length>65536)return;
         if(value.length<=1800){

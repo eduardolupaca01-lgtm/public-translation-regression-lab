@@ -3734,7 +3734,10 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
             OriginRole:"Farmer",
             HintText:hint,
             JapaneseHint:"お家に帰ろう。",
-            ScriptCode:"// Let's go home. Our house has a blue door."
+            ScriptCode:"// Let's go home. Our house has a blue door.",
+            KnownQuests:"[\"QuestKeyInternal\"]",
+            TrackedQuest:"QuestKeyInternal",
+            OnLoadQuestJS:"\"Do not translate this executable field.\""
         }
     }],responses:{
         [longJoined]:longEs,
@@ -3829,6 +3832,9 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     assert.equal(probe.has("ja","お家に帰ろう。"),true,"Japanese plugin text is inventoried independently");
     assert.equal(probe.has("en","// Let's go home. Our house has a blue door."),false,
         "script/code parameters are not scanned as display text");
+    assert.equal(probe.has("en","QuestKeyInternal"),false,"internal quest identifiers are excluded");
+    assert.equal(probe.has("en","Do not translate this executable field."),false,
+        "plugin JavaScript callback bodies are never scanned as prose");
     console.log("IA_R26_CUSTOM_PIXI_CANVAS_PLUGIN_PARAMETER_AND_WHOLE_TEXT_PASS");
 }
 (async()=>{
