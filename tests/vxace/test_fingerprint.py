@@ -43,7 +43,7 @@ def make_game(
     return root
 
 
-class VX AceFingerprintTests(unittest.TestCase):
+class VXAceFingerprintTests(unittest.TestCase):
     def test_detects_loose_vxace(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             game = make_game(Path(temp) / "VX Ace")
