@@ -39,7 +39,7 @@ module TenshixgameRGSS3
   end
 
   def self.wide(value)
-    value.to_s.encode("UTF-16LE") + "\0\0".encode("UTF-16LE")
+    value.to_s.encode("UTF-16LE") + "\0".encode("UTF-16LE")
   end
 
   def self.win_api(dll, name, imports, returns)
