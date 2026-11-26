@@ -67,10 +67,8 @@ Dir.mktmpdir("rgss3-runtime-test") do |directory|
 end
 
 class RGSS3RuntimeBehaviorTest < Minitest::Test
-  def translate_with
-    TenshixgameRGSS3.define_singleton_method(:translate_wait) do |texts|
-      yield(texts)
-    end
+  def translate_with(&translator)
+    TenshixgameRGSS3.define_singleton_method(:translate_wait, &translator)
   end
 
   def test_detect_source_language
@@ -82,10 +80,10 @@ class RGSS3RuntimeBehaviorTest < Minitest::Test
     source = "Hola \\C[3]mundo \\V[2]"
     protected, markers = TenshixgameRGSS3.protect_codes(source)
     refute_includes protected, "\\C[3]"
-    assert_equal "Hello \\C[3]world \\V[2]",
-      TenshixgameRGSS3.restore_codes("Hello " + protected.split(" ").first.to_s + "world", markers) rescue nil
-    restored = TenshixgameRGSS3.restore_codes(protected, markers)
-    assert_equal source, restored
+    translated = protected.gsub("Hola", "Hello").gsub("mundo", "world")
+    restored = TenshixgameRGSS3.restore_codes(translated, markers)
+    assert_equal "Hello \\C[3]world \\V[2]", restored
+    assert_equal source, TenshixgameRGSS3.restore_codes(protected, markers)
   end
 
   def test_missing_or_duplicated_control_markers_are_rejected
