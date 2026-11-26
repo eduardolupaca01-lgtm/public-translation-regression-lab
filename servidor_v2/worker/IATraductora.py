@@ -503,7 +503,7 @@ def verified_rgss3_runtime(game:Path)->tuple[Path,Path]:
             raise ValueError("IA_RGSS3_ARCHIVE_TAMANO_INVALIDO")
         with archive.open("rb") as stream:
             header=stream.read(8)
-        if header!=b"RGSSAD\\x00\\x03":
+        if header!=b"RGSSAD\x00\x03":
             raise ValueError("IA_RGSS3_ARCHIVE_NO_VALIDO")
     elif loose:
         if not data.is_dir() or not ordinary(data/"System.rvdata2") or not ordinary(data/"Scripts.rvdata2"):
