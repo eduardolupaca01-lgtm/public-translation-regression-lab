@@ -156,8 +156,17 @@ class TestUnseenHoldoutContracts(unittest.TestCase):
 
     def test_speaker_control_code_accepts_pm_clock_notation(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
-        translated = r"\N[7] llegará mañana a las 3:00 p. m."
-        self.assertEqual(_semantic_errors(case, translated), [])
+        for suffix in ("p. m.", "p.m.", "pm", "P. M."):
+            with self.subTest(suffix=suffix):
+                translated = rf"\N[7] llegará mañana a las 3:00 {suffix}"
+                self.assertEqual(_semantic_errors(case, translated), [])
+
+    def test_speaker_control_code_rejects_am_clock_notation(self) -> None:
+        case = next(x for x in HOLDOUT_CASES if x.id == "speaker_control_code")
+        translated = r"\N[7] llegará mañana a las 3:00 a. m."
+        errors = _semantic_errors(case, translated)
+        self.assertTrue(any("MISSING_CONCEPTS" in error for error in errors), errors)
+        self.assertTrue(any("AFTERNOON_PERIOD_LOST" in error for error in errors), errors)
 
     def test_shop_hours_accepts_spelled_ten_without_changing_line_breaks(self):
         case = next(x for x in HOLDOUT_CASES if x.id == "shop_hours_line_break")
