@@ -2638,6 +2638,129 @@ async function testR21CteNativeContextFirstPresentation(){
     assert.equal(JSON.stringify(Object.entries(state.files).filter(([n])=>n.startsWith(base))),original);
     assert.ok(!f.posts.some(p=>p.text.includes("\\.")||p.text.includes("%1")));
 }
+
+async function testR29LateRoundscapePluginHooks(){
+    const rspLabel="Who Are You?",rspLabelEs="¿Quién eres?";
+    const rspParagraph="Every legend starts somewhere. Shape yours.";
+    const rspParagraphEs="Cada leyenda comienza en algún lugar. Dale forma a la tuya.";
+    const npcLine="The humans stare at me here. Let them stare. I am not here for them.";
+    const npcLineEs="Los humanos me miran aquí. Que miren. No estoy aquí por ellos.";
+    const f=fixture(180,{testHooks:true,plugins:[
+        {name:"RS_PremiumUI",status:true,parameters:{}},
+        {name:"RS_PartyTalk",status:true,parameters:{}}
+    ],responses:{
+        [rspLabel]:rspLabelEs,[rspParagraph]:rspParagraphEs,[npcLine]:npcLineEs
+    }});
+    const c=f.context,probe=c.window.__IA_TRADUCTORA_TEST__;
+    await wait(25);
+    assert.equal(probe.r27RspStats.detected,0,"RS_PremiumUI is loaded after IA Traductora");
+    assert.equal(probe.r28PartyTalkStats.detected,0,"RS_PartyTalk is loaded after IA Traductora");
+
+    function PixelContext(bitmap){
+        this.bitmap=bitmap;
+        this.pixels=new Uint8ClampedArray(bitmap.width*bitmap.height*4);
+    }
+    PixelContext.prototype.fillText=function(value,x,y){
+        var text=String(value),baseX=Math.round(Number(x)||0),baseY=Math.round(Number(y)||0);
+        for(var n=0;n<text.length;n++){
+            var px=baseX+n,py=baseY;
+            if(px<0||py<0||px>=this.bitmap.width||py>=this.bitmap.height)continue;
+            var i=(py*this.bitmap.width+px)*4;
+            this.pixels[i]=text.charCodeAt(n)%255;this.pixels[i+1]=120;
+            this.pixels[i+2]=40;this.pixels[i+3]=255;
+        }
+    };
+    PixelContext.prototype.getImageData=function(x,y,w,h){
+        x=Math.floor(x);y=Math.floor(y);w=Math.floor(w);h=Math.floor(h);
+        var data=new Uint8ClampedArray(w*h*4);
+        for(var row=0;row<h;row++)for(var col=0;col<w;col++){
+            var sx=x+col,sy=y+row;
+            if(sx<0||sy<0||sx>=this.bitmap.width||sy>=this.bitmap.height)continue;
+            var from=(sy*this.bitmap.width+sx)*4,to=(row*w+col)*4;
+            data[to]=this.pixels[from];data[to+1]=this.pixels[from+1];
+            data[to+2]=this.pixels[from+2];data[to+3]=this.pixels[from+3];
+        }
+        return {width:w,height:h,data:data};
+    };
+    PixelContext.prototype.putImageData=function(image,x,y){
+        for(var row=0;row<image.height;row++)for(var col=0;col<image.width;col++){
+            var dx=x+col,dy=y+row;
+            if(dx<0||dy<0||dx>=this.bitmap.width||dy>=this.bitmap.height)continue;
+            var from=(row*image.width+col)*4,to=(dy*this.bitmap.width+dx)*4;
+            this.pixels[to]=image.data[from];this.pixels[to+1]=image.data[from+1];
+            this.pixels[to+2]=image.data[from+2];this.pixels[to+3]=image.data[from+3];
+        }
+    };
+    PixelContext.prototype.save=function(){};
+    PixelContext.prototype.restore=function(){};
+    PixelContext.prototype.translate=function(){};
+    PixelContext.prototype.rotate=function(){};
+    Object.defineProperty(c.Bitmap.prototype,"_context",{
+        configurable:true,get:function(){return this.__r29Context||(this.__r29Context=new PixelContext(this));}
+    });
+    c.Bitmap.prototype._setDirty=function(){this._r29Dirty=true;};
+    const paintCalls=[];
+    const rsp={
+        text(bitmap,value,x,y){
+            paintCalls.push(String(value));
+            bitmap._context.fillText(String(value),x,y);
+            return String(value).length*8;
+        },
+        textWidth(bitmap,value){return String(value).length*8;},
+        wrap(bitmap,value){return [String(value)];},
+        textUp(bitmap,value,x,y,options){return this.text(bitmap,value,x,y,options);}
+    };
+    c.window.RSP=rsp;
+
+    function Bubble(actorId,value){this.initialize(actorId,value);}
+    Bubble.prototype.initialize=function(actorId,value){
+        this._actorId=actorId;this._ch=null;this._age=0;this._out=-1;
+        this._lifetime=240;this._w=180;this._h=52;this._tail=10;
+        this._tailX=-1;this._lost=false;this.opacity=255;
+        this.bitmap={text:String(value),destroy:function(){this.destroyed=true;}};
+    };
+    Bubble.prototype.place=function(){};
+    Bubble.prototype.update=function(){this._age++;};
+    Bubble.prototype.isDone=function(){return false;};
+    const row={id:"r29-test",lines:[{who:3,text:npcLine}]};
+    const api={rows:[row],state:{row:row,idx:0},Bubble:Bubble};
+    c.window.RSPartyTalk=api;
+
+    const until=async function(predicate,label,limit){
+        const end=Date.now()+(limit||8000);
+        while(Date.now()<end){if(predicate())return;await wait(25);}
+        assert.fail("R29 timeout: "+label);
+    };
+    await until(function(){
+        return rsp.__iaR27Hooked===true&&Bubble.prototype.__iaR28Hooked===true;
+    },"deferred RS plugin hooks");
+    assert.equal(probe.r27RspStats.detected,1,"RSP hook installs after RS_PremiumUI exports window.RSP");
+    assert.equal(probe.r28PartyTalkStats.detected,1,"PartyTalk hook installs after RS_PartyTalk exports its Bubble API");
+    assert.equal(probe.r28PartyTalkStats.lines,1,"authored NPC dialogue rows are inventoried");
+    assert.equal(probe.r28PartyTalkSource(npcLine),"en","NPC dialogue uses the message classifier");
+
+    c.SceneManager._scene=new c.Scene_Map();
+    const labelBitmap=new c.Bitmap(400,100);
+    rsp.text(labelBitmap,rspLabel,12,28,{size:20});
+    const paragraphBitmap=new c.Bitmap(420,120);
+    const wrapped=rsp.wrap(paragraphBitmap,rspParagraph,260,{size:20});
+    let y=58;
+    wrapped.forEach(function(line){rsp.text(paragraphBitmap,line,12,y,{size:20});y+=26;});
+    const bubble=new Bubble(3,npcLine);
+    bubble.parent={};
+    await until(function(){
+        return paintCalls.indexOf(rspLabelEs)>=0&&
+            paintCalls.indexOf(rspParagraphEs)>=0&&bubble.bitmap.text===npcLineEs;
+    },"RSP and walking-NPC first appearance",9000);
+    assert.ok(f.posts.some(function(p){return p.text===rspLabel;}),"custom UI labels reach OPUS as complete strings");
+    assert.ok(f.posts.some(function(p){return p.text===rspParagraph;}),"wrapped custom UI paragraphs reach OPUS before line splitting");
+    assert.ok(f.posts.some(function(p){return p.text===npcLine;}),"walking NPC dialogue reaches OPUS on first display");
+    assert.ok(probe.r27RspStats.rendered>=2,"RSP text and wrapped paragraph are repainted in their original Bitmap");
+    assert.equal(probe.r28PartyTalkStats.rendered,1,"NPC bubble is replaced in place without creating a second window");
+    assert.equal(row.lines[0].text,npcLineEs,"the current PartyTalk line cache is updated for the next encounter");
+    console.log("IA_R29_ROUNDSCAPE_RSP_AND_PARTYTALK_FIRST_APPEARANCE_PASS");
+}
+
 async function testR20CteLargeInventoryAndPhysicalF10(){
     const root=path.join("/tmp","servidor-qa-cte-large-日本語"),data=path.join(root,"data"),base=path.join(root,"languages"),
         en=path.join(base,"EN"),es=path.join(base,"ES");
@@ -2678,7 +2801,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R26-20261126"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R29-20261126"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -3840,6 +3963,7 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     console.log("IA_R26_CUSTOM_PIXI_CANVAS_PLUGIN_PARAMETER_AND_WHOLE_TEXT_PASS");
 }
 (async()=>{
+    await testR29LateRoundscapePluginHooks();
     await testR26CustomPixiAndPluginCanvasSurfaces();
     await testR25MZBufferedMessageFlowAndShortLabels();
     await testR24WholeDynamicPicturesAndGlyphs();

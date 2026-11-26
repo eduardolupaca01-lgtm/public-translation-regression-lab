@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R28-20261126"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R29-20261126"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -2728,7 +2728,7 @@ function r27RspPoll(ticket){
 }
 function r27RspQueue(ticket){
     if(r27RspPending>=32){r27RspStats.skipped++;return false;}
-    r27RspPending++;ticket.done=false;ticket.deadline=Date.now()+30000;
+    r27RspPending++;ticket.done=false;ticket.deadline=Date.now()+Math.max(15000,maxWait);
     ticket.requested=!!state.connected;
     ticket.scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
     ticket.bitmapWidth=ticket.bitmap.width;ticket.bitmapHeight=ticket.bitmap.height;
@@ -2833,7 +2833,11 @@ function hookRSPTextSurface(){
 
 function r28PartyTalkSource(raw){
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800)return null;
-    return r27RspSource(raw);
+    var source=r27RspSource(raw);
+    if(source)return source;
+    // PartyTalk rows are authored dialogue, so use the message classifier
+    // for short NPC utterances that are not generic UI labels.
+    return r22EnglishSource(raw,"message");
 }
 function r28PartyTalkConvert(raw){
     return String(raw||"").replace(/\\N\[(\d+)\]/gi,function(match,id){
@@ -2880,8 +2884,7 @@ function r28PartyTalkScan(api){
             var source=r28PartyTalkSource(line.text);
             if(!source)return;
             count++;
-            if(source==="en")r22Remember(line.text,false,"message");
-            else addPrefetch(line.text,false,source);
+            addPrefetch(line.text,false,source);
         });
     });
     r28PartyTalkStats.lines=count;
@@ -2906,12 +2909,11 @@ function hookRoundscapePartyTalk(){
             if(lineRef&&lineRef.text===raw)lineRef.text=cached;
             return originalInit.call(this,actorId,cached);
         }
-        if(source==="en")r22Remember(raw,true,"message");
-        else addPrefetch(raw,true,source);
+        addPrefetch(raw,true,source);
         var result=originalInit.apply(this,arguments);
         var sprite=this,scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
         var ticket={sprite:sprite,actorId:actorId,raw:raw,source:source,lineRef:lineRef,
-            scene:scene,deadline:Date.now()+15000,requested:false,done:false,timer:null};
+            scene:scene,deadline:Date.now()+Math.max(15000,maxWait),requested:false,done:false,timer:null};
         sprite._iaR28PartyTalkTicket=ticket;
         sprite._iaR28PartyTalkPending=true;
         if(state.connected){ticket.requested=true;firstViewRequest(source,raw);}
@@ -2958,6 +2960,27 @@ function hookRoundscapePartyTalk(){
     }
     proto.__iaR28Hooked=true;
     proto.__iaR28OriginalInitialize=originalInit;
+}
+
+
+function lateRoundscapeHooksReady(){
+    if(isMZ||typeof window==="undefined")return true;
+    var rspRequired=pluginEnabled(/^RS_PremiumUI$/);
+    var talkRequired=pluginEnabled(/^RS_PartyTalk$/);
+    var rsp=window.RSP,talk=window.RSPartyTalk;
+    var rspReady=!rspRequired||!!(rsp&&rsp.__iaR27Hooked);
+    var talkReady=!talkRequired||!!(talk&&talk.Bubble&&talk.Bubble.prototype&&talk.Bubble.prototype.__iaR28Hooked);
+    return rspReady&&talkReady;
+}
+function scheduleLateRoundscapeHooks(){
+    if(isMZ||typeof window==="undefined")return;
+    var deadline=Date.now()+20000;
+    function attempt(){
+        try{hookRSPTextSurface();}catch(_){state.errors++;}
+        try{hookRoundscapePartyTalk();}catch(_){state.errors++;}
+        if(!lateRoundscapeHooksReady()&&Date.now()<deadline)setTimeout(attempt,80);
+    }
+    attempt();
 }
 
 function r26CustomCanvasOwner(stack){
@@ -8138,9 +8161,9 @@ try{
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
     loadDisplayMacros();startPersistentCache();
-    // Plugin-owned text APIs sit outside RPG Maker's standard message windows.
-    try{hookRSPTextSurface();}catch(_){state.errors++;}
-    try{hookRoundscapePartyTalk();}catch(_){state.errors++;}
+    // RS plugins appear later in the game's plugin list. Retry until their
+    // APIs are exported, then hook them before the first map dialogue.
+    try{scheduleLateRoundscapeHooks();}catch(_){state.errors++;}
     state.phase="NUCLEO";
     if(engineAt(content)!==ENGINE_ID)throw Error("IA_NUCLEO_RPG_NO_ENCONTRADO");
     if(cte.enabled){
@@ -8180,7 +8203,8 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,
         r26PixiNormalize:r26PixiNormalize,r26CustomCanvasOwner:r26CustomCanvasOwner,
         scanPluginDisplayParameters:scanPluginDisplayParameters,r26PixiStats:r26PixiStats,
-        r27RspSource:r27RspSource,r27RspStats:r27RspStats,r28PartyTalkStats:r28PartyTalkStats
+        r27RspSource:r27RspSource,r27RspStats:r27RspStats,r28PartyTalkSource:r28PartyTalkSource,
+        r28PartyTalkStats:r28PartyTalkStats,lateRoundscapeHooksReady:lateRoundscapeHooksReady
     };
 }
 })();
