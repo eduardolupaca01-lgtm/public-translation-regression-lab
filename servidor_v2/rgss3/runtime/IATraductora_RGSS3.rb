@@ -39,7 +39,7 @@ module TenshixgameRGSS3
   end
 
   def self.wide(value)
-    value.to_s.encode("UTF-16LE") + "\0\0"
+    value.to_s.encode("UTF-16LE") + "\0\0".encode("UTF-16LE")
   end
 
   def self.win_api(dll, name, imports, returns)
@@ -218,12 +218,18 @@ module TenshixgameRGSS3
         wait_for_bridge unless bridge
         raise "IA_BRIDGE_NOT_READY" unless bridge
         result = translate_now(texts)
-        @mutex.synchronize { @jobs[id][:result] = result }
+        @mutex.synchronize do
+          @jobs[id][:result] = result if @jobs[id]
+        end
       rescue
-        @failed += texts.length
-        @mutex.synchronize { @jobs[id][:error] = "IA_TRANSLATION_FAILED" }
+        @mutex.synchronize do
+          @failed += texts.length
+          @jobs[id][:error] = "IA_TRANSLATION_FAILED" if @jobs[id]
+        end
       ensure
-        @mutex.synchronize { @jobs[id][:done] = true }
+        @mutex.synchronize do
+          @jobs[id][:done] = true if @jobs[id]
+        end
       end
     end
     id
@@ -278,7 +284,9 @@ class Game_Interpreter
   alias tx_rgss3_original_command_101 command_101
   def command_101
     originals = []
-    if @list && @index && TenshixgameRGSS3
+    choice_index = nil
+    original_choices = nil
+    if @list && @index
       rows = []
       cursor = @index + 1
       while @list[cursor] && @list[cursor].code == 401
@@ -294,11 +302,31 @@ class Game_Interpreter
           end
         end
       end
+
+      # VX Ace consumes a following Show Choices (102) inside command_101;
+      # command_102 is not dispatched for this common event layout.
+      if @list[cursor] && @list[cursor].code == 102
+        parameters = @list[cursor].parameters
+        if parameters && parameters[0].is_a?(Array) && !parameters[0].empty?
+          choice_index = cursor
+          original_choices = parameters[0].dup
+          translated_choices = TenshixgameRGSS3.translate_wait(original_choices)
+          if translated_choices && translated_choices.length == original_choices.length
+            parameters[0] = translated_choices
+          else
+            original_choices = nil
+            choice_index = nil
+          end
+        end
+      end
     end
     tx_rgss3_original_command_101
   ensure
     originals.each do |index, text|
       @list[index].parameters[0] = text if @list && @list[index]
+    end
+    if original_choices && @list && @list[choice_index]
+      @list[choice_index].parameters[0] = original_choices
     end
   end
 
