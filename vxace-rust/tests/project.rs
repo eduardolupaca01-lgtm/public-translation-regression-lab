@@ -9,7 +9,7 @@ use vxace_rgss3_core::project::{
 fn japanese_scripts_file() -> Vec<u8> {
     let scripts = Scripts::new(
         vec![303],
-        vec!["$game_message.add('こんにちは')\\n".to_owned()],
+        vec!["$game_message.add('こんにちは')\n".to_owned()],
         vec!["Japanese".to_owned()],
     );
     dump(&Base::encode_scripts(&scripts))
