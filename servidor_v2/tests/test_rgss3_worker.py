@@ -18,7 +18,7 @@ class RGSS3WorkerTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         (self.root / "Game.exe").write_bytes(b"MZ-fixture")
         (self.root / "Game.ini").write_text("[Game]\nLibrary=RGSS301.dll\n", encoding="utf-8")
-        (self.root / "Game.rgss3a").write_bytes(b"RGSSAD\\x00\\x03" + b"archive-fixture")
+        (self.root / "Game.rgss3a").write_bytes(b"RGSSAD\x00\x03" + b"archive-fixture")
 
     def test_detects_packed_vxace_without_running_game(self):
         game, content = IA.verified_rgss3_runtime(self.root)
