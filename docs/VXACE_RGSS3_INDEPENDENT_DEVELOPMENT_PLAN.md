@@ -42,6 +42,10 @@ No repetiremos esas pruebas como si fueran una aceptación nueva. Se conserva la
 | Camacho TX314–TX322 | Ciclo de vida, supervisor de procesos, recuperación de sesión y migración de adaptadores | Referencia de diseño de proceso, no implementación RGSS3 |
 | Panda TX720–TX723 | Pruebas de texto japonés, elección, F10, nombre del jugador y límites del renderizado | Las pruebas de otras familias no certifican RGSS3 |
 | Eduardo PR #8/#10/#11 | Separación de instalador, complemento, worker, modelos y empaquetado | Las pruebas sintéticas y los artefactos de diagnóstico no sustituyen la ejecución en el juego real |
+| Eduardo TX718/TX763 | Diagnósticos Unicode verificables y cobertura de límites para códigos RPG reservados | Los marcadores y pruebas de MV/MZ no se trasladan como implementación RGSS3 |
+| Camacho TX233–TX236 | Escritura por etapas, relectura del recurso reconstruido e identidad de campos | El patrón de staging se aplica a salidas de VX Ace; los formatos WOLF/Bakin/SWF no se reutilizan |
+| Camacho TX314–TX326 | Contratos explícitos de ciclo de vida, propiedad del proceso y aislamiento de sesión | Es evidencia de arquitectura; no acredita un runtime RGSS3 |
+| Drimt PR #4/#5/#49 | Límites de tamaño coherentes, CP932/Shift-JIS, CLI auténtico y pruebas sintéticas Windows/Linux | Un round-trip de fixture no certifica un juego comercial ni su runtime |
 
 ## Hechos técnicos que condicionan el diseño
 
@@ -65,10 +69,11 @@ Fuentes técnicas consultadas:
 | `rpgmad-lib = 7.0.0` | WTFPL | Lectura en streaming y validación del contenedor RGSS3A |
 | `rvpacker-txt-rs-lib = 19.0.1` | WTFPL | Extracción y aplicación de texto en estructuras Marshal de RPG Maker; esta rama expone primero el adaptador de scripts VX Ace |
 | `marshal-rs = 4.0.1` | WTFPL | Generación de fixtures Marshal sintéticos en las pruebas |
+| `tempfile = 3.23.0` | MIT OR Apache-2.0 | Staging temporal y publicación del árbol `Data` solo después de un build completo |
 
 Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su biblioteca tiene `gxhash` como función opcional; esta rama no la activa y usa la configuración predeterminada. Las tres bibliotecas se consumen como dependencias: no se copiaron archivos fuente de Panda, Camacho ni de otras ramas de Eduardo.
 
-**Límite importante de Marshal:** la escritura reconstruye el flujo Marshal a partir del grafo parseado. Se verifica que permanezcan IDs, nombres, orden, scripts y valores no traducidos; no se promete identidad byte a byte del contenedor completo. Toda salida se devuelve en un búfer nuevo. La instalación transaccional sobre una copia autorizada será una etapa distinta.
+**Límite importante de Marshal:** la escritura reconstruye el flujo Marshal a partir del grafo parseado. Se verifica que permanezcan IDs, nombres, orden, scripts y valores no traducidos; no se promete identidad byte a byte del contenedor completo. Toda salida se devuelve en un búfer nuevo. La construcción del árbol `Data` se hace en un directorio temporal hermano del destino; solo se publica después de completar el procesamiento, rechaza destinos existentes y descarta el staging si falla. Esto no es todavía la instalación transaccional sobre el juego, que será una etapa distinta.
 
 ## Arquitectura que se construirá desde cero
 
@@ -78,7 +83,7 @@ Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su bi
 4. **Modelo de texto tipado.** Diferenciar diálogo, opción, texto desplazable, base de datos, términos del sistema y nombres propios. Preservar códigos RGSS, variables, formato, índices y marcadores dinámicos.
 5. **Adaptador de traducción.** Definir un contrato explícito con el worker V95: identidad, autenticación, lotes, orden, timeouts, errores, caché y publicación atómica. No aceptar un mock como prueba de modelo real.
 6. **Runtime RGSS3 nativo.** Compatible con Ruby 1.9.2. Traducir la primera presentación dentro de la ventana original, conservar el avance de eventos y las IDs de elección, y no mostrar una segunda superficie. Si el servicio no responde, mantener el original y permitir continuar sin corromper la escena.
-7. **Instalación y restauración.** Instalar únicamente en una copia cerrada/autorizada. Registrar SHA-256, respaldo, recibo y estado transaccional. Rechazar cambios externos y restaurar de forma idempotente.
+7. **Instalación y restauración.** Instalar únicamente en una copia cerrada/autorizada. Registrar SHA-256, respaldo, recibo y estado transaccional. Rechazar cambios externos y restaurar de forma idempotente. Antes de esa etapa, la reconstrucción del árbol `Data` debe ser fail-closed: staging en el mismo volumen, destino nuevo, publicación final del subárbol `Data` por rename y ninguna salida parcial si falla el parser.
 8. **Integración y empaquetado Windows.** Solo después de aprobar las capas anteriores se conectará el selector/instalador y se preparará el EXE con todos los componentes y modelos autorizados.
 
 ## Matriz de aceptación: seis puertas, no una cadena interminable
@@ -86,7 +91,7 @@ Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su bi
 | Puerta | Evidencia necesaria | Criterio de salida |
 |---|---|---|
 | A. Detección | Fixtures de VX Ace, XP, VX, MV/MZ, carpetas ambiguas y rutas Unicode | VX Ace se reconoce; otros motores y casos ambiguos se rechazan correctamente |
-| B. Archivo/Marshal | Lectura, extracción, round-trip, entradas duplicadas, traversal, truncado y límites | Solo cambia el contenido previsto; entradas ajenas se conservan; restauración recupera el original |
+| B. Archivo/Marshal | Lectura, extracción, round-trip, entradas duplicadas, traversal, truncado y límites; staging fallido y destino existente | Solo cambia el contenido previsto; entradas ajenas se conservan; no se publica `Data` parcial; restauración recupera el original |
 | C. Runtime Ruby | Sintaxis/ejecución con Ruby 1.9.2 compatible, comandos 101/102/103/104/105, variables y códigos | Texto y opciones cambian en la ventana nativa; no hay overlay, doble ventana ni avance de evento |
 | D. Worker real | Worker V95 identificado y autenticado, modelo real, caché fría/caliente, timeout y desconexión | La primera presentación se resuelve correctamente; respuestas tardías no contaminan otra escena |
 | E. Instalación Windows | Copia de juego autorizada, rutas con espacios/Unicode, permisos, cierre/reapertura y restauración | Instalación y rollback verificables en Windows x64; partidas y datos no seleccionados intactos |
@@ -116,6 +121,6 @@ Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su bi
 - **Puerta B.1 — RGSS3A:** 12 casos pasaron en ambos sistemas; incluyen cabecera, motor, truncado, rutas, duplicados, Shift-JIS y límites. Son archivos sintéticos generados con la biblioteca fijada, no una certificación con un juego comercial.
 - **Puerta B.2 — scripts Marshal:** 4 casos pasaron en ambos sistemas; extracción de literales, aplicación de una traducción, conservación semántica de números/nombres/orden y del segundo script, escape de comillas Ruby y rechazo de Marshal inválido.
 - Ejecución VX Ace: [workflow 45893096605](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45893096605) — Windows y Ubuntu correctos.
-- La comprobación general del repositorio sigue fallando en `tests/test_unseen_holdout.py::test_speaker_control_code_accepts_pm_clock_notation`: el validador reporta conceptos ausentes `tarde`, `atardecer`, `p.m.` y `pm`. Está fuera de los archivos de esta PR; no se desactivó ni se alteró esa prueba.
+- La comprobación general del repositorio y el workflow VX Ace más reciente (`45897143100` y `45897143099`) terminaron `success` en ambos sistemas. La corrección de la notación meridiana pertenece a la batería general y no se ha usado para rebajar controles de VX Ace.
 - No se ha copiado código de las ramas RGSS anteriores ni se ha modificado `main`, Panda, Camacho o ningún archivo de juego.
 - **No existe todavía un EXE VX Ace aprobado.** Falta validar archivos reales de juegos, los demás tipos de datos Marshal, Ruby 1.9.2 dentro de VX Ace, el worker V95 real, la ventana nativa, instalación/restauración y empaquetado. Las pruebas sintéticas no se presentan como compatibilidad de producción.

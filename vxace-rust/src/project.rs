@@ -11,6 +11,7 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
 };
+use tempfile::Builder as TempDirBuilder;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -26,6 +27,12 @@ pub enum ProjectTextError {
     },
     #[error("at least one VX Ace file kind must be selected")]
     NoFileFlags,
+    #[error("output path must name a new directory: {0}")]
+    InvalidOutputPath(PathBuf),
+    #[error("output directory already exists: {0}")]
+    OutputAlreadyExists(PathBuf),
+    #[error("VX Ace processor did not create a staged Data directory")]
+    MissingStagedData,
     #[error("workspace preparation failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("VX Ace project processing failed: {0}")]
@@ -96,19 +103,75 @@ pub fn apply_project_translation(
     if !translation.is_dir() {
         return Err(ProjectTextError::InvalidSourceDirectory(translation));
     }
-    fs::create_dir_all(&output)?;
-    let output = output.canonicalize()?;
+    let translation = translation.canonicalize()?;
+
+    // Resolve the destination parent after creating it. This catches a parent
+    // directory that is a symlink/reparse point into the source game.
+    let output_name = output
+        .file_name()
+        .ok_or_else(|| ProjectTextError::InvalidOutputPath(output.clone()))?
+        .to_os_string();
+    let output_parent = output
+        .parent()
+        .ok_or_else(|| ProjectTextError::InvalidOutputPath(output.clone()))?;
+    fs::create_dir_all(output_parent)?;
+    let output_parent = output_parent.canonicalize()?;
+    let output = output_parent.join(output_name);
     ensure_disjoint(&source, &output)?;
+
+    if translation == output
+        || translation.starts_with(&output)
+        || output.starts_with(&translation)
+    {
+        return Err(ProjectTextError::WorkspacesOverlap {
+            translation,
+            output,
+        });
+    }
+    if output.exists() {
+        return Err(ProjectTextError::OutputAlreadyExists(output));
+    }
+
+    // Build under a temporary sibling directory. A failed Marshal parse,
+    // translation read, or write drops the staging tree and never publishes a
+    // partial Data directory at the caller's destination.
+    let staging = TempDirBuilder::new()
+        .prefix(".vxace-stage-")
+        .tempdir_in(&output_parent)?;
 
     let mut processor = Processor {
         mode: Mode::Write,
         file_flags,
         ..Processor::default()
     };
-    processor.process(EngineType::VXAce, &source, &translation, Some(&output))?;
+    processor.process(EngineType::VXAce, &source, &translation, Some(staging.path()))?;
+
+    let staged_data = staging.path().join("Data");
+    if !staged_data.is_dir() {
+        return Err(ProjectTextError::MissingStagedData);
+    }
+
+    // Claim the destination exclusively. Publishing Data with one same-volume
+    // rename makes the completed tree visible at once and refuses an existing
+    // destination instead of merging into or overwriting it.
+    match fs::create_dir(&output) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(ProjectTextError::OutputAlreadyExists(output));
+        }
+        Err(error) => return Err(ProjectTextError::Io(error)),
+    }
+
+    let published_data = output.join("Data");
+    if let Err(error) = fs::rename(&staged_data, &published_data) {
+        // Remove only the empty destination directory created above. If an
+        // external process placed content there, remove_dir will fail safely.
+        let _ = fs::remove_dir(&output);
+        return Err(ProjectTextError::Io(error));
+    }
+
     Ok(())
 }
-
 fn canonical_source(path: &Path) -> Result<PathBuf, ProjectTextError> {
     let source = path.canonicalize()?;
     if !source.is_dir() {
