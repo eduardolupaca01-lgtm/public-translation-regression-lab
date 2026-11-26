@@ -32,7 +32,7 @@ Restore the exact original archive from the verified backup:
 tenshixgame-rgss3-probe restore <game-root>
 ```
 
-The installer updates only the `Data/Scripts.rvdata2` entry inside `Game.rgss3a`. It verifies the rebuilt archive and each non-script entry, creates a SHA-256-addressed backup and a receipt, and refuses restoration if the installed archive has been changed by another program. Synthetic fixtures exercise install and byte-identical restore.
+The installer updates only the `Data/Scripts.rvdata2` entry inside `Game.rgss3a`. It verifies archive entry paths/order and the uncompressed contents of every non-script entry, creates a SHA-256-addressed backup and a receipt, and refuses restoration if the installed archive has been changed by another program. Synthetic fixtures exercise install and byte-identical restoration of the original archive from backup.
 
 ## Runtime and V95 bridge
 
@@ -69,4 +69,4 @@ Both upstream libraries are WTFPL. They are build-time dependencies, not runtime
 - Inspect never executes `Game.exe` and extracts only `Data/` to a temporary directory.
 - Install is intended only for a closed test copy; it changes the archive's Scripts entry and nothing else.
 - Loose and packed layouts mixed together, invalid archive signatures, unsafe paths, duplicate entries, oversized expansions and malformed Marshal data are rejected.
-- Saves, maps, audio, graphics, system data and other non-script archive entries are preserved byte-for-byte in the synthetic verification tests.
+- Saves, maps, audio, graphics, system data and other non-script archive entries retain the same paths and uncompressed contents in the synthetic verification tests. The archive container itself is rebuilt, so compressed byte streams may differ.
