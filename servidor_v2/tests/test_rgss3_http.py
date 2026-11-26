@@ -28,7 +28,7 @@ class RGSS3HttpIntegrationTests(unittest.TestCase):
             "[Game]\nLibrary=RGSS301.dll\n", encoding="utf-8"
         )
         (self.root / "Game.rgss3a").write_bytes(
-            b"RGSSAD\\x00\\x03" + b"synthetic-archive"
+            b"RGSSAD\x00\x03" + b"synthetic-archive"
         )
         self.engine = self.root / "IA Traductora" / ".local" / "Rpg" / "engine"
         self.engine.mkdir(parents=True)
