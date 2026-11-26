@@ -462,7 +462,7 @@ fn all_vxace_file_groups_round_trip_through_an_isolated_workspace() {
     );
     replace_translation(
         &translation_dir.join("scripts.txt"),
-        "Hello world",
+        "こんにちは",
         "Hola script",
     );
 
