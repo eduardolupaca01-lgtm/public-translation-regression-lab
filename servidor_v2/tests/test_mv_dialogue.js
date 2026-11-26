@@ -3739,7 +3739,7 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
             TrackedQuest:"QuestKeyInternal",
             OnLoadQuestJS:"\"Do not translate this executable field.\""
         }
-    }],responses:{
+    },{name:"Unrelated",status:true,parameters:{HiddenText:"This is unrelated content."}}],responses:{
         [longJoined]:longEs,
         "Farmer":"Granjero",
         "Templar":"Templario",
@@ -3835,6 +3835,8 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     assert.equal(probe.has("en","QuestKeyInternal"),false,"internal quest identifiers are excluded");
     assert.equal(probe.has("en","Do not translate this executable field."),false,
         "plugin JavaScript callback bodies are never scanned as prose");
+    assert.equal(probe.has("en","This is unrelated content."),false,
+        "parameters from unrelated plugins are not scanned");
     console.log("IA_R26_CUSTOM_PIXI_CANVAS_PLUGIN_PARAMETER_AND_WHOLE_TEXT_PASS");
 }
 (async()=>{

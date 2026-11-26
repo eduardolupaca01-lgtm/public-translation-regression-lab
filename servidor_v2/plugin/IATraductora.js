@@ -6256,7 +6256,9 @@ function scanPluginDisplayParameters(done){
         var end=Math.min(list.length,at+8);
         for(;at<end&&budget.count<1600;at++){
             var plugin=list[at];
-            if(!plugin||!plugin.status||!plugin.parameters||typeof plugin.parameters!=="object")continue;
+            // This generic parameter pass is for the game's custom UI plugins.
+            // Quest metadata is handled by the existing typed quest scanners.
+            if(!plugin||!plugin.status||!/^JsScript\d+Set$/.test(plugin.name)||!plugin.parameters||typeof plugin.parameters!=="object")continue;
             scanPluginParameterValue(plugin.parameters,"",0,budget);
             r26PluginStats.scanned++;
         }
