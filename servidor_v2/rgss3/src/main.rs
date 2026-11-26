@@ -127,6 +127,39 @@ fn is_data_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn has_loose_rvdata2(data_dir: &Path) -> Result<bool, String> {
+    if data_dir.is_symlink() {
+        return Err("IA_RGSS3_RUTA_NO_VERIFICADA".into());
+    }
+    if !data_dir.is_dir() {
+        return Ok(false);
+    }
+    let mut stack = vec![data_dir.to_path_buf()];
+    while let Some(folder) = stack.pop() {
+        for entry in fs::read_dir(folder)
+            .map_err(|_| "IA_RGSS3_DATA_NO_LEIBLE".to_string())?
+        {
+            let entry = entry.map_err(|_| "IA_RGSS3_DATA_ENTRY_INVALID".to_string())?;
+            let path = entry.path();
+            let kind = entry.file_type()
+                .map_err(|_| "IA_RGSS3_DATA_TYPE_INVALID".to_string())?;
+            if kind.is_symlink() {
+                return Err("IA_RGSS3_RUTA_NO_VERIFICADA".into());
+            }
+            if kind.is_dir() {
+                stack.push(path);
+            } else if kind.is_file()
+                && path.extension().and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("rvdata2"))
+                    .unwrap_or(false)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn extract_data_only(archive_path: &Path, destination: &Path) -> Result<(usize, usize, u64), String> {
     let meta = fs::metadata(archive_path)
         .map_err(|_| "IA_RGSS3_ARCHIVE_NO_LEIBLE".to_string())?;
@@ -275,13 +308,17 @@ fn inspect(game: &Path) -> Result<Report, String> {
     let archive_path = root.join("Game.rgss3a");
     let data_dir = root.join("Data");
     let archive_exists = ordinary(&archive_path);
-    let loose_data_exists = ordinary(&data_dir.join("System.rvdata2"))
-        || ordinary(&data_dir.join("Scripts.rvdata2"));
+    let loose_data_exists = has_loose_rvdata2(&data_dir)?;
+    let loose_complete = ordinary(&data_dir.join("System.rvdata2"))
+        && ordinary(&data_dir.join("Scripts.rvdata2"));
     if archive_exists && loose_data_exists {
         return Err("IA_RGSS3_LAYOUT_PACKED_LOOSE_AMBIGUO".into());
     }
     if !archive_exists && !loose_data_exists {
         return Err("IA_RGSS3_ARCHIVE_O_DATA_FALTANTE".into());
+    }
+    if !archive_exists && !loose_complete {
+        return Err("IA_RGSS3_DATA_INCOMPLETA".into());
     }
 
     let mut report = Report {
