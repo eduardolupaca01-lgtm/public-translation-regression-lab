@@ -602,12 +602,12 @@ mod tests {
 
     #[test]
     fn injector_preserves_original_script_body_without_final_newline() {
-        let source = "<!>SCRIPT<#>1<#>Materials\\n# materials fixture\\n<!>SCRIPT<#>2<#>Main\\n# main fixture without final newline";
-        let plugin = "# TENSHIXGAME_RGSS3_RUNTIME_V1\\nclass TXFixture\\nend\\n";
+        let source = "<!>SCRIPT<#>1<#>Materials\n# materials fixture\n<!>SCRIPT<#>2<#>Main\n# main fixture without final newline";
+        let plugin = "# TENSHIXGAME_RGSS3_RUNTIME_V1\nclass TXFixture\nend\n";
         let rewritten = inject_script_export(source, plugin).unwrap();
-        assert!(rewritten.contains("# materials fixture\\n"));
+        assert!(rewritten.contains("# materials fixture\n"));
         assert!(rewritten.ends_with("# main fixture without final newline"));
-        assert!(!rewritten.ends_with("# main fixture without final newline\\n"));
+        assert!(!rewritten.ends_with("# main fixture without final newline\n"));
     }
 
     #[test]
