@@ -9,4 +9,8 @@ description = "Independent, bounded RGSS3 archive inspection for RPG Maker VX Ac
 [dependencies]
 encoding_rs = "=0.8.44"
 rpgmad-lib = "=7.0.0"
+rvpacker-txt-rs-lib = "=19.0.1"
 thiserror = "=2.0.21"
+
+[dev-dependencies]
+marshal-rs = "=4.0.1"
