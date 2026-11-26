@@ -172,6 +172,7 @@ pub fn apply_project_translation(
 
     Ok(())
 }
+
 fn canonical_source(path: &Path) -> Result<PathBuf, ProjectTextError> {
     let source = path.canonicalize()?;
     if !source.is_dir() {

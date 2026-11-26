@@ -205,6 +205,10 @@ fn project_workspaces_support_unicode_and_spaces() {
             .contains("Hello world<#>"),
     );
 
+    let source_text = fs::read_to_string(&translation_file).expect("read Unicode translation");
+    let translated_text = source_text.replace("Hello world<#>", "Hello world<#>Hola mundo");
+    fs::write(&translation_file, translated_text).expect("write Unicode translation");
+
     let output_dir = temp.path().join("salida traducida_日本語");
     apply_project_translation(&data_dir, &translation_dir, &output_dir, FileFlags::Scripts)
         .expect("publish Unicode output tree");
