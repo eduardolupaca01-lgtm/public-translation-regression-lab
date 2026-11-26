@@ -59,7 +59,7 @@ class VXAceFingerprintTests(unittest.TestCase):
             result = fingerprint_vxace(game)
             self.assertEqual(result.layout, "packed")
             self.assertEqual(result.script_source, "Game.rgss3a")
-            self.assertEqual(result.archive, game / "Game.rgss3a")
+            self.assertEqual(result.archive, (game / "Game.rgss3a").resolve())
 
     def test_archive_is_authoritative_when_loose_scripts_are_also_present(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
