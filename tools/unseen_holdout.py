@@ -101,8 +101,11 @@ HOLDOUT_CASES: tuple[HoldoutCase, ...] = (
 )
 
 
+def _normalize_clock_markers(text: str) -> str:
+    """Normalize Spanish p.m. spellings without changing a.m. or other text."""
+    return re.sub(r"(?<!\w)p\.?\s*m\.?(?!\w)", "pm", text.casefold())
 def _semantic_errors(sample: HoldoutCase, spanish: str) -> list[str]:
-    folded = spanish.casefold()
+    folded = _normalize_clock_markers(spanish)
     errors: list[str] = []
     missing = [
         list(group) for group in sample.required_groups
