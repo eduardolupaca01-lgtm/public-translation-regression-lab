@@ -3722,7 +3722,117 @@ async function testR25MZBufferedMessageFlowAndShortLabels(){
     assert.equal(es.context.window.__IA_TRADUCTORA_TEST__.r22EnglishSource("Buenos dias","message"),null);
     console.log("IA_R25_MZ_BUFFER_WIDTH_PAGING_AND_LABELS_PASS");
 }
+async function testR26CustomPixiAndPluginCanvasSurfaces(){
+    const longRaw="Your father was a soldier.\nHis father was a soldier.\nAnd his father was a soldier.";
+    const longJoined="Your father was a soldier. His father was a soldier. And his father was a soldier.";
+    const longEs="Tu padre fue soldado. Su padre fue soldado. Y su padre también fue soldado.";
+    const hint="Let's go home. Our house has a blue door.";
+    const hintEs="Vamos a casa. Nuestra casa tiene una puerta azul.";
+    const f=fixture(3,{testHooks:true,plugins:[{
+        name:"JsScript121Set",status:true,parameters:{
+            OriginTitle:"Every legend starts somewhere. Shape yours.",
+            OriginRole:"Farmer",
+            HintText:hint,
+            JapaneseHint:"お家に帰ろう。",
+            ScriptCode:"// Let's go home. Our house has a blue door."
+        }
+    }],responses:{
+        [longJoined]:longEs,
+        "Farmer":"Granjero",
+        "Templar":"Templario",
+        "Origin Trait":"Rasgo de origen",
+        "Starter Class":"Clase inicial",
+        [hint]:hintEs,
+        "お家に帰ろう。":"Vuelve a casa."
+    },configure(c){
+        function PixiText(text,style){
+            this._text=String(text||"");this.style=style||{};
+            this.width=0;this.scale={x:1};this.destroyed=false;this.updateText();
+        }
+        Object.defineProperty(PixiText.prototype,"text",{
+            get(){return this._text;},
+            set(value){this._text=String(value);this.updateText();}
+        });
+        PixiText.prototype.updateText=function(){
+            this.renderedText=this._text;
+            this.renderedWrap=!!this.style.wordWrap;
+            this.renderedWidth=Number(this.style.wordWrapWidth)||0;
+            this.renderedLines=this.renderedWrap&&this.renderedWidth?
+                Math.max(1,Math.ceil(this._text.length/Math.max(1,Math.floor(this.renderedWidth/12)))):
+                this._text.split("\n").length;
+            this.width=this.renderedWidth||Math.max(1,this._text.length*12);
+        };
+        function PixiBitmapText(text,style){
+            this._text=String(text||"");this.style=style||{};this.width=0;this.updateText();
+        }
+        Object.defineProperty(PixiBitmapText.prototype,"text",{
+            get(){return this._text;},
+            set(value){this._text=String(value);this.updateText();}
+        });
+        PixiBitmapText.prototype.updateText=function(){
+            this.renderedText=this._text;this.width=Math.max(1,this._text.length*12);
+        };
+        c.PIXI={Text:PixiText,BitmapText:PixiBitmapText};
+    }});
+    await wait(35);
+    const c=f.context,probe=c.window.__IA_TRADUCTORA_TEST__;
+    assert.equal(probe.r26PixiStats.detected,2,"PIXI.Text and BitmapText hooks installed");
+    assert.equal(probe.displaySource("Farmer","surface"),"en");
+    assert.equal(probe.displaySource("Templar","surface"),"en");
+    assert.equal(probe.displaySource("Origin Trait","surface"),"en");
+    assert.equal(probe.displaySource("Starter Class","surface"),"en");
+    assert.equal(probe.displaySource("Every legend starts somewhere. Shape yours.","surface"),"en");
+    assert.equal(probe.r26PixiNormalize(longRaw).text,longJoined,
+        "English pre-wrapped lines must be rejoined before translation");
+    assert.equal(probe.r26PixiNormalize("Who Are You?\nEvery legend starts somewhere. Shape yours.").softWrap,false,
+        "short title/subtitle pair remains intentionally split");
+    assert.equal(probe.r26CustomCanvasOwner("Error\n at drawText (JsScript121Set.js:12:3)"),true,
+        "only a registered custom UI plugin owns this canvas path");
+    assert.equal(probe.r26CustomCanvasOwner("Error\n at drawText (JsScript6Set.js:12:3)"),false,
+        "disabled plugins cannot authorize custom canvas capture");
+
+    const paragraph=new c.PIXI.Text(longRaw,{wordWrap:false,wordWrapWidth:260,fontSize:24});
+    const deadline=Date.now()+3500;
+    while(paragraph.renderedText!==longEs&&Date.now()<deadline)await wait(35);
+    assert.equal(paragraph.text,longRaw,"game source text remains untouched");
+    assert.equal(paragraph.renderedText,longEs,"whole description translated as one semantic paragraph");
+    assert.equal(paragraph.renderedWrap,true,"translated paragraph is rewrapped to the original panel width");
+    assert.equal(paragraph.renderedWidth,260,"actual UI width is preserved during render");
+    assert.equal(paragraph.style.wordWrap,false,"original PIXI style is restored after painting");
+    assert.equal(paragraph.style.wordWrapWidth,260,"original PIXI width is preserved");
+    assert.equal(f.posts.filter(p=>p.text===longJoined).length,1,"the full description is sent once");
+    assert.ok(!f.posts.some(p=>p.text==="Your father was a soldier."||
+        p.text==="His father was a soldier."),"prewrapped fragments never reach OPUS separately");
+
+    const role=new c.PIXI.BitmapText("Farmer",{});
+    const roleDeadline=Date.now()+2500;
+    while(role.renderedText!=="Granjero"&&Date.now()<roleDeadline)await wait(35);
+    assert.equal(role.text,"Farmer","BitmapText source remains intact");
+    assert.equal(role.renderedText,"Granjero","single-word RPG origin labels are translated");
+    const japanese=new c.PIXI.Text("お家に帰ろう。",{wordWrap:false,wordWrapWidth:260});
+    const jaDeadline=Date.now()+2500;
+    while(japanese.renderedText!=="Vuelve a casa."&&Date.now()<jaDeadline)await wait(35);
+    assert.equal(japanese.renderedText,"Vuelve a casa.","Japanese custom UI text is supported");
+
+    const name=new c.PIXI.Text("Chikepu",{});
+    const spanish=new c.PIXI.Text("Opciones",{});
+    await wait(80);
+    assert.equal(name.renderedText,"Chikepu","unknown character names remain unchanged");
+    assert.equal(spanish.renderedText,"Opciones","already Spanish UI is never retranslated");
+    assert.ok(!f.posts.some(p=>p.text==="Chikepu"||p.text==="Opciones"));
+
+    await new Promise(resolve=>probe.scanPluginDisplayParameters(resolve));
+    assert.equal(probe.has("en","Every legend starts somewhere. Shape yours."),true,
+        "active plugin display parameters are inventoried");
+    assert.equal(probe.has("en","Farmer"),true,"short plugin UI labels are inventoried");
+    assert.equal(probe.has("en",hint),true,"plugin hint text is inventoried");
+    assert.equal(probe.has("ja","お家に帰ろう。"),true,"Japanese plugin text is inventoried independently");
+    assert.equal(probe.has("en","// Let's go home. Our house has a blue door."),false,
+        "script/code parameters are not scanned as display text");
+    console.log("IA_R26_CUSTOM_PIXI_CANVAS_PLUGIN_PARAMETER_AND_WHOLE_TEXT_PASS");
+}
 (async()=>{
+    await testR26CustomPixiAndPluginCanvasSurfaces();
     await testR25MZBufferedMessageFlowAndShortLabels();
     await testR24WholeDynamicPicturesAndGlyphs();
     await testHalvaNativePersistentBridge();

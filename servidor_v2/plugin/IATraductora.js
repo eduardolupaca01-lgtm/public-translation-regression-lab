@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R25-20261125"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R26-20261126"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -23,6 +23,9 @@ var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
 var porCompressed=false,halvaMode=false;
 var remNative={detected:false,images:false,configured:false,spanish:new Set(),fallback:new Map()};
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
+var r26PixiStats={detected:0,rendered:0,requested:0,late:0,rewrapped:0,errors:0};
+var r26CanvasStats={enabled:0,candidates:0,draws:0};
+var r26PluginStats={scanned:0,found:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var runtimeActivated=false,connectionProbe=false,lastStatusProbe=0;
 var cache=new Map(),approvedKeys=new Map(),pending=new Map(),rejectedKeys=new Map(),maxWait=45000;
@@ -917,7 +920,10 @@ function languageFor(s){
 // multiword labels use explicit English signals and never inspect script text.
 var displayUiWords=Object.create(null),displaySignalWords=Object.create(null);
 ("accept back shop read help options save load continue exit quit cancel confirm yes no start next previous return retry resume pause menu settings close open buy sell talk interact select choose skip inventory equipment status profile journal quests quest map guide information details more less done finish apply reset default enabled disabled agree decline reject gift compliment popup rules bet shoe chips flowers prize grab round level score mash timing swipe arrows rotate tracking reaction hold release travel teleport interact journal inventory settings").split(" ").forEach(function(w){displayUiWords[w]=true;});
-("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door click press key target ring closes wrong means instant fail start tap space fill bar time runs lands green zone drag cursor path arrows matching arrow charge gauge release inside target band rotate moving capture reaction marker clicking").split(" ").forEach(function(w){displaySignalWords[w]=true;});
+("male female farmer noble thief soldier templar wizard adventurer blessed independent knight mage rogue origin gender legacy traits training fortune prowess paths class subclass finish begin chosen preview traveler nobleborn metabolism warrior tanky melee defense attack inheritance points scavenger mining locked current hero casual clothes short sword").split(" ").forEach(function(w){displayUiWords[w]=true;});
+var displayUiPhrases=Object.create(null);
+("who are you|origin trait|starter class|casual clothes|short sword|legacy points|continue to legacy|begin your journey|click to choose|origin where your story begins|travelers pack|you slowly recover health over time").split("|").forEach(function(w){displayUiPhrases[w]=true;});
+("about me yourself tell one year earlier city courthouse courtroom change relationship text skip speed setting romantic idea naughty exposing love capped never mind more drink gift compliment ask let out read before head door click press key target ring closes wrong means instant fail start tap space fill bar time runs lands green zone drag cursor path arrows matching arrow charge gauge release inside target band rotate moving capture reaction marker clicking every legend starts somewhere shape yours origin trait starter class farmer noble thief soldier templar wizard adventurer blessed independent knight mage rogue father militia strict regimented orders purpose gives shines glory monastery grounds ward church stern disciplined environment cannot quite bit good opulence excess child wealthy lord wife days filled leisure common folks understand education envy scholars defense strong melee class experience combat recover health slowly points scavenger mining locked current hero").split(" ").forEach(function(w){displaySignalWords[w]=true;});
 function displaySource(text,context){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text]||
        remNativeSpanishText(text)||externalLocalizationReference(text)||tsvExcluded(text)||csvExecutableSyntax(text)||
@@ -930,6 +936,8 @@ function displaySource(text,context){
         .replace(/[♡♥☆★♪♫♬]/g,"").trim();
     if(!prose||/[áéíóúñ¿¡]/i.test(prose)||/[^\x09\x0a\x0d\x20-\x7e]/.test(prose)||
        /^[A-Za-z0-9_./-]+\.(?:png|jpe?g|webp|gif|ogg|mp3|wav|js|json|csv|tsv|webm|mp4)$/i.test(prose))return null;
+    var uiPhrase=prose.toLowerCase().replace(/\s+/g," ").trim();
+    if(displayUiPhrases[uiPhrase])return "en";
     var words=prose.match(/[A-Za-z']+/g)||[];
     if(!words.length||words.length>60)return null;
     var normalized=words.map(function(w){return w.toLowerCase();});
@@ -2433,6 +2441,134 @@ function hookMZPresentation(){
         }
     }
 }
+function r26PixiRawText(object){
+    if(!object)return null;
+    if(typeof object._text==="string")return object._text;
+    try{if(typeof object.text==="string")return object.text;}catch(_){}
+    return null;
+}
+function r26PixiNormalize(raw){
+    if(typeof raw!=="string"||raw.length>1800||raw.indexOf("\n")<0)return {text:raw,softWrap:false};
+    var envelope=/^(\s*)([\s\S]*?)(\s*)$/.exec(raw),body=envelope[2].replace(/\r\n/g,"\n");
+    var blocks=body.split(/(\n{2,})/),changed=false;
+    for(var i=0;i<blocks.length;i+=2){
+        var lines=blocks[i].split("\n");
+        if(lines.length<2||lines.length>12)continue;
+        var clean=lines.map(function(v){return v.trim();});
+        var counts=clean.map(function(v){return (v.match(/\S+/g)||[]).length;});
+        if(clean.some(function(v){return v.length<12;})||counts.some(function(n){return n<3;})||
+           (clean[0].length<28&&/[?!]$/.test(clean[0])))continue;
+        var total=clean.join(" ").length;
+        var hasMidSentence=clean.some(function(v){return !/[.!?…]$/.test(v);});
+        if(!hasMidSentence&&total<80)continue;
+        blocks[i]=clean.join(" ");changed=true;
+    }
+    return {text:changed?envelope[1]+blocks.join("")+envelope[3]:raw,softWrap:changed};
+}
+function r26PixiWrapWidth(object,style,raw){
+    var width=style?Number(style.wordWrapWidth):0;
+    if(isFinite(width)&&width>160)return width;
+    var scale=object&&object.scale&&Number(object.scale.x)>0?Number(object.scale.x):1;
+    width=object?Number(object.width)/scale:0;
+    if(isFinite(width)&&width>160)return width;
+    width=object&&object.parent?Number(object.parent.width):0;
+    if(isFinite(width)&&width>160)return width;
+    var lines=String(raw||"").split(/\r?\n/),max=0;
+    lines.forEach(function(v){max=Math.max(max,v.length);});
+    var font=style?Number(style.fontSize):0;
+    if(!isFinite(font)||font<8||font>96)font=24;
+    return Math.max(180,Math.min(1400,max*font*0.56));
+}
+function r26PixiPaint(object,translated,softWrap,raw,original,args,allowWrap){
+    var priorText=object._text,style=object.style||object._style;
+    var oldWrap,oldWidth,changedStyle=false;
+    if(allowWrap&&softWrap&&style){
+        try{
+            oldWrap=style.wordWrap;oldWidth=style.wordWrapWidth;
+            var width=r26PixiWrapWidth(object,style,raw);
+            if(width>0){
+                style.wordWrap=true;style.wordWrapWidth=width;changedStyle=true;
+                r26PixiStats.rewrapped++;
+            }
+        }catch(_){changedStyle=false;}
+    }
+    object._iaR26Applying=true;object._text=translated;
+    try{return original.apply(object,args);}
+    finally{
+        object._text=priorText;
+        if(changedStyle)try{style.wordWrap=oldWrap;style.wordWrapWidth=oldWidth;}catch(_){}
+        object._iaR26Applying=false;
+    }
+}
+function r26PixiPoll(object,ticket){
+    if(!object||object._iaR26Pending!==ticket)return;
+    if(object.destroyed||object._destroyed){object._iaR26Pending=null;return;}
+    var ready=null;
+    try{ready=readyText(ticket.source,ticket.text);}catch(_){}
+    if(typeof ready==="string"&&validTranslation(ticket.source,ticket.text,ready,true)){
+        object._iaR26Pending=null;
+        if(r26PixiRawText(object)===ticket.raw&&typeof object.updateText==="function"){
+            r26PixiStats.late++;
+            try{object.updateText();}catch(_){r26PixiStats.errors++;state.errors++;}
+        }
+        return;
+    }
+    if(rejectedKeys.get(ticket.key)===Infinity||Date.now()>=ticket.deadline){
+        object._iaR26Pending=null;return;
+    }
+    setTimeout(function(){r26PixiPoll(object,ticket);},180);
+}
+function r26HookPixiClass(ctor,allowWrap){
+    var proto=ctor&&ctor.prototype,original=proto&&proto.updateText;
+    if(typeof original!=="function"||original._iaR26PixiHook)return false;
+    var wrapped=function(){
+        if(this._iaR26Applying||identityDrawDepth||inputFormActive()||
+           this._iaOwnSurface||this._iaNameSurface)return original.apply(this,arguments);
+        var raw=r26PixiRawText(this);
+        if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||
+           externalLocalizationReference(raw)||tsvExcluded(raw)||csvExecutableSyntax(raw)||
+           /(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(raw))
+            return original.apply(this,arguments);
+        var plan=allowWrap?r26PixiNormalize(raw):{text:raw,softWrap:false};
+        var source=displaySource(plan.text,"surface");
+        if(source!=="en"&&source!=="ja")return original.apply(this,arguments);
+        var ready=readyText(source,plan.text);
+        if(typeof ready==="string"&&ready!==plan.text&&validTranslation(source,plan.text,ready,true)){
+            r26PixiStats.rendered++;
+            return r26PixiPaint(this,ready,plan.softWrap,raw,original,arguments,allowWrap);
+        }
+        if(ready===null){
+            var key=source+"\u0000"+plan.text,pendingTicket=this._iaR26Pending;
+            if(!pendingTicket||pendingTicket.key!==key){
+                var object=this,ticket={key:key,raw:raw,source:source,text:plan.text,deadline:Date.now()+maxWait};
+                this._iaR26Pending=ticket;r26PixiStats.requested++;
+                // firstViewRequest queues safely while OPUS is still starting;
+                // a bounded poll redraws this same PIXI object once the cache
+                // is ready, without waiting on or restarting the game scene.
+                firstViewRequest(source,plan.text);
+                setTimeout(function(){r26PixiPoll(object,ticket);},0);
+            }
+        }
+        return original.apply(this,arguments);
+    };
+    wrapped._iaR26PixiHook=true;proto.updateText=wrapped;
+    return true;
+}
+function hookPixiTextSurface(){
+    var pixi=null;
+    try{if(typeof PIXI!=="undefined")pixi=PIXI;}catch(_){}
+    if(!pixi&&typeof window!=="undefined")pixi=window.PIXI||null;
+    if(!pixi)return;
+    if(r26HookPixiClass(pixi.Text,true))r26PixiStats.detected++;
+    if(r26HookPixiClass(pixi.BitmapText,false))r26PixiStats.detected++;
+}
+function r26CustomCanvasOwner(stack){
+    if(typeof $plugins==="undefined"||!Array.isArray($plugins))return false;
+    var names=String(stack||"").match(/\bJsScript\d+Set(?=\.js(?::|\?))/g)||[];
+    return names.some(function(name){
+        return $plugins.some(function(p){return p&&p.status&&p.name===name;});
+    });
+}
 function hookNativeSurface(){
     if(typeof Window_Base!=="undefined"&&Window_Base.prototype){
         // Native MV consumes one glyph per call. Its width and paint must
@@ -2701,6 +2837,9 @@ function hookNativeSurface(){
             });
         }
         var nevCanvasEnabled=Object.keys(nevCanvasPlugins).length>0;
+        var r26CanvasEnabled=pluginEnabled(/^JsScript\d+Set$/);
+        var canvasCaptureEnabled=nevCanvasEnabled||r26CanvasEnabled;
+        r26CanvasStats.enabled=canvasCaptureEnabled?1:0;
         var canvasStyles=["font","textAlign","textBaseline","direction","fillStyle","strokeStyle",
             "globalAlpha","globalCompositeOperation","lineWidth","lineCap","lineJoin","miterLimit",
             "shadowColor","shadowBlur","shadowOffsetX","shadowOffsetY","filter","fontKerning",
@@ -2722,7 +2861,7 @@ function hookNativeSurface(){
         }
         function dropSurfaceGroup(bitmap){if(bitmap)dropGroup(bitmap._iaSurfaceGroup);}
         function rawContext(bitmap){
-            if(!nevCanvasEnabled||!bitmap||!integer(bitmap.width)||!integer(bitmap.height)||
+            if(!canvasCaptureEnabled||!bitmap||!integer(bitmap.width)||!integer(bitmap.height)||
                bitmap.width<1||bitmap.height<1||bitmap.width*bitmap.height>262144)return null;
             try{
                 var c=bitmap.context;
@@ -2826,18 +2965,23 @@ function hookNativeSurface(){
             if(surfaceGroups.length&&!surfacePoll){surfacePoll=true;setTimeout(pollSurfaceGroups,100);}
         }
         function canvasUiSource(raw){
-            if(typeof raw!=="string"||raw.length>240||!raw.trim()||actorNames[raw]||
+            if(typeof raw!=="string"||raw.length>1800||!raw.trim()||actorNames[raw]||
                /[\r\n\\\x1b<>{}\[\]]/.test(raw)||csvExecutableSyntax(raw))return null;
+            var stack=String(new Error().stack||"");
+            if(r26CanvasEnabled&&r26CustomCanvasOwner(stack)){
+                var customSource=displaySource(raw,"surface");
+                return customSource==="en"||customSource==="ja"?customSource:null;
+            }
+            if(raw.length>240)return null;
             var value=raw.trim(),word=value.toLowerCase();
             if(!(displayUiWords[word]||
                 /^(?:press|click|tap|hold|move|drag|select|choose|wait|open|close|return|use|keep|release|match|find)\s+\S/i.test(value)||
                 /^(?:game over|try again|time left|new game|game paused|game complete|next round|total score|round complete|time remaining)$/i.test(value)))return null;
-            // Only enabled, identified author UI plugins; exclude puzzle
-            // answers, login strings, editable labels and named characters.
-            var matches=String(new Error().stack||"").match(/\bNEV_[A-Za-z0-9_]+(?=\.js(?::|\?))/g)||[];
+            var matches=stack.match(/\bNEV_[A-Za-z0-9_]+(?=\.js(?::|\?))/g)||[];
             if(!matches.some(function(name){return nevCanvasPlugins[name]&&
                 !/(?:WifiLogin|WordScramble|Signature|ClueNote|Sport|PicturePosHelper|Tinker|Message|DialogUI)/i.test(name);}))return null;
-            return displaySource(raw,"surface")==="en"?"en":null;
+            var source=displaySource(raw,"surface");
+            return source==="en"||source==="ja"?source:null;
         }
         function canvasCanStage(ctx){
             try{
@@ -2848,7 +2992,7 @@ function hookNativeSurface(){
             }catch(_){return false;}
         }
         function bindCanvasContext(bitmap,ctx){
-            if(!nevCanvasEnabled||!ctx||ctx._iaCanvasBound)return ctx;
+            if(!canvasCaptureEnabled||!ctx||ctx._iaCanvasBound)return ctx;
             try{
                 Object.defineProperty(ctx,"_iaCanvasBound",{value:true});
                 ["fillText","strokeText"].forEach(function(method){
@@ -2857,7 +3001,7 @@ function hookNativeSurface(){
                         if(this!==ctx||bitmapReplayDepth||bitmapNativeDepth||identityDrawDepth||surfaceDepth||
                            bitmap._iaOwnerWindow||inputFormActive())return original.apply(this,arguments);
                         var args=Array.prototype.slice.call(arguments),source=canvasUiSource(args[0]),limit=null;
-                        if(source){
+                        if(source){r26CanvasStats.candidates++;r26CanvasStats.draws++;
                             try{
                                 var natural=Number(ctx.measureText(args[0]).width),given=Number(args[3]);
                                 limit=isFinite(given)&&given>0?given:natural;
@@ -2884,7 +3028,7 @@ function hookNativeSurface(){
             }catch(_){}
             return ctx;
         }
-        if(nevCanvasEnabled){
+        if(canvasCaptureEnabled){
             var contextDescriptor=Object.getOwnPropertyDescriptor(Bitmap.prototype,"context");
             if(contextDescriptor&&contextDescriptor.configurable&&typeof contextDescriptor.get==="function"){
                 Object.defineProperty(Bitmap.prototype,"context",{
@@ -2936,7 +3080,7 @@ function hookNativeSurface(){
             }catch(_){state.errors++;}
             var bitmap=this,ctx=direct?rawContext(bitmap):null;
             if(ctx)group=prepareSurfaceGroup(bitmap,ctx,source);
-            else if(direct&&source&&!nevCanvasEnabled)job=captureBitmapJob(bitmap,args,source,raw);
+            else if(direct&&source&&!canvasCaptureEnabled)job=captureBitmapJob(bitmap,args,source,raw);
             var style=group?surfaceStyle(bitmap,nativeStyleKeys):null,out;
             try{out=callBitmapDraw(bitmap,args);}catch(e){dropGroup(group);if(job)disposeBitmapJob(job);throw e;}
             if(group)finishSurfaceGroup(group,{method:"bitmap",args:args,source:source,style:style});
@@ -2961,6 +3105,7 @@ function hookNativeSurface(){
             return withQuestGlyphs(bitmap,args[0],function(){return measure.apply(bitmap,args);});
         };
     }
+    hookPixiTextSurface();
 }
 
 function readyIndependentLines(source,text){
@@ -6071,9 +6216,50 @@ function scanVisuQuestParameters(){
         });
     });
 }
+function scanPluginParameterValue(value,key,depth,budget){
+    if(!budget||budget.count++>=1600||depth>4)return;
+    if(key&&/(?:code|script|eval|expression|formula|function|regex|pattern|javascript)/i.test(key))return;
+    if(typeof value==="string"){
+        if(value.length>65536)return;
+        if(value.length<=1800){
+            var source=displaySource(value,"surface");
+            if(source){addPrefetch(value,false,source);r26PluginStats.found++;}
+        }
+        if(depth<4&&/^\s*[\[{]/.test(value)){
+            try{scanPluginParameterValue(JSON.parse(value),key,depth+1,budget);}catch(_){}
+        }
+        return;
+    }
+    if(Array.isArray(value)){
+        for(var i=0;i<value.length&&budget.count<1600;i++)
+            scanPluginParameterValue(value[i],key,depth+1,budget);
+        return;
+    }
+    if(value&&typeof value==="object"){
+        Object.keys(value).slice(0,300).forEach(function(k){
+            if(budget.count<1600)scanPluginParameterValue(value[k],k,depth+1,budget);
+        });
+    }
+}
+function scanPluginDisplayParameters(done){
+    if(typeof $plugins==="undefined"||!Array.isArray($plugins)){done();return;}
+    var list=$plugins,at=0,budget={count:0};
+    function slice(){
+        var end=Math.min(list.length,at+8);
+        for(;at<end&&budget.count<1600;at++){
+            var plugin=list[at];
+            if(!plugin||!plugin.status||!plugin.parameters||typeof plugin.parameters!=="object")continue;
+            scanPluginParameterValue(plugin.parameters,"",0,budget);
+            r26PluginStats.scanned++;
+        }
+        if(at<list.length&&budget.count<1600){setTimeout(slice,0);return;}
+        nextPrefetch();done();
+    }
+    slice();
+}
 function scanQuestParameters(done){
     scanVisuQuestParameters();
-    if(typeof $plugins==="undefined"||!Array.isArray($plugins)){done();return;}
+    if(typeof $plugins==="undefined"||!Array.isArray($plugins)){scanPluginDisplayParameters(done);return;}
     var tasks=[],taskAt=0;
     $plugins.forEach(function(plugin){
         if(!plugin||!plugin.status||!/^YEP_(?:QuestJournal|X_MoreQuests\d+)$/.test(plugin.name)||!plugin.parameters)return;
@@ -6115,7 +6301,7 @@ function scanQuestParameters(done){
             }catch(_){}
         }
         nextPrefetch();
-        if(taskAt<tasks.length)setTimeout(slice,0);else done();
+        if(taskAt<tasks.length)setTimeout(slice,0);else scanPluginDisplayParameters(done);
     }
     slice();
 }
@@ -6803,7 +6989,7 @@ function scanExtraSources(dataDir,done){
         scanStats.totalFiles+=tasks.length;
         var taskAt=0;
         function next(){
-            if(taskAt>=tasks.length){done();return;}
+            if(taskAt>=tasks.length){scanPluginDisplayParameters(done);return;}
             var t=tasks[taskAt++];
             if(!regularUnder(t.base,t.file,t.type==="ink"?20*1024*1024:2*1024*1024)){
                 scanStats.skipped++;setTimeout(next,0);return;
@@ -7487,6 +7673,8 @@ function setupHud(){
             "Caché cargada: "+diskStats.loaded+"   Guardada: "+diskStats.saved,
             "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+"   Omitidos: "+scanStats.skipped+(inkStats.detected?" · Ink":"") ,
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
+            "Interfaz PIXI: "+r26PixiStats.rendered+" traducidos · "+r26PixiStats.late+" redibujados · "+r26PixiStats.requested+" pedidos",
+            "Canvas de complementos: "+r26CanvasStats.draws+" · Parámetros: "+r26PluginStats.found,
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
             cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.errors+" avisos":
@@ -7576,7 +7764,9 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         limited:function(){return scanStats.limited;},
         r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
         r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise,
-        displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish
+        displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,
+        r26PixiNormalize:r26PixiNormalize,r26CustomCanvasOwner:r26CustomCanvasOwner,
+        scanPluginDisplayParameters:scanPluginDisplayParameters,r26PixiStats:r26PixiStats
     };
 }
 })();
