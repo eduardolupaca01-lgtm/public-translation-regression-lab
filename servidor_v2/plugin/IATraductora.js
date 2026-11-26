@@ -6217,16 +6217,24 @@ function scanVisuQuestParameters(){
     });
 }
 function scanPluginParameterValue(value,key,depth,budget){
-    if(!budget||budget.count++>=1600||depth>4)return;
+    if(!budget||budget.count++>=1600||depth>6)return;
     if(key&&/(?:code|script|eval|expression|formula|function|regex|pattern|javascript|known|tracked|internal|onload|questkey|(?:^|[^a-z])id(?:[^a-z]|$)|(?:^|[^a-z])js(?:[^a-z]|$))/i.test(key))return;
     if(typeof value==="string"){
         if(value.length>65536)return;
+        var trimmed=value.trim();
+        // Parse JSON-encoded plugin data before treating a string as prose.
+        // This prevents identifiers, quest metadata and executable callbacks
+        // embedded in JSON from being sent to OPUS as if they were UI labels.
+        if(depth<6&&/^[\[{"]/.test(trimmed)){
+            try{
+                scanPluginParameterValue(JSON.parse(trimmed),key,depth+1,budget);
+                return;
+            }catch(_){}
+        }
+        if(/(?:do not translate this executable field|do not send dynamic code)/i.test(trimmed))return;
         if(value.length<=1800){
             var source=displaySource(value,"surface");
             if(source){addPrefetch(value,false,source);r26PluginStats.found++;}
-        }
-        if(depth<4&&/^\s*[\[{]/.test(value)){
-            try{scanPluginParameterValue(JSON.parse(value),key,depth+1,budget);}catch(_){}
         }
         return;
     }
