@@ -1,0 +1,75 @@
+name: TENSHIXGAME VX Ace RGSS3 adapter and native runtime
+
+on:
+  push:
+    branches:
+      - feature/rpg-maker-vx-ace-rgss3-20261126
+    paths:
+      - "servidor_v2/rgss3/**"
+      - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/tests/test_rgss3_worker.py"
+      - "servidor_v2/tests/test_rgss3_http.py"
+      - "servidor_v2/tests/test_rgss3_runtime.rb"
+      - "servidor_v2/tests/test_rgss3_runtime_contract.py"
+      - ".github/workflows/rgss3-vxace-adapter.yml"
+  pull_request:
+    branches:
+      - feature/servidor-v2-rpg-mz-20261124
+    paths:
+      - "servidor_v2/rgss3/**"
+      - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/tests/test_rgss3_worker.py"
+      - "servidor_v2/tests/test_rgss3_http.py"
+      - "servidor_v2/tests/test_rgss3_runtime.rb"
+      - "servidor_v2/tests/test_rgss3_runtime_contract.py"
+      - ".github/workflows/rgss3-vxace-adapter.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter-tests:
+    name: RGSS3 archive, installer, worker and runtime validation
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test RGSS3 worker detection and V95 bridge publication
+        run: python -m unittest discover -s servidor_v2/tests -p "test_rgss3_worker.py"
+      - name: Test authenticated RGSS3 to V95 HTTP batch
+        run: python -m unittest discover -s servidor_v2/tests -p "test_rgss3_http.py"
+      - name: Test native VX Ace runtime contracts
+        run: python -m unittest discover -s servidor_v2/tests -p "test_rgss3_runtime_contract.py"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check Ruby RGSS3 plugin syntax
+        if: runner.os == 'Windows'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "2.7.8"
+      - name: Parse RGSS3 runtime plugin
+        if: runner.os == 'Windows'
+        run: ruby -c servidor_v2/rgss3/runtime/IATraductora_RGSS3.rb
+      - name: Exercise RGSS3 event hooks and control-code restoration
+        if: runner.os == 'Windows'
+        run: ruby servidor_v2/tests/test_rgss3_runtime.rb
+      - name: Test archive paths, RGSS3A round-trip and adapter contracts
+        run: cargo test --manifest-path servidor_v2/rgss3/Cargo.toml --all-targets
+      - name: Build Windows x64 probe
+        if: runner.os == 'Windows'
+        run: cargo build --manifest-path servidor_v2/rgss3/Cargo.toml --release
+      - name: Upload RGSS3 inspect/install/restore helper
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TENSHIXGAME-RGSS3-TOOL-WINDOWS-X64
+          path: servidor_v2/rgss3/target/release/tenshixgame-rgss3-probe.exe
+          if-no-files-found: error
+          retention-days: 7
