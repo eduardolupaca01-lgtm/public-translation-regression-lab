@@ -1,3 +1,5 @@
+mod install;
+
 use encoding_rs::SHIFT_JIS;
 use rpgmad_lib::{decrypt_from_reader, encrypt_to_vec, ArchiveEntry, Engine};
 use rvpacker_txt_rs_lib::{EngineType, FileFlags, Mode, Processor};
@@ -345,21 +347,36 @@ fn inspect(game: &Path) -> Result<Report, String> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 || args[1] != "inspect" {
-        eprintln!("Uso: tenshixgame-rgss3-probe inspect <carpeta-del-juego>");
+    if args.len() < 3 {
+        eprintln!("Uso: tenshixgame-rgss3-probe inspect <juego> | install <juego> <plugin.rb> | restore <juego>");
         std::process::exit(2);
     }
-    match inspect(Path::new(&args[2])) {
-        Ok(report) => {
-            println!("{}", serde_json::to_string_pretty(&report).unwrap());
+    let result = match args[1].as_str() {
+        "inspect" => inspect(Path::new(&args[2])).and_then(|report| {
+            let json = serde_json::to_string_pretty(&report)
+                .map_err(|_| "IA_RGSS3_REPORT_SERIALIZE_FAILED".to_string())?;
+            println!("{}", json);
             if report.inventory_status == "REJECTED" {
-                std::process::exit(3);
+                return Err("IA_RGSS3_INVENTORY_REJECTED".into());
             }
-        }
-        Err(code) => {
-            eprintln!("{}", code);
-            std::process::exit(2);
-        }
+            Ok(())
+        }),
+        "install" if args.len() >= 4 => install::install(Path::new(&args[2]), Path::new(&args[3]))
+            .and_then(|receipt| {
+                println!("{}", serde_json::to_string_pretty(&receipt)
+                    .map_err(|_| "IA_RGSS3_RECEIPT_SERIALIZE_FAILED".to_string())?);
+                Ok(())
+            }),
+        "restore" => install::restore(Path::new(&args[2])).and_then(|receipt| {
+            println!("{}", serde_json::to_string_pretty(&receipt)
+                .map_err(|_| "IA_RGSS3_RECEIPT_SERIALIZE_FAILED".to_string())?);
+            Ok(())
+        }),
+        _ => Err("IA_RGSS3_COMMAND_INVALID".into()),
+    };
+    if let Err(code) = result {
+        eprintln!("{}", code);
+        std::process::exit(2);
     }
 }
 
