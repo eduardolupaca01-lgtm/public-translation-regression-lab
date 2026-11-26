@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R29-20261126"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R30-20261126"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -2630,6 +2630,32 @@ function r27RspBounds(bitmap,x,y,options,widthCap,lineCount,lineStep){
     if(width<=0||height<=0||width*height>262144)return null;
     return {x:left,y:top,w:width,h:height,contentW:Math.max(16,width-pad*2)};
 }
+function r27RspTextUpBounds(bitmap,x,y,options,widthCap){
+    var bw=Number(bitmap&&bitmap.width)||0,bh=Number(bitmap&&bitmap.height)||0;
+    if(!bw||!bh)return null;
+    var size=Number(options&&options.size)||24;
+    if(!isFinite(size))size=24;
+    size=Math.max(8,Math.min(96,size));
+    var shadow=options&&options.shadow===false?0:Number(options&&options.shadowBlur);
+    if(!isFinite(shadow))shadow=5;
+    shadow=Math.max(0,Math.min(32,shadow));
+    var pad=Math.ceil(shadow+4),length=Number(widthCap);
+    if(!isFinite(length)||length<=0)length=Math.max(48,size*4);
+    length=Math.max(24,Math.min(bh-pad*2,Math.ceil(length)));
+    var align=String(options&&options.align||"left").toLowerCase();
+    var anchorX=Number(x),anchorY=Number(y);
+    if(!isFinite(anchorX))anchorX=0;
+    if(!isFinite(anchorY))anchorY=0;
+    var left=Math.floor(anchorX-size*0.2-pad);
+    var top=align==="center"?Math.floor(anchorY-length/2-pad):
+        align==="right"?Math.floor(anchorY-pad):Math.floor(anchorY-length-pad);
+    var width=Math.min(bw,Math.ceil(size*1.6+pad*2));
+    var height=Math.min(bh,Math.ceil(length+pad*2));
+    left=Math.max(0,Math.min(bw-width,left));
+    top=Math.max(0,Math.min(bh-height,top));
+    if(width<=0||height<=0||width*height>262144)return null;
+    return {x:left,y:top,w:width,h:height,contentW:Math.max(16,height-pad*2)};
+}
 function r27RspImageEqual(a,b){
     if(!a||!b||a.width!==b.width||a.height!==b.height||!a.data||!b.data||a.data.length!==b.data.length)return false;
     for(var i=0;i<a.data.length;i++)if(a.data[i]!==b.data[i])return false;return true;
@@ -2676,6 +2702,22 @@ function r27RspReplayText(ticket,translated){
     target.putImageData(image,ticket.region.x,ticket.region.y);
     if(typeof ticket.bitmap._setDirty==="function")ticket.bitmap._setDirty();return true;
 }
+function r27RspReplayTextUp(ticket,translated){
+    if(typeof Bitmap==="undefined")return false;
+    var base=r27RspBaseImage(ticket);
+    if(!base)return false;
+    var stage=new Bitmap(ticket.region.w,ticket.region.h),ctx=r27RspContext(stage);
+    if(!ctx||typeof ctx.putImageData!=="function"||typeof ctx.getImageData!=="function")return false;
+    ctx.putImageData(base,0,0);
+    var options=r27RspCopyOptions(ticket.options);
+    options.maxW=ticket.region.contentW;
+    ticket.originalTextUp.call(ticket.rsp,stage,translated,
+        ticket.x-ticket.region.x,ticket.y-ticket.region.y,options);
+    var image=ctx.getImageData(0,0,ticket.region.w,ticket.region.h),target=r27RspContext(ticket.bitmap);
+    target.putImageData(image,ticket.region.x,ticket.region.y);
+    if(typeof ticket.bitmap._setDirty==="function")ticket.bitmap._setDirty();
+    return true;
+}
 function r27RspReplayWrap(ticket,translated){
     if(typeof Bitmap==="undefined")return false;
     var base=r27RspBaseImage(ticket);
@@ -2719,7 +2761,7 @@ function r27RspPoll(ticket){
     var translated=null;try{translated=readyText(ticket.source,ticket.text);}catch(_){}
     if(typeof translated==="string"){
         if(translated===ticket.text||!validTranslation(ticket.source,ticket.text,translated,true)){r27RspFinish(ticket,"skipped");return;}
-        try{var ok=ticket.type==="wrap"?r27RspReplayWrap(ticket,translated):r27RspReplayText(ticket,translated);
+        try{var ok=ticket.type==="wrap"?r27RspReplayWrap(ticket,translated):ticket.type==="up"?r27RspReplayTextUp(ticket,translated):r27RspReplayText(ticket,translated);
             r27RspFinish(ticket,ok?"rendered":"skipped");}
         catch(_){r27RspStats.errors++;state.errors++;r27RspFinish(ticket,"skipped");}
         return;
@@ -2819,12 +2861,29 @@ function hookRSPTextSurface(){
     };
     if(typeof originalTextUp==="function"){
         rsp.textUp=function(bitmap,raw,x,y,options){
-            var context=r27RspContext(bitmap);
-            if(!context||typeof context.save!=="function")return originalTextUp.apply(this,arguments);
-            context.save();
-            try{context.translate(Number(x)||0,Number(y)||0);context.rotate(-Math.PI/2);r27RspTransformDepth++;
-                try{return rsp.text(bitmap,raw,0,0,options);}finally{r27RspTransformDepth--;}}
-            finally{context.restore();}
+            if(typeof raw!=="string"||!bitmap)return originalTextUp.apply(this,arguments);
+            var source=r27RspSource(raw);
+            if(!source)return originalTextUp.apply(this,arguments);
+            var translated=readyText(source,raw);
+            if(typeof translated==="string"&&translated!==raw&&validTranslation(source,raw,translated,true))
+                return originalTextUp.call(this,bitmap,translated,x,y,options);
+            request(raw,source);
+            if(r27RspPending>=32)return originalTextUp.apply(this,arguments);
+            var cap=r27RspMaxWidth(rsp,bitmap,raw,options,originalWidth);
+            var region=r27RspTextUpBounds(bitmap,x,y,options,cap),ctx=r27RspContext(bitmap);
+            if(!region||!ctx||typeof ctx.getImageData!=="function"||typeof ctx.putImageData!=="function"){
+                r27RspStats.skipped++;return originalTextUp.apply(this,arguments);
+            }
+            var before=null,after=null;
+            try{before=ctx.getImageData(region.x,region.y,region.w,region.h);}catch(_){}
+            var result=originalTextUp.apply(this,arguments);
+            if(!before){r27RspStats.skipped++;return result;}
+            try{after=ctx.getImageData(region.x,region.y,region.w,region.h);}catch(_){}
+            if(!after){r27RspStats.skipped++;return result;}
+            r27RspQueue({type:"up",rsp:rsp,bitmap:bitmap,context:ctx,region:region,before:before,after:after,
+                source:source,text:raw,x:Number(x)||0,y:Number(y)||0,options:r27RspCopyOptions(options),
+                originalTextUp:originalTextUp});
+            return result;
         };
     }
     rsp.__iaR27Hooked=true;

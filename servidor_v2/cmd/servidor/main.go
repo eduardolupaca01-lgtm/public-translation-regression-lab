@@ -25,7 +25,7 @@ const (
  packageMagic="SERVIDOR2ZIPSHA1" // exactamente 16 bytes
  brandFolder="IA Traductora"
  pluginName="IATraductora"
- installerBuildID="RPG-MVMZ-R29-20261126"
+ installerBuildID="RPG-MVMZ-R30-20261126"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{

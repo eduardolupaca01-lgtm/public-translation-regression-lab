@@ -2639,17 +2639,18 @@ async function testR21CteNativeContextFirstPresentation(){
     assert.ok(!f.posts.some(p=>p.text.includes("\\.")||p.text.includes("%1")));
 }
 
-async function testR29LateRoundscapePluginHooks(){
+async function testR30LateRoundscapeHooksAndVerticalText(){
     const rspLabel="Who Are You?",rspLabelEs="¿Quién eres?";
     const rspParagraph="Every legend starts somewhere. Shape yours.";
     const rspParagraphEs="Cada leyenda comienza en algún lugar. Dale forma a la tuya.";
+    const verticalLabel="Hero",verticalLabelEs="Héroe";
     const npcLine="The humans stare at me here. Let them stare. I am not here for them.";
     const npcLineEs="Los humanos me miran aquí. Que miren. No estoy aquí por ellos.";
     const f=fixture(180,{testHooks:true,plugins:[
         {name:"RS_PremiumUI",status:true,parameters:{}},
         {name:"RS_PartyTalk",status:true,parameters:{}}
     ],responses:{
-        [rspLabel]:rspLabelEs,[rspParagraph]:rspParagraphEs,[npcLine]:npcLineEs
+        [rspLabel]:rspLabelEs,[rspParagraph]:rspParagraphEs,[verticalLabel]:verticalLabelEs,[npcLine]:npcLineEs
     }});
     const c=f.context,probe=c.window.__IA_TRADUCTORA_TEST__;
     await wait(25);
@@ -2708,8 +2709,9 @@ async function testR29LateRoundscapePluginHooks(){
         },
         textWidth(bitmap,value){return String(value).length*8;},
         wrap(bitmap,value){return [String(value)];},
-        textUp(bitmap,value,x,y,options){return this.text(bitmap,value,x,y,options);}
     };
+    const originalRspText=rsp.text;
+    rsp.textUp=function(bitmap,value,x,y,options){return originalRspText.call(this,bitmap,value,x,y,options);};
     c.window.RSP=rsp;
 
     function Bubble(actorId,value){this.initialize(actorId,value);}
@@ -2746,19 +2748,21 @@ async function testR29LateRoundscapePluginHooks(){
     const wrapped=rsp.wrap(paragraphBitmap,rspParagraph,260,{size:20});
     let y=58;
     wrapped.forEach(function(line){rsp.text(paragraphBitmap,line,12,y,{size:20});y+=26;});
+    const verticalBitmap=new c.Bitmap(240,160);
+    rsp.textUp(verticalBitmap,verticalLabel,100,80,{size:20});
     const bubble=new Bubble(3,npcLine);
     bubble.parent={};
     await until(function(){
         return paintCalls.indexOf(rspLabelEs)>=0&&
-            paintCalls.indexOf(rspParagraphEs)>=0&&bubble.bitmap.text===npcLineEs;
+            paintCalls.indexOf(rspParagraphEs)>=0&&paintCalls.indexOf(verticalLabelEs)>=0&&bubble.bitmap.text===npcLineEs;
     },"RSP and walking-NPC first appearance",9000);
     assert.ok(f.posts.some(function(p){return p.text===rspLabel;}),"custom UI labels reach OPUS as complete strings");
     assert.ok(f.posts.some(function(p){return p.text===rspParagraph;}),"wrapped custom UI paragraphs reach OPUS before line splitting");
     assert.ok(f.posts.some(function(p){return p.text===npcLine;}),"walking NPC dialogue reaches OPUS on first display");
-    assert.ok(probe.r27RspStats.rendered>=2,"RSP text and wrapped paragraph are repainted in their original Bitmap");
+    assert.ok(probe.r27RspStats.rendered>=3,"RSP text, wrapped paragraph and vertical textUp are repainted in their original Bitmap");
     assert.equal(probe.r28PartyTalkStats.rendered,1,"NPC bubble is replaced in place without creating a second window");
     assert.equal(row.lines[0].text,npcLineEs,"the current PartyTalk line cache is updated for the next encounter");
-    console.log("IA_R29_ROUNDSCAPE_RSP_AND_PARTYTALK_FIRST_APPEARANCE_PASS");
+    console.log("IA_R30_ROUNDSCAPE_RSP_TEXTUP_AND_PARTYTALK_FIRST_APPEARANCE_PASS");
 }
 
 async function testR20CteLargeInventoryAndPhysicalF10(){
@@ -2801,7 +2805,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R29-20261126"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R30-20261126"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -3963,7 +3967,7 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     console.log("IA_R26_CUSTOM_PIXI_CANVAS_PLUGIN_PARAMETER_AND_WHOLE_TEXT_PASS");
 }
 (async()=>{
-    await testR29LateRoundscapePluginHooks();
+    await testR30LateRoundscapeHooksAndVerticalText();
     await testR26CustomPixiAndPluginCanvasSurfaces();
     await testR25MZBufferedMessageFlowAndShortLabels();
     await testR24WholeDynamicPicturesAndGlyphs();
