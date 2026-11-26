@@ -423,13 +423,24 @@ fn replace_path(source: &Path, destination: &Path) -> Result<(), String> {
 fn write_receipt(root: &Path, receipt: &Receipt) -> Result<(), String> {
     let parent = ensure_safe_dir(root, &["IA Traductora", ".local", "Rpg"])?;
     let path = parent.join("rgss3-install.json");
+    if let Ok(metadata) = fs::symlink_metadata(&path) {
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err("IA_RGSS3_RECEIPT_PATH_INVALID".into());
+        }
+    }
     let bytes = serde_json::to_vec_pretty(receipt)
         .map_err(|_| "IA_RGSS3_RECEIPT_SERIALIZE_FAILED".to_string())?;
     atomic_replace(&bytes, &path)
 }
 
 fn read_receipt(root: &Path) -> Result<Receipt, String> {
-    let bytes = fs::read(receipt_path(root))
+    let path = receipt_path(root);
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|_| "IA_RGSS3_RECEIPT_MISSING".to_string())?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err("IA_RGSS3_RECEIPT_PATH_INVALID".into());
+    }
+    let bytes = fs::read(&path)
         .map_err(|_| "IA_RGSS3_RECEIPT_MISSING".to_string())?;
     let receipt: Receipt =
         serde_json::from_slice(&bytes).map_err(|_| "IA_RGSS3_RECEIPT_INVALID".to_string())?;
@@ -524,6 +535,11 @@ pub fn install(game: &Path, plugin_path: &Path) -> Result<Receipt, String> {
 pub fn restore(game: &Path) -> Result<Receipt, String> {
     let root = checked_root(game)?;
     let archive = root.join("Game.rgss3a");
+    let archive_metadata = fs::symlink_metadata(&archive)
+        .map_err(|_| "IA_RGSS3_ARCHIVE_NO_LEIBLE".to_string())?;
+    if archive_metadata.file_type().is_symlink() || !archive_metadata.file_type().is_file() {
+        return Err("IA_RGSS3_ARCHIVE_NO_VALIDO".into());
+    }
     let mut receipt = read_receipt(&root)?;
     let backup = safe_backup_path(&root, &receipt.backup)?;
     if !backup.is_file() || backup.is_symlink() {
@@ -536,7 +552,9 @@ pub fn restore(game: &Path) -> Result<Receipt, String> {
     if receipt.state == "RESTORED" && current == receipt.original_sha256 {
         return Ok(receipt);
     }
-    if receipt.state == "PREPARED" && current == receipt.original_sha256 {
+    if matches!(receipt.state.as_str(), "INSTALLED" | "PREPARED")
+        && current == receipt.original_sha256
+    {
         receipt.state = "RESTORED".to_string();
         write_receipt(&root, &receipt)?;
         return Ok(receipt);
@@ -594,6 +612,27 @@ mod tests {
         let plugin_pos = exported.find(PLUGIN_MARKER).unwrap();
         let main_pos = exported.find("<!>SCRIPT<#>2<#>Main").unwrap();
         assert!(plugin_pos < main_pos);
+    }
+
+    #[test]
+    fn restore_recovers_crash_after_archive_replace_before_receipt_update() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        fs::write(root.join("Game.exe"), b"MZ-fixture").unwrap();
+        fs::write(root.join("Game.ini"), b"[Game]\\nLibrary=RGSS301.dll\\n").unwrap();
+        let archive = root.join("Game.rgss3a");
+        let original = make_archive(&archive);
+        let plugin = root.join("runtime.rb");
+        fs::write(&plugin, "# TENSHIXGAME_RGSS3_RUNTIME_V1\\nclass TXFixture\\nend\\n").unwrap();
+
+        let installed = install(root, &plugin).unwrap();
+        assert_eq!(installed.state, "INSTALLED");
+        let backup = safe_backup_path(root, &installed.backup).unwrap();
+        fs::copy(&backup, &archive).unwrap();
+
+        let recovered = restore(root).unwrap();
+        assert_eq!(recovered.state, "RESTORED");
+        assert_eq!(sha256(&archive).unwrap(), original);
     }
 
     #[test]
