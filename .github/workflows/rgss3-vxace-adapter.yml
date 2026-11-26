@@ -8,6 +8,8 @@ on:
       - "servidor_v2/rgss3/**"
       - "servidor_v2/worker/IATraductora.py"
       - "servidor_v2/tests/test_rgss3_worker.py"
+      - "servidor_v2/tests/test_rgss3_http.py"
+      - "servidor_v2/tests/test_rgss3_runtime.rb"
       - "servidor_v2/tests/test_rgss3_runtime_contract.py"
       - ".github/workflows/rgss3-vxace-adapter.yml"
   pull_request:
@@ -40,6 +42,8 @@ jobs:
           python-version: "3.11"
       - name: Test RGSS3 worker detection and V95 bridge publication
         run: python -m unittest discover -s servidor_v2/tests -p "test_rgss3_worker.py"
+      - name: Test authenticated RGSS3 to V95 HTTP batch
+        run: python -m unittest discover -s servidor_v2/tests -p "test_rgss3_http.py"
       - name: Test native VX Ace runtime contracts
         run: python -m unittest discover -s servidor_v2/tests -p "test_rgss3_runtime_contract.py"
       - uses: dtolnay/rust-toolchain@stable
@@ -51,6 +55,9 @@ jobs:
       - name: Parse RGSS3 runtime plugin
         if: runner.os == 'Windows'
         run: ruby -c servidor_v2/rgss3/runtime/IATraductora_RGSS3.rb
+      - name: Exercise RGSS3 event hooks and control-code restoration
+        if: runner.os == 'Windows'
+        run: ruby servidor_v2/tests/test_rgss3_runtime.rb
       - name: Test archive paths, RGSS3A round-trip and adapter contracts
         run: cargo test --manifest-path servidor_v2/rgss3/Cargo.toml --all-targets
       - name: Build Windows x64 probe
