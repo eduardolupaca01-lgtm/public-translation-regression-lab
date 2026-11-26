@@ -1,39 +1,72 @@
 # TENSHIXGAME — RPG Maker VX Ace / RGSS3
 
-This folder starts the VX Ace adapter as an isolated engine family. It is not an MV/MZ plugin and does not reuse JavaScript window hooks.
+This is an isolated adapter family for the VX Ace runtime. It does not reuse MV/MZ JavaScript hooks.
 
-## Fingerprint from the supplied game folder
+## Engine fingerprint
 
-The folder contains:
+The supplied game-folder screenshot showed `Game.exe`, `Game.ini`, and `Game.rgss3a`, the deployed VX Ace / RGSS3 layout. VX Ace stores project data as Ruby Marshal 4.8 (`.rvdata2`) and can package it in `.rgss3a`.
 
-- `Game.exe`
-- `Game.ini`
-- `Game.rgss3a`
+## Available helper commands
 
-That is the deployed RPG Maker VX Ace layout (RGSS3). VX Ace stores project resources as Ruby Marshal 4.8 data (`.rvdata2`) and may package them in a `.rgss3a` archive. MV/MZ use a different JavaScript/JSON runtime and are not interchangeable.
+Build the helper from this directory:
 
-## First batch: read-only inventory
+```sh
+cargo build --release
+```
 
-`tenshixgame-rgss3-probe inspect <game-root>`:
+Inspect a game folder without modifying it:
 
-1. Validates the executable/config/archive markers without executing the game.
-2. Reads RGSS3A entries using the pinned `rpgmad-lib` implementation.
-3. Rejects unsafe paths, duplicate normalized paths, oversized entries and ambiguous packed/loose layouts.
-4. Extracts only into a temporary directory, never into the supplied game folder.
-5. Uses `rvpacker-txt-rs-lib` to inventory translatable data from VX Ace Marshal files.
-6. Emits a JSON report with the archive hash, entry counts, data-file counts, text inventory and parser status.
+```sh
+tenshixgame-rgss3-probe inspect <game-root>
+```
 
-The probe does not rewrite `Game.rgss3a`, `Scripts.rvdata2`, saves, maps, or any game file. No translation is claimed by this first batch.
+Install the native runtime into a CLOSED TEST COPY:
+
+```sh
+tenshixgame-rgss3-probe install <game-root> <IATraductora_RGSS3.rb>
+```
+
+Restore the exact original archive from the verified backup:
+
+```sh
+tenshixgame-rgss3-probe restore <game-root>
+```
+
+The installer updates only the `Data/Scripts.rvdata2` entry inside `Game.rgss3a`. It verifies the rebuilt archive and each non-script entry, creates a SHA-256-addressed backup and a receipt, and refuses restoration if the installed archive has been changed by another program. Synthetic fixtures exercise install and byte-identical restore.
+
+## Runtime and V95 bridge
+
+The Ruby runtime uses VX Ace native event commands for dialogue (`101`), choices (`102`) and scroll text (`105`). It starts the existing local V95 worker, reads the sidecar bridge, sends authenticated batches to `/translate_batch`, and restores RGSS control codes before displaying text. F10 is a diagnostic panel only; it does not replace the game's input map.
+
+The worker recognizes packed RGSS3A and loose VX Ace data, writes its bridge under `IA Traductora/.local/Rpg/`, and reuses the existing translation service and cache.
+
+## Test coverage
+
+GitHub Actions tests:
+- RGSS3A header, path traversal and archive round-trip.
+- Ruby Marshal script export/rebuild, runtime insertion before Main, and archive preservation.
+- Backup, receipt, install and byte-identical restore on synthetic VX Ace fixtures.
+- Worker detection, bridge publication, authenticated HTTP batch, cache/order behavior and rejection paths.
+- Ruby runtime event hooks, control-code preservation and F10 edge-trigger behavior against minimal engine stubs.
+- Windows x64 compilation and Ruby syntax, plus Linux/Windows Rust and Python checks.
+
+These tests use synthetic game fixtures and stubs. They do **not** replace a smoke test against an authorized, real VX Ace game running under its bundled RGSS3 runtime.
+
+## Integration boundary
+
+The Rust helper and runtime are implemented and tested independently. The existing Go installer/UI and the release package builder still need an RGSS3 dispatch/package path before a user can select a VX Ace `Game.exe` in the graphical installer. The current Go detection path is MV/MZ-oriented. Do not advertise one-click installation or production compatibility until that packaging/UI integration and a real-game smoke test pass.
 
 ## Dependencies and licensing
 
-- `rpgmad-lib 7.0.0`: RGSS archive read/write implementation, WTFPL.
-- `rvpacker-txt-rs-lib 19.0.1`: VX Ace Marshal/text extraction and write library, WTFPL.
+Pinned build-time libraries:
+- `rpgmad-lib 7.0.0` for RGSS3A archive reading and writing.
+- `rvpacker-txt-rs-lib 19.0.1` for VX Ace Marshal script export and rebuild.
 
-They are build-time libraries for this adapter. They are not downloaded or installed by the player, and no external translation service is introduced. V95 remains the translation engine.
+Both upstream libraries are WTFPL. They are build-time dependencies, not runtime downloads. V95 remains the translation engine.
 
-## Deliberate safety boundary
+## Safety boundaries
 
-A packed archive and a loose `Data/` directory at the same time are treated as ambiguous. Encrypted/unsupported layouts, malformed Marshal data, non-standard script containers and paths that cannot be validated are reported as unsupported; the original game is left untouched.
-
-The next integration stage must add a reversible installer, a verified backup/receipt, the RGSS3 runtime bridge to the existing V95 worker, and native message/choice hooks. Those must be tested before the engine is advertised as production-compatible.
+- Inspect never executes `Game.exe` and extracts only `Data/` to a temporary directory.
+- Install is intended only for a closed test copy; it changes the archive's Scripts entry and nothing else.
+- Loose and packed layouts mixed together, invalid archive signatures, unsafe paths, duplicate entries, oversized expansions and malformed Marshal data are rejected.
+- Saves, maps, audio, graphics, system data and other non-script archive entries are preserved byte-for-byte in the synthetic verification tests.
