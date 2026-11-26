@@ -5,6 +5,7 @@
 //! duplicate detection and bounded streaming of every entry. It never writes
 //! into the source game directory.
 
+pub mod project;
 pub mod text;
 
 use encoding_rs::SHIFT_JIS;
