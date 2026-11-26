@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R27-20261126"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R28-20261126"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -28,6 +28,7 @@ var r26CanvasStats={enabled:0,candidates:0,draws:0};
 var r26PluginStats={scanned:0,found:0};
 var r27RspStats={detected:0,requested:0,wrapped:0,rendered:0,late:0,skipped:0,errors:0};
 var r27RspPending=0,r27RspMeasureDepth=0,r27RspTransformDepth=0,r27RspWrapScope=null;
+var r28PartyTalkStats={detected:0,lines:0,requested:0,rendered:0,skipped:0,errors:0};
 var token="",port=0,starting=false,lastAttempt=0,proc=null;
 var runtimeActivated=false,connectionProbe=false,lastStatusProbe=0;
 var cache=new Map(),approvedKeys=new Map(),pending=new Map(),rejectedKeys=new Map(),maxWait=45000;
@@ -2569,11 +2570,27 @@ function hookPixiTextSurface(){
 function r27RspSource(raw){
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800)return null;
     var normalized=raw.trim().toLowerCase().replace(/[’']/g,"").replace(/\s+/g," ");
-    var known={"old friend in summeredge":1,"travelers pack":1,"collectors cache":1,
+    var known={
+        "gender":1,"origin":1,"options":1,"male":1,"female":1,
+        "farmer":1,"noble":1,"thief":1,"soldier":1,"templar":1,"wizard":1,
+        "adventurer":1,"nobleborn":1,"blessed":1,"metabolism":1,"independent":1,
+        "chosen":1,"legacy":1,"fortune":1,"prowess":1,"paths":1,"inheritance":1,
+        "veteran":1,"pathfinder":1,"dragonknight":1,"stormcaller":1,
+        "elementalist":1,"chronomancer":1,"summoner":1,"lancer":1,
+        "traits":1,"training":1,"mining":1,"hero":1,"class":1,"current":1,
+        "attack":1,"defense":1,"agility":1,"perception":1,"m.attack":1,"m.defense":1,
+        "status":1,"stats":1,"all stats":1,"rates & caps":1,"gear and items":1,
+        "short sword":1,"casual clothes":1,"max hp":1,"max mp":1,
+        "empty socket":1,"sockets of casual clothes":1,"empty slot":1,
+        "accessory":1,"headgear":1,"artifact":1,"bodygear":1,"shield":1,"weapon":1,
+        "old friend in summeredge":1,"travelers pack":1,"collectors cache":1,
         "fences friend":1,"lucky purse":1,"silver tongue":1,"hard-won lessons":1,
         "born of legend":1,"heirloom armor":1,"stat sources":1,"legacy points":1,
         "origin trait":1,"starter class":1,"begin your journey":1,"skip origin":1,
-        "easy mode":1,"pregnancy system":1,"the hero has gained":1,"who are you":1};
+        "easy mode":1,"pregnancy system":1,"continue to legacy":1,
+        "the hero has gained":1,"who are you":1,"click to choose":1,"preview":1,
+        "scavenger ii":1,"buy a point":1,"needs 1 point":1
+    };
     if(known[normalized])return "en";
     var source=displaySource(raw,"surface")||displaySource(normalized,"surface");
     if(source)return source;
@@ -2623,18 +2640,36 @@ function r27RspFinish(ticket,result){
     if(result==="rendered"){r27RspStats.rendered++;state.shown++;}
     else if(result==="late")r27RspStats.late++;else r27RspStats.skipped++;
 }
-function r27RspCurrent(ticket){
+function r27RspBaseImage(ticket){
     var ctx=r27RspContext(ticket.bitmap);
     if(!ctx||ctx!==ticket.context||ticket.bitmap.width!==ticket.bitmapWidth||
-       ticket.bitmap.height!==ticket.bitmapHeight||typeof ctx.getImageData!=="function")return false;
-    try{return r27RspImageEqual(ctx.getImageData(ticket.region.x,ticket.region.y,ticket.region.w,ticket.region.h),ticket.after);}
-    catch(_){return false;}
+       ticket.bitmap.height!==ticket.bitmapHeight||typeof ctx.getImageData!=="function"||
+       !ticket.before||!ticket.after||!ticket.before.data||!ticket.after.data)return null;
+    try{
+        var current=ctx.getImageData(ticket.region.x,ticket.region.y,ticket.region.w,ticket.region.h);
+        var before=ticket.before.data,after=ticket.after.data,data=current.data,changed=0;
+        if(!data||data.length!==before.length||data.length!==after.length)return null;
+        // Restore only pixels painted by the original text. Preserve later
+        // icons, borders and unrelated text elsewhere in the same panel.
+        for(var i=0;i<data.length;i+=4){
+            var mask=before[i]!==after[i]||before[i+1]!==after[i+1]||
+                before[i+2]!==after[i+2]||before[i+3]!==after[i+3];
+            if(!mask)continue;
+            changed++;
+            if(data[i]!==after[i]||data[i+1]!==after[i+1]||
+               data[i+2]!==after[i+2]||data[i+3]!==after[i+3])return null;
+            data[i]=before[i];data[i+1]=before[i+1];data[i+2]=before[i+2];data[i+3]=before[i+3];
+        }
+        return changed?current:null;
+    }catch(_){return null;}
 }
 function r27RspReplayText(ticket,translated){
-    if(typeof Bitmap==="undefined"||!r27RspCurrent(ticket))return false;
+    if(typeof Bitmap==="undefined")return false;
+    var base=r27RspBaseImage(ticket);
+    if(!base)return false;
     var stage=new Bitmap(ticket.region.w,ticket.region.h),ctx=r27RspContext(stage);
     if(!ctx||typeof ctx.putImageData!=="function"||typeof ctx.getImageData!=="function")return false;
-    ctx.putImageData(ticket.before,0,0);
+    ctx.putImageData(base,0,0);
     var options=r27RspCopyOptions(ticket.options);options.maxW=ticket.region.contentW;
     ticket.originalText.call(ticket.rsp,stage,translated,ticket.x-ticket.region.x,ticket.y-ticket.region.y,options);
     var image=ctx.getImageData(0,0,ticket.region.w,ticket.region.h),target=r27RspContext(ticket.bitmap);
@@ -2642,10 +2677,12 @@ function r27RspReplayText(ticket,translated){
     if(typeof ticket.bitmap._setDirty==="function")ticket.bitmap._setDirty();return true;
 }
 function r27RspReplayWrap(ticket,translated){
-    if(typeof Bitmap==="undefined"||!r27RspCurrent(ticket))return false;
+    if(typeof Bitmap==="undefined")return false;
+    var base=r27RspBaseImage(ticket);
+    if(!base)return false;
     var stage=new Bitmap(ticket.region.w,ticket.region.h),ctx=r27RspContext(stage);
     if(!ctx||typeof ctx.putImageData!=="function"||typeof ctx.getImageData!=="function")return false;
-    ctx.putImageData(ticket.before,0,0);
+    ctx.putImageData(base,0,0);
     var wrapOptions=r27RspCopyOptions(ticket.wrapOptions),lines=[],visible=[];
     var maxW=Math.min(Number(ticket.maxW)||ticket.region.contentW,ticket.region.contentW);
     for(var attempt=0;attempt<7;attempt++){
@@ -2672,6 +2709,13 @@ function r27RspPoll(ticket){
     if(Date.now()>=ticket.deadline){r27RspFinish(ticket,"late");return;}
     if(ticket.scene&&typeof SceneManager!=="undefined"&&SceneManager._scene!==ticket.scene){r27RspFinish(ticket,"skipped");return;}
     if(inputFormActive()){r27RspFinish(ticket,"skipped");return;}
+    // A screen can draw before the local worker finishes starting. Retry the
+    // first-view request once the bridge becomes ready instead of abandoning
+    // the repaint and waiting for the player to revisit the screen.
+    if(!ticket.requested&&state.connected){
+        ticket.requested=true;
+        firstViewRequest(ticket.source,ticket.text);
+    }
     var translated=null;try{translated=readyText(ticket.source,ticket.text);}catch(_){}
     if(typeof translated==="string"){
         if(translated===ticket.text||!validTranslation(ticket.source,ticket.text,translated,true)){r27RspFinish(ticket,"skipped");return;}
@@ -2684,7 +2728,8 @@ function r27RspPoll(ticket){
 }
 function r27RspQueue(ticket){
     if(r27RspPending>=32){r27RspStats.skipped++;return false;}
-    r27RspPending++;ticket.done=false;ticket.deadline=Date.now()+15000;
+    r27RspPending++;ticket.done=false;ticket.deadline=Date.now()+30000;
+    ticket.requested=!!state.connected;
     ticket.scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
     ticket.bitmapWidth=ticket.bitmap.width;ticket.bitmapHeight=ticket.bitmap.height;
     ticket.timer=setTimeout(function(){r27RspPoll(ticket);},80);return true;
@@ -2712,7 +2757,7 @@ function hookRSPTextSurface(){
             scope.records.push({x:Number(x)||0,y:Number(y)||0,options:r27RspCopyOptions(options)});scope.index++;
             if(scope.index>=scope.lines.length){
                 r27RspWrapScope=null;
-                if(scope.before&&scope.region&&scope.context&&state.connected){
+                if(scope.before&&scope.region&&scope.context){
                     try{var after=scope.context.getImageData(scope.region.x,scope.region.y,scope.region.w,scope.region.h);
                         r27RspQueue({type:"wrap",rsp:rsp,bitmap:bitmap,context:scope.context,region:scope.region,
                             before:scope.before,after:after,source:scope.source,text:scope.text,maxW:scope.maxW,
@@ -2722,7 +2767,8 @@ function hookRSPTextSurface(){
             }
             return drawn;
         }
-        if(scope)r27RspWrapScope=null;
+        // Keep the paragraph scope through interleaved icons and unrelated
+        // labels; the zero-delay expiry below still bounds its lifetime.
         var source=r27RspSource(raw);if(!source)return originalText.apply(this,arguments);
         var translated=readyText(source,raw);
         if(typeof translated==="string"&&translated!==raw&&validTranslation(source,raw,translated,true)){
@@ -2731,7 +2777,7 @@ function hookRSPTextSurface(){
             return originalText.call(this,bitmap,translated,x,y,readyOptions);
         }
         request(raw,source);
-        if(r27RspTransformDepth||!state.connected||r27RspPending>=32)return originalText.apply(this,arguments);
+        if(r27RspTransformDepth||r27RspPending>=32)return originalText.apply(this,arguments);
         var cap=r27RspMaxWidth(rsp,bitmap,raw,options,originalWidth),bounds=r27RspBounds(bitmap,x,y,options,cap,1,0),ctx=r27RspContext(bitmap);
         if(!bounds||!ctx||typeof ctx.getImageData!=="function"||typeof ctx.putImageData!=="function"){
             r27RspStats.skipped++;return originalText.apply(this,arguments);
@@ -2762,7 +2808,7 @@ function hookRSPTextSurface(){
         request(raw,source);r27RspWrapScope=null;r27RspMeasureDepth++;
         var lines;try{lines=originalWrap.apply(this,arguments);}finally{r27RspMeasureDepth--;}
         var visible=Array.isArray(lines)?lines.filter(function(line){return typeof line==="string"&&line.length>0;}):[];
-        if(state.connected&&visible.length>0&&visible.length<=16&&r27RspPending<32){
+        if(visible.length>0&&visible.length<=16&&r27RspPending<32){
             var size=Number(options&&options.size)||24;
             var scope={bitmap:bitmap,source:source,text:raw,maxW:Number(maxW)||0,options:r27RspCopyOptions(options),
                 lines:visible,index:0,records:[],lineStep:Math.max(18,size*1.25)};
@@ -2782,6 +2828,136 @@ function hookRSPTextSurface(){
         };
     }
     rsp.__iaR27Hooked=true;
+}
+
+
+function r28PartyTalkSource(raw){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800)return null;
+    return r27RspSource(raw);
+}
+function r28PartyTalkConvert(raw){
+    return String(raw||"").replace(/\\N\[(\d+)\]/gi,function(match,id){
+        try{
+            var actor=typeof $gameActors!=="undefined"&&$gameActors&&
+                typeof $gameActors.actor==="function"?$gameActors.actor(Number(id)):null;
+            return actor&&typeof actor.name==="function"?actor.name():match;
+        }catch(_){return match;}
+    });
+}
+function r28PartyTalkBacklog(raw,translated){
+    try{
+        var backlog=typeof $gameTemp!=="undefined"&&$gameTemp?$gameTemp._rsBacklog:null;
+        if(!Array.isArray(backlog)||!backlog.length)return;
+        var last=backlog[backlog.length-1],expected=r28PartyTalkConvert(raw);
+        if(last&&typeof last.text==="string"&&last.text===expected)
+            last.text=r28PartyTalkConvert(translated);
+    }catch(_){}
+}
+function r28PartyTalkRefresh(sprite,actorId,translated,originalInit){
+    if(!sprite||typeof originalInit!=="function")return false;
+    var proto=Object.getPrototypeOf(sprite),temp=Object.create(proto);
+    originalInit.call(temp,actorId,translated);
+    if(!temp.bitmap)return false;
+    var oldBitmap=sprite.bitmap,age=Number(sprite._age)||0,out=sprite._out,opacity=sprite.opacity;
+    ["_ch","_actorId","_w","_h","_tail","_lifetime","_draw","_tailX","_lost"].forEach(function(key){
+        sprite[key]=temp[key];
+    });
+    sprite.bitmap=temp.bitmap;
+    sprite._age=age;sprite._out=out;sprite.opacity=opacity;
+    sprite._lifetime=Math.max(Number(sprite._lifetime)||0,age+60);
+    if(typeof sprite.place==="function")sprite.place();
+    if(oldBitmap&&oldBitmap!==sprite.bitmap&&typeof oldBitmap.destroy==="function"){
+        try{oldBitmap.destroy();}catch(_){}
+    }
+    return true;
+}
+function r28PartyTalkScan(api){
+    var rows=api&&Array.isArray(api.rows)?api.rows:[],count=0;
+    rows.forEach(function(row){
+        if(!row||!Array.isArray(row.lines))return;
+        row.lines.forEach(function(line){
+            if(!line||typeof line.text!=="string")return;
+            var source=r28PartyTalkSource(line.text);
+            if(!source)return;
+            count++;
+            if(source==="en")r22Remember(line.text,false,"message");
+            else addPrefetch(line.text,false,source);
+        });
+    });
+    r28PartyTalkStats.lines=count;
+}
+function hookRoundscapePartyTalk(){
+    if(isMZ||!pluginEnabled(/^RS_PartyTalk$/)||typeof window==="undefined")return;
+    var api=window.RSPartyTalk;
+    if(!api||!api.Bubble||!api.Bubble.prototype||api.Bubble.prototype.__iaR28Hooked)return;
+    var proto=api.Bubble.prototype,originalInit=proto.initialize,originalUpdate=proto.update;
+    if(typeof originalInit!=="function")return;
+    r28PartyTalkStats.detected++;
+    r28PartyTalkScan(api);
+    proto.initialize=function(actorId,raw){
+        if(typeof raw!=="string")return originalInit.apply(this,arguments);
+        var source=r28PartyTalkSource(raw);
+        if(!source)return originalInit.apply(this,arguments);
+        var currentState=api.state||{};
+        var lineRef=currentState.row&&currentState.row.lines?
+            currentState.row.lines[currentState.idx]:null;
+        var cached=readyText(source,raw);
+        if(typeof cached==="string"&&cached!==raw&&validTranslation(source,raw,cached,true)){
+            if(lineRef&&lineRef.text===raw)lineRef.text=cached;
+            return originalInit.call(this,actorId,cached);
+        }
+        if(source==="en")r22Remember(raw,true,"message");
+        else addPrefetch(raw,true,source);
+        var result=originalInit.apply(this,arguments);
+        var sprite=this,scene=typeof SceneManager!=="undefined"?SceneManager._scene:null;
+        var ticket={sprite:sprite,actorId:actorId,raw:raw,source:source,lineRef:lineRef,
+            scene:scene,deadline:Date.now()+15000,requested:false,done:false,timer:null};
+        sprite._iaR28PartyTalkTicket=ticket;
+        sprite._iaR28PartyTalkPending=true;
+        if(state.connected){ticket.requested=true;firstViewRequest(source,raw);}
+        function poll(){
+            if(ticket.done||!sprite._iaR28PartyTalkPending)return;
+            if(Date.now()>=ticket.deadline||
+               (ticket.scene&&typeof SceneManager!=="undefined"&&SceneManager._scene!==ticket.scene)||
+               !sprite.parent||(typeof sprite.isDone==="function"&&sprite.isDone())||
+               Number(sprite._out)>=0||inputFormActive()){
+                ticket.done=true;sprite._iaR28PartyTalkPending=false;
+                r28PartyTalkStats.skipped++;return;
+            }
+            if(!ticket.requested&&state.connected){
+                ticket.requested=true;firstViewRequest(source,raw);
+            }
+            var translated=null;try{translated=readyText(source,raw);}catch(_){}
+            if(typeof translated==="string"&&translated!==raw&&validTranslation(source,raw,translated,true)){
+                if(lineRef&&lineRef.text===raw)lineRef.text=translated;
+                r28PartyTalkBacklog(raw,translated);
+                try{
+                    if(r28PartyTalkRefresh(sprite,actorId,translated,originalInit)){
+                        ticket.done=true;sprite._iaR28PartyTalkPending=false;
+                        r28PartyTalkStats.rendered++;return;
+                    }
+                }catch(_){r28PartyTalkStats.errors++;state.errors++;}
+                ticket.done=true;sprite._iaR28PartyTalkPending=false;
+                r28PartyTalkStats.skipped++;return;
+            }
+            ticket.timer=setTimeout(poll,90);
+        }
+        ticket.timer=setTimeout(poll,90);
+        return result;
+    };
+    if(typeof originalUpdate==="function"){
+        proto.update=function(){
+            if(this._iaR28PartyTalkPending&&Number(this._age)>=Number(this._lifetime)-2)
+                this._lifetime=(Number(this._age)||0)+30;
+            var out=originalUpdate.apply(this,arguments);
+            if(this._lost&&this._iaR28PartyTalkTicket){
+                this._iaR28PartyTalkTicket.done=true;this._iaR28PartyTalkPending=false;
+            }
+            return out;
+        };
+    }
+    proto.__iaR28Hooked=true;
+    proto.__iaR28OriginalInitialize=originalInit;
 }
 
 function r26CustomCanvasOwner(stack){
@@ -3328,7 +3504,6 @@ function hookNativeSurface(){
         };
     }
     hookPixiTextSurface();
-    hookRSPTextSurface();
 }
 
 function readyIndependentLines(source,text){
@@ -7908,7 +8083,8 @@ function setupHud(){
             "Textos listos: "+scanStats.ready+"/"+discovered.size+"   Fallos: "+scanStats.rejected,
             "Interfaz PIXI: "+r26PixiStats.rendered+" traducidos · "+r26PixiStats.late+" redibujados · "+r26PixiStats.requested+" pedidos",
             "Canvas de complementos: "+r26CanvasStats.draws+" · Parámetros: "+r26PluginStats.found,
-            "RSP: "+r27RspStats.rendered+" repintados · "+r27RspStats.requested+" solicitudes · "+r27RspStats.skipped+" omitidos,
+            "RSP: "+r27RspStats.rendered+" repintados · "+r27RspStats.requested+" solicitudes · "+r27RspStats.skipped+" omitidos",
+            "NPC: "+r28PartyTalkStats.rendered+" burbujas traducidas · "+r28PartyTalkStats.lines+" líneas detectadas",
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
             "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
             cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.errors+" avisos":
@@ -7962,6 +8138,9 @@ try{
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
     loadDisplayMacros();startPersistentCache();
+    // Plugin-owned text APIs sit outside RPG Maker's standard message windows.
+    try{hookRSPTextSurface();}catch(_){state.errors++;}
+    try{hookRoundscapePartyTalk();}catch(_){state.errors++;}
     state.phase="NUCLEO";
     if(engineAt(content)!==ENGINE_ID)throw Error("IA_NUCLEO_RPG_NO_ENCONTRADO");
     if(cte.enabled){
@@ -8001,7 +8180,7 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,
         r26PixiNormalize:r26PixiNormalize,r26CustomCanvasOwner:r26CustomCanvasOwner,
         scanPluginDisplayParameters:scanPluginDisplayParameters,r26PixiStats:r26PixiStats,
-        r27RspSource:r27RspSource,r27RspStats:r27RspStats
+        r27RspSource:r27RspSource,r27RspStats:r27RspStats,r28PartyTalkStats:r28PartyTalkStats
     };
 }
 })();
