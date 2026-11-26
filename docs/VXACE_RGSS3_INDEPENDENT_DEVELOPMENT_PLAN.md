@@ -58,11 +58,23 @@ Fuentes técnicas consultadas:
 
 `rvpacker-txt-rs` y su biblioteca son candidatos de investigación, no dependencias aprobadas automáticamente. Antes de fijarlos se verificará versión, licencia, procedencia, dependencias transitivas, soporte de CPU y comportamiento en Windows x64. Sus binarios publicados indican un baseline x86-64-v2/AES-NI; no se asumirá que funcionen en todos los equipos.
 
+## Dependencias revisadas para la primera etapa
+
+| Dependencia fijada | Licencia declarada | Uso en esta rama |
+|---|---|---|
+| `rpgmad-lib = 7.0.0` | WTFPL | Lectura en streaming y validación del contenedor RGSS3A |
+| `rvpacker-txt-rs-lib = 19.0.1` | WTFPL | Extracción y aplicación de texto en estructuras Marshal de RPG Maker; esta rama expone primero el adaptador de scripts VX Ace |
+| `marshal-rs = 4.0.1` | WTFPL | Generación de fixtures Marshal sintéticos en las pruebas |
+
+Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su biblioteca tiene `gxhash` como función opcional; esta rama no la activa y usa la configuración predeterminada. Las tres bibliotecas se consumen como dependencias: no se copiaron archivos fuente de Panda, Camacho ni de otras ramas de Eduardo.
+
+**Límite importante de Marshal:** la escritura reconstruye el flujo Marshal a partir del grafo parseado. Se verifica que permanezcan IDs, nombres, orden, scripts y valores no traducidos; no se promete identidad byte a byte del contenedor completo. Toda salida se devuelve en un búfer nuevo. La instalación transaccional sobre una copia autorizada será una etapa distinta.
+
 ## Arquitectura que se construirá desde cero
 
 1. **Fingerprint de solo lectura.** Identificar VX Ace por evidencias coherentes de `Game.exe`, `Game.ini`, biblioteca RGSS3 y archivos de datos. No ejecutar el juego ni modificar archivos durante detección.
 2. **Lector de archivos y archivos cifrados.** Leer `Data/*.rvdata2` y `.rgss3a` con límites de tamaño, rutas seguras, detección de duplicados y rechazo de archivos truncados/ambiguos. Trabajar sobre copias temporales.
-3. **Capa Marshal.** Extraer y reconstruir datos y scripts manteniendo IDs, orden, codificación y bytes/contenido de elementos no seleccionados.
+3. **Capa Marshal.** Extraer y reconstruir datos y scripts manteniendo IDs, nombres, orden, codificación y semántica de elementos no seleccionados. La salida Marshal puede reserializar el contenedor completo; se compara el contenido semántico y se escribe siempre en un búfer nuevo.
 4. **Modelo de texto tipado.** Diferenciar diálogo, opción, texto desplazable, base de datos, términos del sistema y nombres propios. Preservar códigos RGSS, variables, formato, índices y marcadores dinámicos.
 5. **Adaptador de traducción.** Definir un contrato explícito con el worker V95: identidad, autenticación, lotes, orden, timeouts, errores, caché y publicación atómica. No aceptar un mock como prueba de modelo real.
 6. **Runtime RGSS3 nativo.** Compatible con Ruby 1.9.2. Traducir la primera presentación dentro de la ventana original, conservar el avance de eventos y las IDs de elección, y no mostrar una segunda superficie. Si el servicio no responde, mantener el original y permitir continuar sin corromper la escena.
@@ -97,10 +109,13 @@ Fuentes técnicas consultadas:
 - Sin artefacto de distribución hasta superar las puertas A–F.
 - Sin fusionar automáticamente la PR ni modificar `main`.
 
-## Estado actual
+## Estado actual — 26 de noviembre de 2026
 
-- Rama independiente creada desde `main`.
-- Este documento fija el método y la matriz de aceptación.
-- No se ha copiado código de las ramas RGSS anteriores.
-- No se ha modificado `main`, ningún repositorio de Panda/Camacho ni ningún archivo de juego.
-- No existe todavía un EXE VX Ace aprobado. La primera implementación será el fingerprint de solo lectura y su batería pequeña de fixtures; no se afirmará integración antes de completar las puertas correspondientes.
+- Rama independiente desde `main`; PR #13 abierta en borrador, dirigida a `main`.
+- **Puerta A — detección:** 11 casos pasaron en Ubuntu 24.04 y Windows Server 2022.
+- **Puerta B.1 — RGSS3A:** 12 casos pasaron en ambos sistemas; incluyen cabecera, motor, truncado, rutas, duplicados, Shift-JIS y límites. Son archivos sintéticos generados con la biblioteca fijada, no una certificación con un juego comercial.
+- **Puerta B.2 — scripts Marshal:** 4 casos pasaron en ambos sistemas; extracción de literales, aplicación de una traducción, conservación semántica de números/nombres/orden y del segundo script, escape de comillas Ruby y rechazo de Marshal inválido.
+- Ejecución VX Ace: [workflow 45893096605](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45893096605) — Windows y Ubuntu correctos.
+- La comprobación general del repositorio sigue fallando en `tests/test_unseen_holdout.py::test_speaker_control_code_accepts_pm_clock_notation`: el validador reporta conceptos ausentes `tarde`, `atardecer`, `p.m.` y `pm`. Está fuera de los archivos de esta PR; no se desactivó ni se alteró esa prueba.
+- No se ha copiado código de las ramas RGSS anteriores ni se ha modificado `main`, Panda, Camacho o ningún archivo de juego.
+- **No existe todavía un EXE VX Ace aprobado.** Falta validar archivos reales de juegos, los demás tipos de datos Marshal, Ruby 1.9.2 dentro de VX Ace, el worker V95 real, la ventana nativa, instalación/restauración y empaquetado. Las pruebas sintéticas no se presentan como compatibilidad de producción.
