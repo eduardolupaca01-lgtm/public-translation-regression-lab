@@ -6,6 +6,8 @@ on:
       - feature/rpg-maker-vx-ace-rgss3-20261126
     paths:
       - "servidor_v2/rgss3/**"
+      - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/tests/test_rgss3_worker.py"
       - ".github/workflows/rgss3-vxace-adapter.yml"
   pull_request:
     branches:
@@ -29,6 +31,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test RGSS3 worker detection and V95 bridge publication
+        run: python -m unittest discover -s servidor_v2/tests -p "test_rgss3_worker.py"
       - uses: dtolnay/rust-toolchain@stable
       - name: Test archive paths, RGSS3A round-trip and adapter contracts
         run: cargo test --manifest-path servidor_v2/rgss3/Cargo.toml --all-targets
