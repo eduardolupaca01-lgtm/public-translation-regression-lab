@@ -38,9 +38,14 @@ class Window_Base
 end
 
 class Game_Interpreter
-  attr_accessor :list, :index, :params, :captured
+  attr_accessor :list, :index, :params, :captured, :captured_choices
   def command_101
     @captured = @list[@index + 1].parameters[0]
+    cursor = @index + 1
+    cursor += 1 while @list[cursor] && @list[cursor].code == 401
+    if @list[cursor] && @list[cursor].code == 102
+      @captured_choices = @list[cursor].parameters[0].dup
+    end
     true
   end
   def command_102
@@ -75,6 +80,14 @@ class RGSS3RuntimeBehaviorTest < Minitest::Test
     assert_equal "ja", TenshixgameRGSS3.detect_source(["こんにちは"])
     assert_equal "en", TenshixgameRGSS3.detect_source(["Hello there"])
   end
+
+  def test_win32_wide_strings_have_utf16le_terminator
+    value = TenshixgameRGSS3.wide("VX Ace")
+    assert_equal Encoding::UTF_16LE, value.encoding
+    assert_equal [0, 0], value.bytes.last(2)
+    assert_equal 14, value.bytesize
+  end
+
 
   def test_control_codes_are_preserved_exactly
     source = "Hola \\C[3]mundo \\V[2]"
@@ -119,6 +132,26 @@ class RGSS3RuntimeBehaviorTest < Minitest::Test
     assert_equal ["Yes", "No"], interpreter.captured
     assert_equal ["Sí", "No"], interpreter.params[0]
   end
+
+  def test_choices_attached_to_show_text_are_translated_inside_command_101
+    commands = [
+      EventCommand.new(101, []),
+      EventCommand.new(401, ["こんにちは"]),
+      EventCommand.new(102, [["はい", "いいえ"], 0, 0, 2, 0]),
+      EventCommand.new(0, []),
+    ]
+    interpreter = Game_Interpreter.new
+    interpreter.list = commands
+    interpreter.index = 0
+    translate_with do |texts|
+      texts == ["こんにちは"] ? ["Hola."] : ["Sí", "No"]
+    end
+    interpreter.command_101
+    assert_equal "Hola.", interpreter.captured
+    assert_equal ["Sí", "No"], interpreter.captured_choices
+    assert_equal ["はい", "いいえ"], interpreter.list[2].parameters[0]
+  end
+
 
   def test_scroll_text_hook_translates_before_original_and_restores_event_data
     commands = [
