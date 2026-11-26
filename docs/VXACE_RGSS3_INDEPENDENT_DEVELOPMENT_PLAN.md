@@ -71,7 +71,7 @@ Fuentes técnicas consultadas:
 | `marshal-rs = 4.0.1` | WTFPL | Generación de fixtures Marshal sintéticos en las pruebas |
 | `tempfile = 3.23.0` | MIT OR Apache-2.0 | Staging temporal y publicación del árbol `Data` solo después de un build completo |
 
-Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su biblioteca tiene `gxhash` como función opcional; esta rama no la activa y usa la configuración predeterminada. Las tres bibliotecas se consumen como dependencias: no se copiaron archivos fuente de Panda, Camacho ni de otras ramas de Eduardo.
+Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su biblioteca tiene `gxhash` como función opcional; esta rama no la activa y usa la configuración predeterminada. Las bibliotecas de formato se consumen como dependencias; tempfile solo aporta el staging de salida. No se copiaron archivos fuente de Panda, Camacho ni de otras ramas de Eduardo.
 
 **Límite importante de Marshal:** la escritura reconstruye el flujo Marshal a partir del grafo parseado. Se verifica que permanezcan IDs, nombres, orden, scripts y valores no traducidos; no se promete identidad byte a byte del contenedor completo. Toda salida se devuelve en un búfer nuevo. La construcción del árbol `Data` se hace en un directorio temporal hermano del destino; solo se publica después de completar el procesamiento, rechaza destinos existentes y descarta el staging si falla. Esto no es todavía la instalación transaccional sobre el juego, que será una etapa distinta.
 
@@ -116,11 +116,14 @@ Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su bi
 
 ## Estado actual — 26 de noviembre de 2026
 
-- Rama independiente desde `main`; PR #13 abierta en borrador, dirigida a `main`.
+- Rama independiente desde main; PR #13 abierta en borrador, dirigida a main.
 - **Puerta A — detección:** 11 casos pasaron en Ubuntu 24.04 y Windows Server 2022.
 - **Puerta B.1 — RGSS3A:** 12 casos pasaron en ambos sistemas; incluyen cabecera, motor, truncado, rutas, duplicados, Shift-JIS y límites. Son archivos sintéticos generados con la biblioteca fijada, no una certificación con un juego comercial.
 - **Puerta B.2 — scripts Marshal:** 4 casos pasaron en ambos sistemas; extracción de literales, aplicación de una traducción, conservación semántica de números/nombres/orden y del segundo script, escape de comillas Ruby y rechazo de Marshal inválido.
-- Ejecución VX Ace: [workflow 45893096605](https://github.com/eduardolupaca01-lgtm/public-translation-regression-lab/actions/runs/45893096605) — Windows y Ubuntu correctos.
-- La comprobación general del repositorio y el workflow VX Ace más reciente (`45897143100` y `45897143099`) terminaron `success` en ambos sistemas. La corrección de la notación meridiana pertenece a la batería general y no se ha usado para rebajar controles de VX Ace.
-- No se ha copiado código de las ramas RGSS anteriores ni se ha modificado `main`, Panda, Camacho o ningún archivo de juego.
+- **Puerta B.3 — proyecto y publicación segura:** 9 pruebas pasaron en ambos sistemas. Incluyen extracción sin modificar el origen, reconstrucción a un árbol Data separado, limpieza del staging al fallar Marshal, rechazo de destinos existentes y workspaces solapados, rutas Unicode/con espacios y rechazo de flags vacíos.
+- Ejecución VX Ace 45898338651: SUCCESS en Ubuntu 24.04 y Windows Server 2022.
+- Batería general 45898338666: SUCCESS en Windows y Ubuntu.
+- La primera ejecución 45898094895 detectó que el fixture Unicode no añadía una traducción; el escritor, correctamente, no emitió un archivo sin cambios. Se corrigió el fixture para traducir el literal y la ejecución posterior pasó en ambos sistemas.
+- all_vxace_file_flags() declara los grupos Map, Database (other), System y Scripts. La prueba de proyecto end-to-end cubre actualmente Scripts; mapas, base de datos y términos del sistema aún necesitan fixtures Marshal propios antes de declararlos validados.
+- No se ha copiado código de las ramas RGSS anteriores ni se ha modificado main, Panda, Camacho o ningún archivo de juego.
 - **No existe todavía un EXE VX Ace aprobado.** Falta validar archivos reales de juegos, los demás tipos de datos Marshal, Ruby 1.9.2 dentro de VX Ace, el worker V95 real, la ventana nativa, instalación/restauración y empaquetado. Las pruebas sintéticas no se presentan como compatibilidad de producción.
