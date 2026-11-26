@@ -34,7 +34,7 @@ class RGSS3WorkerTests(unittest.TestCase):
         self.assertFalse(service.halva)
         self.assertEqual(service.content, self.root.resolve())
         bridge = IA.publish(service, 43127)
-        self.assertEqual(bridge, self.root / "IA Traductora" / ".local" / "Rpg" / "bridge.json")
+        self.assertEqual(bridge.resolve(), (self.root / "IA Traductora" / ".local" / "Rpg" / "bridge.json").resolve())
         payload = json.loads(bridge.read_text(encoding="utf-8"))
         self.assertEqual(payload["schema"], IA.SCHEMA)
         self.assertEqual(payload["port"], 43127)
