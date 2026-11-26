@@ -478,6 +478,40 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
         raise ValueError("IA_SOLAMENTE_RPG_MV_MZ")
     return root,layouts[0]
 
+def verified_rgss3_runtime(game:Path)->tuple[Path,Path]:
+    """Read-only fingerprint for a deployed RPG Maker VX Ace game."""
+    if game.is_symlink():
+        raise ValueError("IA_RGSS3_RUTA_NO_VERIFICADA")
+    root=game.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("IA_RGSS3_RUTA_NO_VERIFICADA")
+    def ordinary(file):
+        return file.is_file() and not file.is_symlink()
+    if not ordinary(root/"Game.exe") or not ordinary(root/"Game.ini"):
+        raise ValueError("IA_RGSS3_GAME_MARKERS_INVALIDOS")
+    archive=root/"Game.rgss3a"
+    data=root/"Data"
+    packed=ordinary(archive)
+    if data.is_symlink():
+        raise ValueError("IA_RGSS3_RUTA_NO_VERIFICADA")
+    loose=ordinary(data/"System.rvdata2") or ordinary(data/"Scripts.rvdata2")
+    if packed and loose:
+        raise ValueError("IA_RGSS3_LAYOUT_AMBIGUO")
+    if packed:
+        size=archive.stat().st_size
+        if not 8<=size<=1024*1024*1024:
+            raise ValueError("IA_RGSS3_ARCHIVE_TAMANO_INVALIDO")
+        with archive.open("rb") as stream:
+            header=stream.read(8)
+        if header!=b"RGSSAD\\x00\\x03":
+            raise ValueError("IA_RGSS3_ARCHIVE_NO_VALIDO")
+    elif loose:
+        if not data.is_dir() or not ordinary(data/"System.rvdata2") or not ordinary(data/"Scripts.rvdata2"):
+            raise ValueError("IA_RGSS3_DATA_INCOMPLETA")
+    else:
+        raise ValueError("IA_RGSS3_DATOS_FALTANTES")
+    return root,root
+
 def verified_halva_runtime(game:Path, runtime:Path):
     # Only a declared, owned installation; the launcher may provide an
     # external temporary content directory. No scanning for unrelated caches.
@@ -513,7 +547,20 @@ def verified_halva_runtime(game:Path, runtime:Path):
 class Service:
     def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None):
         self.halva=halva_content is not None
-        self.game,self.content=verified_halva_runtime(game,halva_content) if self.halva else game_root(game)
+        self.rgss3=False
+        if self.halva:
+            self.game,self.content=verified_halva_runtime(game,halva_content)
+        else:
+            try:
+                self.game,self.content=game_root(game)
+            except ValueError as mv_error:
+                try:
+                    self.game,self.content=verified_rgss3_runtime(game)
+                    self.rgss3=True
+                except ValueError as rgss_error:
+                    if str(rgss_error).startswith("IA_RGSS3_"):
+                        raise
+                    raise mv_error
         engine=engine.resolve(strict=True)
         if engine.is_symlink() or not engine.is_relative_to(self.game):
             raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
@@ -658,7 +705,7 @@ def make_handler(service:Service):
     return Handler
 
 def publish(service,port):
-    folder=service.game/"IA Traductora"/".local"/"Rpg" if getattr(service,"halva",False) else service.content/"data"/"IATraductora"
+    folder=service.game/"IA Traductora"/".local"/"Rpg" if (getattr(service,"halva",False) or getattr(service,"rgss3",False)) else service.content/"data"/"IATraductora"
     folder.mkdir(exist_ok=True,mode=0o700)
     if folder.is_symlink() or not folder.resolve().is_relative_to(service.game):
         raise RuntimeError("IA_PUENTE_INSEGURO")
@@ -722,7 +769,11 @@ def safe_startup_code(error):
              "IA_RPG_RUTAS_AMBIGUAS","IA_RPG_MZ_COMPRIMIDO_NO_VALIDO",
              "IA_MOTOR_FUERA_DEL_JUEGO","IA_MODELO_INCOMPLETO",
              "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO",
-             "IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA","IA_HALVA_INSTALACION_NO_VERIFICADA"}
+             "IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA","IA_HALVA_INSTALACION_NO_VERIFICADA",
+             "IA_RGSS3_GAME_MARKERS_INVALIDOS","IA_RGSS3_ARCHIVE_NO_VALIDO",
+             "IA_RGSS3_ARCHIVE_TAMANO_INVALIDO","IA_RGSS3_DATOS_FALTANTES",
+             "IA_RGSS3_DATA_INCOMPLETA","IA_RGSS3_LAYOUT_AMBIGUO",
+             "IA_RGSS3_RUTA_NO_VERIFICADA"}
     if str(error) in allowed:return str(error)
     if isinstance(error,sqlite3.Error):return "IA_CACHE_PERSISTENTE_INACCESIBLE"
     if "version" in raw and ("model" in raw or "binary" in raw):
