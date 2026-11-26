@@ -218,9 +218,6 @@ fn inject_script_export(source: &str, plugin: &str) -> Result<String, String> {
     for section in sections {
         result.push_str(&section.header);
         result.push_str(&section.body);
-        if !result.ends_with('\n') {
-            result.push('\n');
-        }
     }
     Ok(result)
 }
@@ -601,6 +598,16 @@ mod tests {
         let bytes = encrypt_to_vec(&entries, Engine::Vxace).unwrap();
         fs::write(path, &bytes).unwrap();
         hash_bytes(&bytes)
+    }
+
+    #[test]
+    fn injector_preserves_original_script_body_without_final_newline() {
+        let source = "<!>SCRIPT<#>1<#>Materials\\n# materials fixture\\n<!>SCRIPT<#>2<#>Main\\n# main fixture without final newline";
+        let plugin = "# TENSHIXGAME_RGSS3_RUNTIME_V1\\nclass TXFixture\\nend\\n";
+        let rewritten = inject_script_export(source, plugin).unwrap();
+        assert!(rewritten.contains("# materials fixture\\n"));
+        assert!(rewritten.ends_with("# main fixture without final newline"));
+        assert!(!rewritten.ends_with("# main fixture without final newline\\n"));
     }
 
     #[test]
