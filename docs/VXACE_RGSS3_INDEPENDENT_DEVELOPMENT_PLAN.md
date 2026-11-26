@@ -43,6 +43,7 @@ No repetiremos esas pruebas como si fueran una aceptación nueva. Se conserva la
 | Panda TX720–TX723 | Pruebas de texto japonés, elección, F10, nombre del jugador y límites del renderizado | Las pruebas de otras familias no certifican RGSS3 |
 | Eduardo PR #8/#10/#11 | Separación de instalador, complemento, worker, modelos y empaquetado | Las pruebas sintéticas y los artefactos de diagnóstico no sustituyen la ejecución en el juego real |
 | Eduardo TX718/TX763 | Diagnósticos Unicode verificables y cobertura de límites para códigos RPG reservados | Los marcadores y pruebas de MV/MZ no se trasladan como implementación RGSS3 |
+| Eduardo TX754 / PR #5 | Host/supervisor único, trabajador V95, caché SQLite, cola, escaneo en segundo plano, render nativo, instalador transaccional, backups, rollback y journal | La PR sigue en borrador; MV/MZ es el único flujo visual validado y RGSS no está habilitado para instalación en vivo |
 | Camacho TX233–TX236 | Escritura por etapas, relectura del recurso reconstruido e identidad de campos | El patrón de staging se aplica a salidas de VX Ace; los formatos WOLF/Bakin/SWF no se reutilizan |
 | Camacho TX314–TX326 | Contratos explícitos de ciclo de vida, propiedad del proceso y aislamiento de sesión | Es evidencia de arquitectura; no acredita un runtime RGSS3 |
 | Drimt PR #4/#5/#49 | Límites de tamaño coherentes, CP932/Shift-JIS, CLI auténtico y pruebas sintéticas Windows/Linux | Un round-trip de fixture no certifica un juego comercial ni su runtime |
@@ -114,16 +115,24 @@ Se fijan versiones exactas. No se incorpora el ejecutable CLI de rvpacker. Su bi
 - Sin artefacto de distribución hasta superar las puertas A–F.
 - Sin fusionar automáticamente la PR ni modificar `main`.
 
+
+## Límite de integración con el programa Servidor
+
+- La PR de arquitectura TX754 [#5](https://github.com/eduardolupaca01-lgtm/tenshixgame-rpg-tx723-build/pull/5) está en borrador y declara explícitamente que MV/MZ es el único flujo visual validado; RGSS y otras familias requieren completar su flujo antes de habilitar instalación.
+- En la rama de instalador revisada para esa arquitectura, la familia RGSS se reconoce como motor, pero devuelve un resultado de detección-only y no ofrece instalación visual V95. No se debe confundir fingerprint de VX Ace con compatibilidad en vivo.
+- Por eso esta PR no modifica la GUI ni añade una ruta de instalación VX Ace. La integración se hará en una PR separada cuando pasen las puertas C–F: Ruby 1.9.2 real, ventana nativa, worker V95 real, instalación/restauración y prueba en copia autorizada.
+- La integración futura debe conservar un solo supervisor/worker V95, caché, cola, render nativo y journal/backup. No se añadirá un segundo worker ni una ventana overlay.
+
 ## Estado actual — 26 de noviembre de 2026
 
 - Rama independiente desde main; PR #13 abierta en borrador, dirigida a main.
 - **Puerta A — detección:** 11 casos pasaron en Ubuntu 24.04 y Windows Server 2022.
 - **Puerta B.1 — RGSS3A:** 12 casos pasaron en ambos sistemas; incluyen cabecera, motor, truncado, rutas, duplicados, Shift-JIS y límites. Son archivos sintéticos generados con la biblioteca fijada, no una certificación con un juego comercial.
 - **Puerta B.2 — scripts Marshal:** 4 casos pasaron en ambos sistemas; extracción de literales, aplicación de una traducción, conservación semántica de números/nombres/orden y del segundo script, escape de comillas Ruby y rechazo de Marshal inválido.
-- **Puerta B.3 — proyecto y publicación segura:** 10 pruebas pasaron en ambos sistemas. Incluyen un round-trip integrado de mapas/eventos, actores (base de datos), sistema/términos/título y scripts; extracción sin modificar el origen; reconstrucción a un árbol Data separado; limpieza del staging al fallar Marshal; rechazo de destinos existentes y workspaces solapados; rutas Unicode/con espacios y rechazo de flags vacíos.
-- Ejecución VX Ace 45899399640: SUCCESS en Ubuntu 24.04 y Windows Server 2022; incluye las 10 pruebas de proyecto y el round-trip de los cuatro grupos de archivos.
-- Batería general 45899399707: SUCCESS en Windows y Ubuntu.
-- La primera ejecución 45898094895 detectó que el fixture Unicode no añadía una traducción; el escritor, correctamente, no emitió un archivo sin cambios. Se corrigió el fixture para traducir el literal y la ejecución posterior pasó en ambos sistemas.
+- **Puerta B.3 — proyecto y publicación segura:** 10 pruebas pasaron en ambos sistemas. Incluyen un round-trip japonés→español de mapas/eventos, actores (base de datos), sistema/términos/título y scripts; extracción sin modificar el origen; reconstrucción a un árbol Data separado; limpieza del staging al fallar Marshal; rechazo de destinos existentes y workspaces solapados; rutas Unicode/con espacios y rechazo de flags vacíos.
+- Ejecución VX Ace 45900190156: SUCCESS en Ubuntu 24.04 y Windows Server 2022; incluye las 10 pruebas de proyecto y el round-trip japonés→español de los cuatro grupos de archivos.
+- Batería general 45900190059: SUCCESS en Windows y Ubuntu.
+- Se corrigieron dos desajustes de fixtures sin rebajar validadores: 45898094895 tenía una ruta Unicode sin traducción, y 45899825651 mantenía la clave inglesa después de cambiar el fixture del script a japonés. La ejecución final 45900190156 pasó en ambos sistemas.
 - all_vxace_file_flags() declara Map, Database (other), System y Scripts. Los cuatro grupos cuentan ahora con un round-trip de proyecto sobre fixtures Marshal sintéticos. Esto valida el flujo del adaptador y no certifica compatibilidad con archivos de un juego comercial.
 - No se ha copiado código de las ramas RGSS anteriores ni se ha modificado main, Panda, Camacho o ningún archivo de juego.
 - **No existe todavía un EXE VX Ace aprobado.** Falta validar archivos reales de juegos, los demás tipos de datos Marshal, Ruby 1.9.2 dentro de VX Ace, el worker V95 real, la ventana nativa, instalación/restauración y empaquetado. Las pruebas sintéticas no se presentan como compatibilidad de producción.
