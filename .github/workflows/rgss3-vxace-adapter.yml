@@ -1,4 +1,4 @@
-name: TENSHIXGAME VX Ace RGSS3 adapter
+name: TENSHIXGAME VX Ace RGSS3 adapter and native runtime
 
 on:
   push:
@@ -15,6 +15,9 @@ on:
       - feature/servidor-v2-rpg-mz-20261124
     paths:
       - "servidor_v2/rgss3/**"
+      - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/tests/test_rgss3_worker.py"
+      - "servidor_v2/tests/test_rgss3_runtime_contract.py"
       - ".github/workflows/rgss3-vxace-adapter.yml"
   workflow_dispatch:
 
@@ -44,7 +47,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: ruby/setup-ruby@v1
         with:
-          ruby-version: "2.7"
+          ruby-version: "2.7.8"
       - name: Parse RGSS3 runtime plugin
         if: runner.os == 'Windows'
         run: ruby -c servidor_v2/rgss3/runtime/IATraductora_RGSS3.rb
