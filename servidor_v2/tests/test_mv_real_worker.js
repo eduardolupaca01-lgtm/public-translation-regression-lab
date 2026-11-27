@@ -32,7 +32,7 @@ Window_NameBox.prototype.constructor=Window_NameBox;
 Window_NameBox.prototype.setName=function(v){this._name=v;this.refresh();};
 Window_NameBox.prototype.refresh=function(){this.drawText(this._name);};
 function Window_Message(){this.starts=0;}
-Window_Message.prototype.startMessage=function(){this.starts++;};
+Window_Message.prototype.startMessage=function(){this.starts++;this.paintedText=gameMessage.allText();};
 Window_Message.prototype.updateWait=function(){return false;};
 Window_Message.prototype.canStart=function(){return this.starts===0&&gameMessage.hasText();};
 Window_Message.prototype.update=function(){
@@ -299,6 +299,9 @@ async function run(){
         ["$text4","$v[5] = 9","","if(s[10]) Internal event condition","","",""]];
     const csvRaw=cells.map(row=>row.map(v=>'"'+v.replace(/"/g,'""')+'"').join(",")).join("\r\n")+"\r\n";
     fs.mkdirSync(root,{recursive:true});fs.writeFileSync(sheet,csvRaw,"utf8");
+    const questDir=path.join(content,"quest"),questFile=path.join(questDir,"fixture.txt");
+    const questRaw="Title: Find the missing key.\n- Please open the window.\n";
+    fs.mkdirSync(questDir,{recursive:true});fs.writeFileSync(questFile,questRaw,"utf8");
     fs.writeFileSync(path.join(content,"data","System.json"),JSON.stringify({locale:"en_US",startMapId:1}),"utf8");
     vm.runInNewContext(source,ctx,{filename:"IATraductora.js"});
     assert.equal(ctx.Input.keyMapper[121],"ia-traductora","IA_F10_MAPPER_MISSING");
@@ -328,6 +331,17 @@ async function run(){
             return m&&Number(m[2])>=3&&m[1]===m[2];
         });
     },120000,"IA_EXTERNAL_CSV_PREFETCH_TIMEOUT");
+    const journal="\\c[2]Affection: \\c[0]12|Progress: 0\nStage 1(2): Find the missing key.\n- \\c[6]Please open the window.\\I[17]\\c[0] (6 AM, 20 AP)";
+    const questMessage=new Window_Message();
+    gameMessage._texts=journal.split("\n");
+    const beforeQuest=JSON.stringify(gameMessage._texts);
+    questMessage.startMessage();
+    assert.ok(/Afinidad/.test(questMessage.paintedText)&&/Progreso/.test(questMessage.paintedText)&&/Etapa 1\(2\)/.test(questMessage.paintedText),"IA_QUEST_TXT_HEADER_FAIL");
+    assert.ok(/llave/i.test(questMessage.paintedText)&&/ventana/i.test(questMessage.paintedText),"IA_QUEST_TXT_REAL_OPUS_FAIL");
+    assert.ok(questMessage.paintedText.includes("\\c[6]")&&questMessage.paintedText.includes("\\I[17]\\c[0] (6 AM, 20 AP)"),"IA_QUEST_TXT_CONTROLS_FAIL");
+    assert.equal(JSON.stringify(gameMessage._texts),beforeQuest,"IA_QUEST_TXT_STATE_CHANGED");
+    assert.equal(fs.readFileSync(questFile,"utf8"),questRaw,"IA_QUEST_TXT_SOURCE_CHANGED");
+    console.log("IA_R41_REAL_OPUS_QUEST_TXT_NATIVE_JOURNAL_PASS "+(isMZ?"MZ":"MV"));
     const preloaded=new Window_Message();
     gameMessage._texts=[csvMessage];preloaded.startMessage();
     assert.equal(preloaded.starts,1,"IA_EXTERNAL_CSV_FIRST_PAINT_RESTARTED");

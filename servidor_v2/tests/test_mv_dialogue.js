@@ -821,6 +821,66 @@ async function testR4P2NoStaleLateOverlayAndNoArtificialWait(){
     assert.equal(m._iaLateTicket,null);
     assert.equal(m.originalStarts,1);assert.equal(m.updates,1);
 }
+async function testR41PlainQuestTxtAndLongNativeJournal(mz){
+    const root=path.join("/tmp","servidor-quest-txt-"+(mz?"mz":"mv"));
+    const content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const quests=path.join(content,"quest"),nested=path.join(quests,"chapter");
+    const state={files:{},dirs:{[data]:true,[quests]:true,[nested]:true}};
+    const body="Find the missing key.",floor="Broken Floor",routine="Morning Routine",door="Please open the window.";
+    const colored="\\c[6]"+body+"\\I[17]\\c[0]";
+    const textFile="\uFEFFTitle: "+floor+"\r\n- "+colored+"\r\n- "+routine+"\r\n"+
+        "Condition: $gameSwitches.value(7)\r\nScript: Never execute this code.\r\n"+
+        "const value = 'Never scan this instruction';\r\n"+
+        "image: hero.png\r\n";
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(quests,"story.txt")]=textFile;
+    state.files[path.join(nested,"日本語.txt")]="Objective: "+door+"\n";
+    state.files[path.join(quests,"binary.txt")]="invalid\0bytes";
+    state.files[path.join(data,"unrelated.txt")]="Never scan this unrelated file.";
+    const originalFiles=Object.assign({},state.files);
+    const responses={[body]:"Encuentra la llave perdida.",[floor]:"Suelo roto",
+        [routine]:"Rutina matutina",[door]:"Por favor, abre la ventana."};
+    const f=fixture(5,{root,mz,fsState:state,batch:true,testHooks:true,nativePaint:true,responses});
+    new f.context.Scene_Title().start();
+    const qa=f.context.window.__IA_TRADUCTORA_TEST__;
+    const deadline=Date.now()+10000;
+    while(Date.now()<deadline&&(!qa.done()||![body,floor,routine,door].every(v=>f.posts.some(p=>p.text===v))))await wait(25);
+    assert.ok(qa.done(),"quest TXT scan must finish");
+    const stats=qa.questTxt();
+    assert.equal(stats.detected,true);assert.equal(stats.files,2);assert.equal(stats.total,3);
+    assert.equal(stats.omitted,1);assert.equal(stats.fields,4);
+    for(const v of [body,floor,routine,door])assert.ok(qa.has("en",v),"missing quest TXT inventory: "+v);
+    assert.ok(!f.posts.some(p=>/Never|gameSwitches|hero\.png|\\[cCI]/.test(p.text)));
+    const header="\\c[2]Affection: \\c[0]12|\\c[3]Progress: \\c[0]0";
+    const stage="Stage 1(2): "+floor;
+    const raw=["Mira",header,stage].concat(Array(55).fill("- "+colored+" (6 AM, 20 AP)"),["- "+routine,"- "+door]).join("\n");
+    assert.ok(raw.length>1800,"fixture must exceed normal dialogue limit");
+    let projected;
+    while(Date.now()<deadline){
+        projected=qa.questTxtProject(raw);
+        if(projected&&!projected.missing&&projected.text.indexOf("Encuentra")>=0)break;
+        await wait(25);
+    }
+    assert.ok(projected&&!projected.missing,"quest segments did not resolve");
+    const expected=["Mira","\\c[2]Afinidad: \\c[0]12|\\c[3]Progreso: \\c[0]0",
+        "Etapa 1(2): Suelo roto"].concat(Array(55).fill("- \\c[6]Encuentra la llave perdida.\\I[17]\\c[0] (6 AM, 20 AP)"),
+        ["- Rutina matutina","- Por favor, abre la ventana."]).join("\n");
+    assert.equal(projected.text,expected,"quest formatting, identity, counters and time must survive");
+    const c=f.context,win=new c.Window_Base();
+    win.initialize.apply(win,mz?[new c.Rectangle(0,0,900,600)]:[0,0,900,600]);
+    win.drawTextEx(raw,0,0);
+    assert.equal(win.lastTextEx,expected,"actual native draw must see the translated block");
+    f.$gameMessage._texts=raw.split("\n");
+    const before=JSON.stringify(f.$gameMessage._texts);
+    const message=new c.Window_Message();message.startMessage();
+    assert.equal(message.originalStarts,1,"native message must not restart");
+    assert.equal(JSON.stringify(f.$gameMessage._texts),before,"quest must not mutate message state");
+    assert.ok(message._textState.text.includes("Encuentra la llave perdida.")&&message._textState.text.includes("6 AM"));
+    assert.equal(qa.questTxtProject("Mira"),null,"unrecognized identity stays untouched");
+    for(const [p,v] of Object.entries(originalFiles))assert.equal(state.files[p],v,"source file changed");
+    console.log("IA_R41_QUEST_TXT_LONG_NATIVE_CONTROLS_READ_ONLY_PASS "+(mz?"MZ":"MV"));
+}
+
 async function testR4P2QuestMetadataAndVisibleRefresh(){
     const root=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[root]:true}};
@@ -2810,7 +2870,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R35-20261126"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R41-20261127"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -4070,6 +4130,8 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     await testR4EnglishFormatContextAndStaleCache();
     await testR4InkAndCsvReadOnlyPreload();
     await testR4P2NoStaleLateOverlayAndNoArtificialWait();
+    await testR41PlainQuestTxtAndLongNativeJournal(false);
+    await testR41PlainQuestTxtAndLongNativeJournal(true);
     await testR4P2QuestMetadataAndVisibleRefresh();
     await testR4P2PriorityCommonAndInkChoice();
     await testR4P3NativeSafetyAndNames();

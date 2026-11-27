@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R35-20261126"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R41-20261127"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -1856,6 +1856,7 @@ function projectSurface(win,text){
     if(typeof Window_Message!=="undefined"&&win instanceof Window_Message)
         return projectMessageSurface(win,text);
     var sol=solProjected(text);if(sol!==null)return sol;
+    var txt=questTxtProject(text,win,true);if(txt)return txt.text;
     if(questSurface(win,text))return questDraw(win,text);
     if(isAmbientSurface(win,text))return projectCaption(text);
     return text;
@@ -2353,6 +2354,7 @@ function nativeDisplayProjection(text,context,bitmap){
     if(tsvExcluded(text))return null;
     var named=csvNameReady(text);if(named!==null)return named;
     var known=csvKnownReady(text);if(known!==null)return known;
+    var txt=questTxtProject(text,bitmap&&bitmap._iaOwnerWindow,true);if(txt)return txt.text;
     var source=(solData?solSources.get(text):null)||displaySource(text,context||"surface");if(!source)return null;
     var ready=readyText(source,text);
     if(typeof ready==="string"&&ready!==text&&validTranslation(source,text,ready,true))return ready;
@@ -3104,14 +3106,16 @@ function hookNativeSurface(){
                 }
                 try{
                     if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
-                        if(!identity&&statusPresentationScope())args[0]=statusRenderValue(args[0]);
+                        var txt=!identity&&!statusPresentationScope()?questTxtProject(args[0],this,true):null;
+                        if(txt)args[0]=txt.text;
+                        else if(!identity&&statusPresentationScope())args[0]=statusRenderValue(args[0]);
                         else if(!identity&&questSurface(this,args[0]))args[0]=questDraw(this,args[0]);
                         else if(!identity&&isAmbientSurface(this,args[0]))args[0]=projectCaption(args[0]);
                         else {var bookLabel=!identity?questCachedLabel(args[0]):null;
                             if(bookLabel===null&&csvWindowEligible(this))bookLabel=csvProjectDisplay(args[0],csvWindowChoice(this),true);
                             if(bookLabel===null&&!identity)bookLabel=nativeDisplayProjection(args[0],csvWindowChoice(this)?"choice":"surface",this.contents);
                             args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
-                        if(!identity&&!statusPresentationScope()&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
+                        if(!txt&&!identity&&!statusPresentationScope()&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
                            languageFor(args[0])==="en"){
                             var cachedEnglish=readyText("en",args[0]);
@@ -4045,6 +4049,8 @@ function choiceDisplay(win,raw,requestMissing){
     return null;
 }
 function firstViewMissing(win,raw,choice){
+    var txt=!choice?questTxtProject(raw,win,true):null;
+    if(txt)return txt.missing;
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||remNativeSpanishText(raw)||csvExecutableSyntax(raw))return false;
     if(choice){hexChoiceRemember(raw,true);var hex=hexChoiceRead(raw,true);if(hex)return hex.waiting;}
     var remFallback=remNativeFallback(raw);
@@ -5750,6 +5756,13 @@ function hookMessages(){
                     }
                     source=null;
                 }
+                if(!scripted&&!entries.length&&!externalEntry&&!projection&&!(tsv.detected&&tsvRef(keys))){
+                    var txt=questTxtProject(text,this,true);
+                    if(txt){
+                        source=null;
+                        if(txt.text!==text)projection={message:$gameMessage,raw:rawText,text:txt.text,used:false,questTxt:true};
+                    }
+                }
                 if(source){
                     var old=readyText(source,text);
                     if(old===null&&tableStats.root)old=csvKnownReady(text);
@@ -5781,7 +5794,7 @@ function hookMessages(){
         finally{tsvProjection=previousProjection;bindNativeMessageBitmap(this);}
         if(projection&&projection.used){
             if(projection.iavra){if(projection.translated){state.shown++;iavra.shown++;}}
-            else{state.shown++;if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
+            else{state.shown++;if(projection.questTxt){}else if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
         }
         if(tsv.detected)try{tsvLateTicket(this);}catch(_){state.errors++;}
         if(this._iaLateTicket)try{snapshotMessage(this,this._iaLateTicket);}catch(_){hideLate(this);}
@@ -6620,6 +6633,229 @@ var questLabels={"Quest":"Misión","Quests":"Misiones","Objectives":"Objetivos",
     "Training Quests":"Misiones de entrenamiento","Wizard Quests":"Misiones de mago","Shaman Quests":"Misiones de chamán",
     "Weakness Quests":"Misiones de debilidades","From":"De","Location":"Ubicación","Level":"Nivel",
     "Castle":"Castillo","Forest":"Bosque","Village":"Aldea","Town":"Pueblo","Close":"Cerrar","Journal":"Diario"};
+// R41: read-only plain mission text sources. Unknown TXT grammars are
+// not executable data or a reason to rewrite a game's database. Only
+// verified display lines and a narrowly identified progress journal can
+// use this adapter; the original renderer and state stay with the game.
+var questTxtRoots=[],questTxtKnown=new Set(),questTxtUnits=new Map();
+var questTxtStats={detected:false,files:0,total:0,omitted:0,lines:0,fields:0,ignored:0,done:false,limited:false};
+var QUEST_TXT_FILE=2*1024*1024,QUEST_TXT_TOTAL=32*1024*1024,QUEST_TXT_ENTRIES=4096;
+var questTxtFixed={"Affection":"Afinidad","Progress":"Progreso","Stage":"Etapa","Optional":"Opcional",
+    "Title":"Título","Description":"Descripción","Objective":"Objetivo","Objectives":"Objetivos",
+    "Reward":"Recompensa","Rewards":"Recompensas","Hint":"Pista","Task":"Tarea","Tasks":"Tareas",
+    "Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miércoles","Thursday":"Jueves",
+    "Friday":"Viernes","Saturday":"Sábado","Sunday":"Domingo"};
+var questTxtControl=/(?:\\|\x1b)(?:[Cc]\[(?:\d{1,3}|#[0-9a-fA-F]{6,8})\]|(?:[IiVvNnPp]|[Ff][Ss]|[Pp][XxYy])\[\d{1,6}\]|[{}]|[Gg](?![A-Za-z]))|<\/?wordwrap>/gi;
+// Preserve numbers, times, points, counters and punctuation between fields.
+var questTxtToken=/(?:\\|\x1b)(?:[Cc]\[(?:\d{1,3}|#[0-9a-fA-F]{6,8})\]|(?:[IiVvNnPp]|[Ff][Ss]|[Pp][XxYy])\[\d{1,6}\]|[{}]|[Gg](?![A-Za-z]))|<\/?wordwrap>|\b\d{1,2}(?::\d{2})?[ \t]*(?:AM|PM)\b|\b\d+(?:[.,]\d+)?[ \t]+AP\b|\d+(?:[.,]\d+)?|\|/gi;
+function detectQuestTxt(){
+    var seen=new Set();
+    [content,game].forEach(function(base){
+        if(!base)return;
+        [path.join(base,"quest"),path.join(base,"data","quest")].forEach(function(dir){
+            if(!directoryUnder(base,dir))return;
+            try{
+                var resolved=fs.realpathSync(dir);
+                if(!seen.has(resolved)){seen.add(resolved);questTxtRoots.push({base:base,dir:dir});}
+            }catch(_){}
+        });
+    });
+    questTxtStats.detected=questTxtRoots.length>0;
+}
+function questTxtPlain(raw){return raw.replace(questTxtControl,"");}
+function questTxtKey(raw){
+    return questTxtPlain(raw).replace(/^[ \t]*(?:[-\u2022–—][ \t]+)?/,"").replace(/[ \t\u00a0]+/g," ").trim();
+}
+function questTxtSafeLine(raw){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||
+       remNativeSpanishText(raw)||externalLocalizationReference(raw)||tsvExcluded(raw)||
+       csvExecutableSyntax(raw))return false;
+    var plain=questTxtPlain(raw).trim();
+    if(!plain||/[\\\x1b<>{}=$@\x00-\x08\x0b\x0c\x0e-\x1f\uFFFD]/.test(plain)||
+       /^\s*(?:\/\/|#|;|\[|(?:if|else|return|function|var|let|const|class|while|for|import|export)\b)/i.test(plain)||
+       /^(?:id|key|switch|variable|condition|script|code|eval|formula|event|mapid|questid|icon|image|audio|filename|name|speaker|actor)\s*:/i.test(plain)||
+       /(?:https?:|file:|data:|[A-Za-z0-9_./-]+\.(?:txt|png|jpe?g|webp|ogg|mp3|wav|js|json|csv|tsv|exe|dll)\b)/i.test(plain))return false;
+    return true;
+}
+function questTxtSource(text){
+    if(!questTxtSafeLine(text)||r25ClearlySpanish(text)||actorNames[text])return null;
+    if(questTxtUnits.has(text))return questTxtUnits.get(text);
+    var source=languageFor(text)||displaySource(text,"inventory");
+    if(source)return source;
+    // Only typed quest prose, not arbitrary capitalized names or identifiers.
+    var words=text.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g)||[];
+    if(words.length<2||/[^\x20-\x7e\u2018\u2019\u201c\u201d\u2013\u2014\u2026]/.test(text))return null;
+    return /\b(?:quest|objective|reward|task|stage|progress|affection|optional|work|working|routine|morning|evening|night|sleep|sleeping|breakfast|lunch|dinner|cook|cooking|barn|farm|floor|broken|plank|bath|massage|laundry|room|shop|sell|sells|buy|check|visit|meet|deliver|collect|repair|complete|help|find|open|close|wait|reach|unlock|return|bring|finish|search|talk|speak|take|give|use|door|window|garden|bridge)\b/i.test(text)?"en":null;
+}
+function questTxtPlan(raw){
+    if(!questTxtSafeLine(raw))return null;
+    var parts=[],at=0,m;
+    // Use a fresh RegExp: languageFor and protectedParts may use their own
+    // stateful regexes while we are walking this line.
+    var re=new RegExp(questTxtToken.source,"gi");
+    function literal(s){if(s)parts.push({raw:s});}
+    function prose(value){
+        if(!value)return;
+        var head=(value.match(/^[ \t\u00a0\-–—\u2022(),:;]*/)||[""])[0];
+        var tail=(value.slice(head.length).match(/[ \t\u00a0(),:;]*$/)||[""])[0];
+        var body=value.slice(head.length,value.length-tail.length);
+        if(!body){literal(value);return;}
+        var fixed=Object.prototype.hasOwnProperty.call(questTxtFixed,body)?questTxtFixed[body]:null;
+        if(fixed===null&&Object.prototype.hasOwnProperty.call(questLabels,body))fixed=questLabels[body];
+        if(actorNames[body]||r25ClearlySpanish(body)){literal(value);return;}
+        // A known person-color span is an identity, never a translation unit.
+        var previous=parts.length?parts[parts.length-1].raw:"";
+        if(previous&&protectedPerson(previous,body)!==null){literal(value);return;}
+        var source=fixed===null?questTxtSource(body):null;
+        if(!source&&fixed===null){literal(value);return;}
+        parts.push({raw:value,head:head,tail:tail,body:body,source:source,fixed:fixed});
+    }
+    while((m=re.exec(raw))!==null){
+        prose(raw.slice(at,m.index));literal(m[0]);at=re.lastIndex;
+    }
+    prose(raw.slice(at));
+    return parts.some(function(p){return p.source||p.fixed!==undefined;})?parts:null;
+}
+function questTxtRemember(raw){
+    var parts=questTxtPlan(raw);
+    if(!parts)return false;
+    var key=questTxtKey(raw);
+    if(!questTxtKnown.has(key)){questTxtKnown.add(key);questTxtStats.lines++;}
+    parts.forEach(function(p){
+        if(!p.source||questTxtUnits.has(p.body))return;
+        questTxtUnits.set(p.body,p.source);
+        if(!questTexts.has(p.body)){questTexts.set(p.body,p.source);questStats.fields++;}
+        questTxtStats.fields++;
+        addPrefetch(p.body,false,p.source);
+    });
+    return true;
+}
+function questTxtFileText(raw,done){
+    if(typeof raw!=="string"||raw.length>QUEST_TXT_FILE||/[\x00\uFFFD]/.test(raw)){
+        done(false);return;
+    }
+    var lines=raw.replace(/^\uFEFF/,"").split(/\r\n|\r|\n/),at=0;
+    function slice(){
+        var started=Date.now(),worked=0;
+        while(at<lines.length&&worked++<128&&Date.now()-started<7){
+            var line=lines[at++].trim();
+            if(!line)continue;
+            // Explicit display fields may be stored without their metadata
+            // prefix at presentation time. Never interpret other key/value
+            // fields or evaluate a TXT as JavaScript.
+            var field=/^(?:Title|Description|Objectives?|Rewards?|Hint|Tasks?|Text)\s*:\s*(.+)$/i.exec(line);
+            if(field)line=field[1];
+            else if(/^[A-Za-z_][A-Za-z0-9_ -]{0,40}\s*:/.test(line)&&
+                !/^(?:Affection|Progress|Stage)\s*:/i.test(line)){
+                questTxtStats.ignored++;continue;
+            }
+            if(!questTxtRemember(line))questTxtStats.ignored++;
+        }
+        nextPrefetch();
+        if(at<lines.length)setTimeout(slice,0);else done(true);
+    }
+    slice();
+}
+function scanQuestTxt(done){
+    if(!questTxtStats.detected||questTxtStats.done){done();return;}
+    var dirs=questTxtRoots.map(function(r){return {base:r.base,dir:r.dir,depth:0};});
+    var files=[],seen=0,bytes=0,dirAt=0,fileAt=0;
+    function omit(limited){
+        questTxtStats.omitted++;scanStats.skipped++;
+        if(limited){questTxtStats.limited=true;scanStats.limited=true;}
+    }
+    function discover(){
+        if(dirAt>=dirs.length){readNext();return;}
+        var root=dirs[dirAt++];
+        if(!directoryUnder(root.base,root.dir)){omit(false);setTimeout(discover,0);return;}
+        fs.readdir(root.dir,function(err,names){
+            if(err||!Array.isArray(names)){omit(false);setTimeout(discover,0);return;}
+            names.sort().forEach(function(name){
+                if(seen>=QUEST_TXT_ENTRIES){
+                    if(!questTxtStats.limited)omit(true);
+                    return;
+                }
+                seen++;
+                if(typeof name!=="string"||!name||name==="."||name===".."||/[\\/:]/.test(name))return;
+                var file=path.join(root.dir,name),info;
+                try{info=fs.lstatSync(file);}catch(_){omit(false);return;}
+                if(info.isSymbolicLink()){omit(false);return;}
+                if(info.isDirectory()){
+                    if(root.depth<3&&directoryUnder(root.base,file))dirs.push({base:root.base,dir:file,depth:root.depth+1});
+                    else omit(true);
+                    return;
+                }
+                if(!/\.txt$/i.test(name))return;
+                questTxtStats.total++;scanStats.totalFiles++;
+                if(!regularUnder(root.dir,file,QUEST_TXT_FILE)||bytes+info.size>QUEST_TXT_TOTAL){omit(true);return;}
+                bytes+=info.size;files.push({base:root.dir,file:file});
+            });
+            setTimeout(discover,0);
+        });
+    }
+    function readNext(){
+        if(fileAt>=files.length){questTxtStats.done=true;done();return;}
+        var task=files[fileAt++];
+        if(!regularUnder(task.base,task.file,QUEST_TXT_FILE)){omit(false);setTimeout(readNext,0);return;}
+        fs.readFile(task.file,"utf8",function(err,raw){
+            if(err){omit(false);setTimeout(readNext,0);return;}
+            questTxtFileText(raw,function(ok){
+                if(ok){questTxtStats.files++;scanStats.files++;}else omit(false);
+                setTimeout(readNext,0);
+            });
+        });
+    }
+    discover();
+}
+function questTxtProject(raw,win,request){
+    if(!questTxtStats.detected||cte.enabled||inputFormActive()||identityDrawDepth||
+       win&&(win._iaNameSurface||win._iaOwnSurface)||typeof raw!=="string"||!raw.trim()||
+       raw.length>32768||actorNames[raw]||remNativeSpanishText(raw)||
+       externalLocalizationReference(raw)||tsvRef(raw)||csvExecutableSyntax(raw))return null;
+    var pieces=raw.split(/(\r\n|\r|\n|<br\s*\/?>)/i);
+    if(pieces.length>1023)return null;
+    var plain=questTxtPlain(raw);
+    // A runtime-generated progress journal may contain changing counters,
+    // so it cannot be identified by an exact whole-message cache key.
+    var structured=/\bAffection\s*:/i.test(plain)&&/\bProgress\s*:/i.test(plain)&&
+        /\bStage\s+\d/i.test(plain)&&/(?:^|\n|<br\s*\/?>)[ \t]*[-\u2022–—][ \t]+/i.test(plain);
+    var scoped=win&&isQuestWindow(win),recognized=false,missing=false;
+    for(var i=0;i<pieces.length;i+=2){
+        var line=pieces[i],key=questTxtKey(line),known=questTxtKnown.has(key)||questTxtUnits.has(key);
+        var header=/^(?:Affection|Progress)\s*:|^Stage\s+\d|^\(Optional\)$/i.test(key);
+        var bullet=/^[ \t]*[-\u2022–—][ \t]+/.test(questTxtPlain(line));
+        if(!known&&!(structured&&(header||bullet))&&!(scoped&&header))continue;
+        var parts=questTxtPlan(line);
+        if(!parts)continue;
+        recognized=true;
+        if(request)questTxtRemember(line);
+        var lineMissing=false,rendered=parts.map(function(p){
+            if(p.fixed!==undefined&&p.fixed!==null)return p.head+p.fixed+p.tail;
+            if(!p.source)return p.raw;
+            var value=readyText(p.source,p.body);
+            if(typeof value==="string"&&value!==p.body&&validTranslation(p.source,p.body,value,true))
+                return p.head+value+p.tail;
+            var permanent=rejectedKeys.get(p.source+"\u0000"+p.body)===Infinity;
+            if(!permanent){
+                missing=true;lineMissing=true;
+                if(request){
+                    if(scoped&&typeof win.refresh==="function")queueQuest(win,p.source,p.body);
+                    else firstViewRequest(p.source,p.body);
+                }
+            }
+            return p.raw;
+        }).join("");
+        // A pending line keeps its original layout until its own pieces are
+        // ready. Other completed lines are never blocked by this one.
+        if(!lineMissing)pieces[i]=rendered;
+    }
+    return recognized?{text:pieces.join(""),missing:missing}:null;
+}
+function questTxtLabel(){
+    return "TXT misiones: "+questTxtStats.files+"/"+questTxtStats.total+
+        " · Textos: "+questTxtStats.fields+" · Om.: "+questTxtStats.omitted;
+}
+
 function questSource(text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text])return null;
     return questTexts.get(text)||languageFor(text)||null;
@@ -7487,6 +7723,9 @@ function scanLocaleCsv(raw,done){
     slice();
 }
 function scanExtraSources(dataDir,done){
+    scanQuestTxt(function(){scanOtherExtraSources(dataDir,done);});
+}
+function scanOtherExtraSources(dataDir,done){
     var tasks=[],inkDir=path.join(dataDir,"ink"),localeDir=path.join(dataDir,"localization");
     var hudDir=path.join(dataDir,"plugin"),hudFile=path.join(hudDir,"UltraHUD.json");
     if(ultraHudEnabled()&&directoryUnder(dataDir,hudDir)&&regularUnder(hudDir,hudFile,2*1024*1024))
@@ -8311,7 +8550,7 @@ function cteHudRefresh(){
         "Errores: "+state.errors+" · Avisos CTE: "+cte.errors,
         "DTextPicture: "+(pluginEnabled(/^DTextPicture$/i)?"activo":"no detectado")+" · Render: "+r24DTextStats.pictures+" · Traducidos: "+r24DTextStats.redraws,
         "Saltos nativos: "+r25FlowStats.breaks+" · MV: "+r25FlowStats.mv+" · MZ: "+r25FlowStats.mz,
-        "QA caché: "+diskStats.rejected+" · F10: cerrar"
+        questTxtStats.detected?questTxtLabel():"QA caché: "+diskStats.rejected+" · F10: cerrar"
     ].join("\n");
 }
 function cteHudToggle(){
@@ -8404,6 +8643,7 @@ function setupHud(){
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
             (scriptProfile||enabledTextPicture())?"Textos especiales: "+scriptStats.shown+" · Inventario: "+authoredDisplay.size:
+            questTxtStats.detected?questTxtLabel():
             "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · C:"+String(ambientStats.factory||0)
         ];
         for(var i=0;i<lines.length;i++){
@@ -8445,7 +8685,7 @@ function setupHud(){
 try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";try{hookCteHud();}catch(_){state.errors++;}setupHud();
-    state.phase="RUTA";initPaths();detectRootCsv();detectTsv();detectIavraLocalization();detectRemNative();detectCte();
+    state.phase="RUTA";initPaths();detectQuestTxt();detectRootCsv();detectTsv();detectIavraLocalization();detectRemNative();detectCte();
     try{hookCteHud();}catch(_){state.errors++;}
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
@@ -8489,6 +8729,8 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         limited:function(){return scanStats.limited;},
         soldata:function(){return {detected:solData,total:solStats.total,read:solStats.read,unavailable:solStats.unavailable,excluded:solStats.excluded,live:solStats.live,done:solStats.done};},
         solCollectLive:solCollectLive,
+        questTxt:function(){return {detected:questTxtStats.detected,files:questTxtStats.files,total:questTxtStats.total,omitted:questTxtStats.omitted,lines:questTxtStats.lines,fields:questTxtStats.fields,ignored:questTxtStats.ignored,done:questTxtStats.done};},
+        questTxtProject:function(raw){return questTxtProject(raw,null,true);},
         r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
         r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise,
         displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,
