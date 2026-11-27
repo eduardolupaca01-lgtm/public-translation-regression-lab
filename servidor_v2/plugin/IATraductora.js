@@ -9,16 +9,28 @@
 "use strict";
 var BRAND="IA Traductora";
 var BUILD_ID="RPG-MVMZ-R42-20261127"; // also checked against the installed package SHA
-if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
+// Opt-in, test-only boot checkpoints. No paths, tokens, game text, or
+// arbitrary exception messages. Ordinary game sessions never see these.
+var iaTestBoot=typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true?
+    {checkpoint:"ENTRY",phase:"INICIO",hud:"NOT_CREATED",error:"NONE",hudError:"NONE"}:null;
+if(iaTestBoot)window.__IA_TRADUCTORA_TEST_BOOT__=iaTestBoot;
+function iaTestErrorName(error){
+    var name=String(error&&error.name||"");
+    return /^(?:Error|TypeError|ReferenceError|SyntaxError|RangeError)$/.test(name)?name.toUpperCase():"ERROR";
+}
+function iaTestCheckpoint(code){if(iaTestBoot)iaTestBoot.checkpoint=code;}
+if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()){iaTestCheckpoint("NOT_NWJS");return;}
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
-if(ENGINE_ID!=="MV"&&!isMZ)return;
+if(ENGINE_ID!=="MV"&&!isMZ){iaTestCheckpoint("WRONG_ENGINE");return;}
 // A missing Node module must never prevent the game itself from booting.
 var fs,path,crypto,http,spawn;
+iaTestCheckpoint("NODE_MODULES");
 try{
     fs=require("fs");path=require("path");crypto=require("crypto");
     http=require("http");spawn=require("child_process").spawn;
-}catch(_){return;}
-if(typeof Map!=="function"||typeof Promise!=="function")return;
+}catch(error){if(iaTestBoot)iaTestBoot.error=iaTestErrorName(error);iaTestCheckpoint("NODE_MODULES_FAILED");return;}
+if(typeof Map!=="function"||typeof Promise!=="function"){iaTestCheckpoint("BUILTINS_MISSING");return;}
+iaTestCheckpoint("MODULES_READY");
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
 var porCompressed=false,halvaMode=false,solData=false;
 var solStats={total:0,read:0,unavailable:0,excluded:0,live:0,done:false};
@@ -8849,7 +8861,10 @@ function hookCteHud(){
     cteHud.keyHook=true;
 }
 function setupHud(){
-    if(typeof Window_Base==="undefined"||typeof Scene_Map==="undefined")return;
+    if(typeof Window_Base==="undefined"||typeof Scene_Map==="undefined"){
+        if(iaTestBoot)iaTestBoot.hud="CLASSES_MISSING";
+        return;
+    }
     function IAMini(){this.initialize.apply(this,arguments);}
     IAMini.prototype=Object.create(Window_Base.prototype);
     IAMini.prototype.constructor=IAMini;
@@ -8915,9 +8930,13 @@ function setupHud(){
         create.apply(this,arguments);
         // Never prevent map startup when a custom UI plugin rejects our HUD.
         try{
+            if(iaTestBoot)iaTestBoot.hud="CREATING_MINI";
             this._iaMini=new IAMini();this.addWindow(this._iaMini);
+            if(iaTestBoot)iaTestBoot.hud="CREATING_PANEL";
             this._iaPanel=new IAPanel();this.addWindow(this._iaPanel);
-        }catch(_){
+            if(iaTestBoot)iaTestBoot.hud="READY";
+        }catch(error){
+            if(iaTestBoot)iaTestBoot.hudError=iaTestErrorName(error);
             state.errors++;state.status="IA_PANEL_OPCIONAL_INCOMPATIBLE";
             this._iaMini=null;this._iaPanel=null;
         }
@@ -8939,7 +8958,9 @@ function setupHud(){
     };
     // Fallback for non-DOM runtimes only; do not overwrite a game binding.
     if(!Input.keyMapper[121])Input.keyMapper[121]="ia-traductora";
+    if(iaTestBoot)iaTestBoot.hud="HOOK_INSTALLED";
 }
+iaTestCheckpoint("STARTUP");
 try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";try{hookCteHud();}catch(_){state.errors++;}setupHud();
@@ -8973,11 +8994,15 @@ try{
         try{cteHudRefresh();}catch(_){state.errors++;}
     },750);
     state.phase="ACTIVO";
-}catch(_){
+    iaTestCheckpoint("COMPLETE");
+}catch(error){
     // Show a safe *stage* code instead of a generic exception or private path.
+    if(iaTestBoot)iaTestBoot.error=iaTestErrorName(error);
+    iaTestCheckpoint("STARTUP_FAILED");
     state.status="IA_INICIO_"+state.phase+"_FALLIDO";
     state.errors++;
 }
+if(iaTestBoot)iaTestBoot.phase=state.phase;
 if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
     // Opt-in test-only probes; ordinary game sessions never receive this object.
     window.__IA_TRADUCTORA_TEST__={

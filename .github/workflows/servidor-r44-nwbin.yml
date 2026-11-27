@@ -50,4 +50,7 @@ jobs:
       - name: Compile two authored NWBin files and run native loader
         working-directory: servidor_v2
         run: go test ./cmd/servidor -run '^TestR44NWBinNativeLoader$' -count=1 -v
+      - name: Actual translator JS boot, native HUD and F10 before loading models
+        working-directory: servidor_v2
+        run: go test ./cmd/servidor -run '^TestR44NWBinNativeUI$' -count=1 -v -timeout=8m
       # No game files, downloaded SDK, model payload or candidate EXE published.
