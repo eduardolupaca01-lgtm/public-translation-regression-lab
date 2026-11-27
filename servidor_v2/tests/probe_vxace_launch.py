@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-BUILD = "VXACE-RGSS3-20261126-D"
+BUILD = "VXACE-RGSS3-20261126-E"
 
 def digest(file):
     return hashlib.sha256(file.read_bytes()).hexdigest()

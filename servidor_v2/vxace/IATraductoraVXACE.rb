@@ -3,7 +3,7 @@
 # Servidor / Ruby 1.9.2 core-only adapter. No socket, JSON, gems or overlay.
 # The verified native helper launches the same game-local OPUS worker.
 module IATraductoraVXACE
-  PLUGIN_BUILD = 'VXACE-RGSS3-20261126-D'
+  PLUGIN_BUILD = 'VXACE-RGSS3-20261126-E'
   SIDECAR = File.join('IA Traductora', '.local', 'Rpg')
   SESSION = 'IA-VXACE-SESSION-1'
   REQUEST = 'IA-VXACE-REQUEST-1'
@@ -97,6 +97,9 @@ module IATraductoraVXACE
     def start
       return if @started
       @started = true
+      # A session already bound to this process takes precedence. Starting
+      # another helper here can fail unnecessarily (including a live worker).
+      return if session
       @status = 'Iniciando OPUS'
       helper = local('engine', 'vxace-helper.exe')
       raise 'IA_VXACE_HELPER' unless safe_file?(helper, 128 * 1024 * 1024)
@@ -125,6 +128,7 @@ module IATraductoraVXACE
     end
 
     def launch_failed?
+      return false if session
       return true if @launch_error
       if @launch_process && !@launch_process.alive?
         return true unless @launch_process.value.success?
@@ -259,23 +263,37 @@ module IATraductoraVXACE
       false
     end
 
+    def finish_unavailable(p)
+      @failures += p[:queue].inject(0) { |n,keys| n + keys.length }
+      @failures += p[:active][3].length if p[:active]
+      p[:queue].clear
+      p[:active] = nil
+      @status = 'Original conservado: ' + launch_diagnostic
+      true
+    end
+
     def advance(p)
       return true if p[:queue].empty? && !p[:active]
-      if launch_failed? || Time.now.to_f >= p[:deadline]
-        @failures += p[:queue].inject(0) { |n,keys| n + keys.length }
-        @failures += p[:active][3].length if p[:active]
-        @status = 'Original conservado: ' + launch_diagnostic
-        return true
-      end
+      return finish_unavailable(p) if Time.now.to_f >= p[:deadline]
       return false if Time.now.to_f < p[:next_poll]
       p[:next_poll] = Time.now.to_f + 0.04
+
+      # Consume an already published answer before consulting launcher errors.
+      # A failed launcher is not evidence that an active session has failed.
       if p[:active]
-        return false unless receive_batch(p)
+        unless receive_batch(p)
+          return finish_unavailable(p) if launch_failed?
+          return false
+        end
       end
       return true if p[:queue].empty?
-      start
       descriptor = session
-      return false unless descriptor
+      unless descriptor
+        start
+        descriptor = session
+        return finish_unavailable(p) if !descriptor && launch_failed?
+        return false unless descriptor
+      end
       keys = p[:queue].first
       p[:queue].shift if send_batch(p, keys, descriptor)
       false

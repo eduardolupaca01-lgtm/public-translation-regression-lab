@@ -37,10 +37,12 @@ jobs:
       - name: Exigir regresiones VX Ace y compilar helper antes de cargar pesos
         shell: pwsh
         run: |
-          python -m unittest discover -s servidor_v2/tests -p 'test_*.py'
-          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_WORKER_REGRESSION" }
+          ruby -c servidor_v2/vxace/IATraductoraVXACE.rb
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_RUBY_SYNTAX_FAIL" }
           ruby servidor_v2/tests/test_vxace_runtime.rb --mock
           if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_NATIVE_CONTRACT_FAIL" }
+          python -m unittest discover -s servidor_v2/tests -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_WORKER_REGRESSION" }
           cargo test --manifest-path servidor_v2/vxace-helper/Cargo.toml
           if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_RUST_TEST_FAIL" }
           cargo build --release --manifest-path servidor_v2/vxace-helper/Cargo.toml --bins --examples

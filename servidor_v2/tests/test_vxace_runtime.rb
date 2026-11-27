@@ -125,11 +125,36 @@ if ARGV[0]=='--mock'
       FileUtils.mkdir_p(dir)
       File.binwrite(File.join(SIDECAR,'vxace-session.txt'),"IA-VXACE-SESSION-1\n#{MOCK_TOKEN}\n1234\n#{Process.pid}\n")
       load PLUGIN
+      # No helper exists in this fixture: a valid session must not spawn it.
+      assert(IATraductoraVXACE.session,'valid session was not recognized')
+      assert(!IATraductoraVXACE.launch_failed?,'live session was treated as failed')
+      assert(IATraductoraVXACE.instance_variable_get(:@launch_error).nil?,'duplicate launch attempted')
+      # Reproduce the previous regression with a real session but a stale
+      # startup failure. This must not suppress the pending Japanese response.
+      IATraductoraVXACE.instance_variable_set(:@launch_error,'IA_VXACE_HELPER_NO_VERIFICADO')
+      assert(!IATraductoraVXACE.launch_failed?,'startup error overrode a valid session')
       checks(true)
-      # Expired or foreign session must not substitute any text.
+      puts 'IA_VXACE_ACTIVE_SESSION_OVERRIDES_STALE_LAUNCH_ERROR_PASS'
+
+      # An expired plan must preserve the original and count failure once.
       p=IATraductoraVXACE.plan(['Unseen source.'])
       p[:deadline]=Time.now.to_f-1
       assert(IATraductoraVXACE.advance(p) && IATraductoraVXACE.result(p)==['Unseen source.'],'timeout fallback changed original')
+      failures=IATraductoraVXACE.failures
+      assert(IATraductoraVXACE.advance(p) && IATraductoraVXACE.failures==failures,'timeout counted twice')
+
+      # A different parent process is not a valid session; do not bypass the
+      # actual startup error, write requests or change the displayed original.
+      descriptor=File.join(SIDECAR,'vxace-session.txt')
+      File.binwrite(descriptor,"IA-VXACE-SESSION-1\n#{MOCK_TOKEN}\n1234\n#{Process.pid+1}\n")
+      assert(!IATraductoraVXACE.session,'foreign session accepted')
+      assert(IATraductoraVXACE.launch_failed?,'missing valid session hid launch failure')
+      p=IATraductoraVXACE.plan(['Open another door.'])
+      count=IATraductoraVXACE.requests
+      assert(IATraductoraVXACE.advance(p),'known launch failure was not handled')
+      assert(IATraductoraVXACE.result(p)==['Open another door.'],'foreign session changed original')
+      assert(IATraductoraVXACE.requests==count,'request published to foreign session')
+      puts 'IA_VXACE_FOREIGN_SESSION_FAILS_CLOSED_PASS'
     end
   end
 elsif ARGV[0]=='--real'
