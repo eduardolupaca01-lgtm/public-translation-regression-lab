@@ -11,7 +11,7 @@ module TenshixgameVXACELive
   PLUGIN_NAME = 'IA Traductora RGSS3'
   SIDECAR = File.join('IA Traductora', '.local', 'Rpg')
   WORKER_RELATIVE = File.join(SIDECAR, 'engine', 'IATraductora.exe')
-  OWNER_RELATIVE = File.join(SIDECAR, 'owner-vxace-v1.json')
+  OWNER_RELATIVE = File.join('IA Traductora', 'owner-v1.json')
   BRIDGE_RELATIVE = File.join(SIDECAR, 'bridge.json')
   DIAGNOSTIC_RELATIVE = File.join(SIDECAR, 'diagnostics', 'vxace-live.json')
   TOKEN_PATTERN = /\\(?:N<[^>\r\n]*>|[A-Za-z]+(?:\[[^\]\r\n]*\])?|.)/
@@ -72,9 +72,17 @@ module TenshixgameVXACELive
       path = sidecar_path(OWNER_RELATIVE)
       raise 'VX Ace owner manifest missing' unless ordinary_file?(path, 4096)
       data = JSON.parse(File.open(path, 'rb') { |f| f.read })
-      raise 'VX Ace owner schema invalid' unless data['schema'] == 'ia-traductora-vxace-owner-v1'
+      raise 'VX Ace owner schema invalid' unless data['schema'] == 'ia-traductora-owner-v1'
       raise 'VX Ace owner product invalid' unless data['product'] == 'TENSHIXGAME-SERVIDOR'
-      raise 'VX Ace owner build invalid' unless data['plugin_build'] == PLUGIN_BUILD
+      raise 'VX Ace owner build invalid' unless data['vxace_plugin_build'] == PLUGIN_BUILD
+      worker_hash = Digest::SHA256.file(@worker).hexdigest
+      raise 'V95 worker hash mismatch' unless worker_hash == data['worker_sha256']
+      helper_path = sidecar_path(File.join(SIDECAR, 'engine', 'vxace-helper.exe'))
+      helper_hash = Digest::SHA256.file(helper_path).hexdigest
+      raise 'VX Ace helper hash mismatch' unless helper_hash == data['vxace_helper_sha256']
+      plugin_path = sidecar_path(File.join(SIDECAR, 'engine', 'vxace', 'TenshixgameVXACELive.rb'))
+      plugin_hash = Digest::SHA256.file(plugin_path).hexdigest
+      raise 'VX Ace plugin hash mismatch' unless plugin_hash == data['vxace_plugin_sha256']
       data
     end
 
