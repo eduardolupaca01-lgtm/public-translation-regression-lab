@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R35-20261126"
- packageBuildID="RPG-MVMZ-VXACE-R36-20261126"
+ packageBuildID="RPG-MVMZ-VXACE-R37-20261126"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -422,7 +422,12 @@ func main(){
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
  recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV/MZ (no necesita modelos)")
  inspect:=flag.Bool("inspect",false,"Diagnóstico RPG de solo lectura, sin modelos ni ejecución del juego")
+ copyVXAce:=flag.Bool("copy-vxace",false,"Crear una copia independiente VX Ace empaquetada, sin reemplazar el original")
+ copyParent:=flag.String("copy-parent","","Carpeta existente donde crear una nueva copia VX Ace (opcional)")
  flag.Parse()
+ if (*copyVXAce&&(*inspect||*recoverGame||*exe==""))||(!*copyVXAce&&*copyParent!=""){
+  fmt.Fprintln(os.Stderr,"IA_VXACE_COPIA_ARGUMENTOS_INVALIDOS");os.Exit(1)
+ }
  if *inspect {
   if *exe==""||*recoverGame{fmt.Fprintln(os.Stderr,"IA_INSPECCION_GAME_EXE_REQUERIDO");os.Exit(1)}
   kind,e:=detectInstallTarget(*exe)
@@ -441,6 +446,13 @@ func main(){
  p,err:=readPackage(source)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  defer p.Close()
+ if *copyVXAce{
+  final,identity,e:=vxaceCloneInstall(*exe,*copyParent,p)
+  if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+  fmt.Println("IA_VXACE_COPIA_LISTA|"+final)
+  fmt.Println("[IA_VERSION_INSTALADA] "+identity)
+  return
+ }
  if err=Install(*exe,p);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  identity,err:=installedPackageIdentity(*exe,p)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}

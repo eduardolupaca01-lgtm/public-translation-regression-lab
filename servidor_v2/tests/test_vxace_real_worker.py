@@ -153,6 +153,54 @@ def run_ruby_session(ruby,game):
             kernel.CloseHandle(handle)
         observed.unlink(missing_ok=True)
 
+def clone_locked_source(a,ruby,temp):
+    game=Path(temp)/"source-with-blocked-archive"
+    run([a.fixture,"create",game,"packed"])
+    target=game/"Game.rgss3a"
+    original=hash_file(target)
+    save=game/"Save01.rvdata2"
+    save_sha=hash_file(save)
+    exe=game/"Game.exe"
+    # A real open Win32 handle deliberately omits FILE_SHARE_DELETE.
+    kernel=ctypes.WinDLL("kernel32",use_last_error=True)
+    kernel.CreateFileW.argtypes=[ctypes.c_wchar_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p]
+    kernel.CreateFileW.restype=ctypes.c_void_p
+    kernel.CloseHandle.argtypes=[ctypes.c_void_p]
+    kernel.CloseHandle.restype=ctypes.c_int
+    handle=kernel.CreateFileW(str(target.resolve()),0x80000000,3,None,3,0x80,None)
+    assert handle not in (None,ctypes.c_void_p(-1).value),"IA_VXACE_QA_LOCK_FAILED"
+    try:
+        failed=subprocess.run([str(a.servidor),"--game",str(exe)],capture_output=True,text=True,encoding="utf8",errors="replace",timeout=240)
+        assert failed.returncode!=0 and any(code in failed.stderr for code in ("IA_VXACE_REPLACE_SHARING_WIN32_32","IA_VXACE_REPLACE_ACCESS_DENIED_WIN32_5","IA_VXACE_REPLACE_LOCKED_WIN32_33")),"IA_VXACE_QA_EXPECTED_BLOCK_NOT_REPRODUCED"
+        receipt=game/"IA Traductora"/"install"/"vxace-receipt.json"
+        before=receipt.read_bytes()
+        assert json.loads(before)["status"]=="PREPARED"
+        assert hash_file(target)==original
+        result=subprocess.run([str(a.servidor),"--copy-vxace","--game",str(exe)],capture_output=True,text=True,encoding="utf8",errors="replace",check=True,timeout=240)
+        lines=[line.split("|",1)[1] for line in result.stdout.splitlines() if line.startswith("IA_VXACE_COPIA_LISTA|")]
+        assert len(lines)==1,"IA_VXACE_QA_CLONE_RESULT_MISSING"
+        new_exe=Path(lines[0])
+        copy=new_exe.parent
+        assert copy.parent.resolve()==game.parent.resolve() and copy!=game
+        assert not (copy/"IA_COPIA_INCOMPLETA.txt").exists()
+        assert hash_file(copy/"Game.rgss3a")!=original
+        assert hash_file(copy/"Save01.rvdata2")==save_sha
+        assert hash_file(target)==original and receipt.read_bytes()==before and hash_file(save)==save_sha
+        plugin=copy/"IA Traductora"/".local"/"Rpg"/"engine"/"vxace"/"IATraductoraVXACE.rb"
+        run([a.fixture,"verify",copy,plugin])
+        run_ruby_session(ruby,copy)
+        cache=copy/"IA Traductora"/".local"/"Rpg"/"cache"/"translation-memory-v2.sqlite3"
+        assert len(cache_rows(cache))>=4
+        run([a.servidor,"--recover","--game",new_exe])
+        assert hash_file(copy/"Game.rgss3a")==original
+        assert hash_file(copy/"Save01.rvdata2")==save_sha
+        assert hash_file(target)==original and receipt.read_bytes()==before
+        shutil.rmtree(copy)
+        print("IA_VXACE_LOCKED_SOURCE_CREATE_ONLY_COPY_REAL_OPUS_RECOVERY_PASS",flush=True)
+    finally:
+        kernel.CloseHandle(handle)
+    shutil.rmtree(game)
+
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--servidor",type=Path,required=True)
@@ -160,6 +208,7 @@ def main():
     a=p.parse_args()
     ruby=Path(__file__).with_name("test_vxace_runtime.rb").resolve()
     with tempfile.TemporaryDirectory(prefix="IA VX Ace 日本語 ") as temp:
+        clone_locked_source(a,ruby,temp)
         for mode in ("loose","packed","packed-large"):
             game=Path(temp)/mode
             large=mode=="packed-large"

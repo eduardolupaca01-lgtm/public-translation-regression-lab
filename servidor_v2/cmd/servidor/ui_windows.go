@@ -39,6 +39,7 @@ const(
     iaCmdClose=102
     iaCmdCopy=103
     iaCmdRecover=104
+    iaCmdClone=105
 )
 var(
     iaUser32=syscall.NewLazyDLL("user32.dll")
@@ -118,6 +119,9 @@ type iaUI struct{
     closeBtn uintptr
     copyBtn uintptr
     recoverBtn uintptr
+    cloneBtn uintptr
+    cloneAllowed bool
+    resultGame string
     titleLabel uintptr
     sectionLabel uintptr
     statusLabel uintptr
@@ -181,7 +185,13 @@ func iaFriendlyInstall(code string)string{
     case "IA_VXACE_REPLACE_SHARING_WIN32_32","IA_VXACE_REPLACE_LOCKED_WIN32_33":
         return "El archivo VX Ace está abierto o bloqueado. Cierra el juego y sus lanzadores. Se conserva el respaldo; no borres los archivos."
     case "IA_VXACE_REPLACE_ACCESS_DENIED_WIN32_5":
-        return "Windows negó el reemplazo de VX Ace. Cierra el juego y comprueba que la copia sea escribible. Se conserva el respaldo."
+        return "Windows negó el reemplazo. Cierra el juego o utiliza Crear copia VX Ace. Se conserva el respaldo."
+    case "IA_VXACE_COPIA_SIDECAR_NO_VERIFICADO","IA_VXACE_COPIA_RECIBO_NO_VERIFICADO","IA_VXACE_COPIA_RESPALDO_NO_VERIFICADO":
+        return "No se pudo verificar la instalación anterior. Usa una copia original cerrada; no borres respaldos."
+    case "IA_VXACE_COPIA_DESTINO_NO_CREADO","IA_VXACE_COPIA_DESTINO_INVALIDO":
+        return "No se puede crear otra carpeta junto al juego. Usa una carpeta escribible con espacio libre."
+    case "IA_VXACE_COPIA_ORIGEN_CAMBIADO":
+        return "El origen cambió durante la copia. Cierra el juego. No ejecutes la copia incompleta."
     case "IA_VXACE_RECURSO_CAMBIO_DURANTE_REEMPLAZO","IA_VXACE_REPLACE_TEMP_SHA_INVALIDO":
         return "El archivo cambió o no coincide con su SHA. Se detuvo el reemplazo; conserva el respaldo."
     case "IA_VXACE_REPLACE_ATTR_RESTORE_FAILED":
@@ -249,6 +259,7 @@ func iaStartInstall(){
     ui.busy=true
     iaEnableWindow.Call(ui.install,0)
     iaEnableWindow.Call(ui.browse,0)
+    iaEnableWindow.Call(ui.cloneBtn,0)
     iaSet(ui.status,"Preparando IA Traductora...")
     iaLog("[IA_INICIANDO] Verificando el paquete propio y los modelos.")
     game:=ui.gameFile
@@ -284,6 +295,7 @@ func iaStartRecover(){
     iaEnableWindow.Call(ui.install,0)
     iaEnableWindow.Call(ui.browse,0)
     iaEnableWindow.Call(ui.recoverBtn,0)
+    iaEnableWindow.Call(ui.cloneBtn,0)
     iaSet(ui.status,"Comprobando respaldo original...")
     iaLog("[IA_RECUPERACION_INICIADA] Solo el registro original de esta copia RPG.")
     game:=ui.gameFile
@@ -299,6 +311,38 @@ func iaStartRecover(){
         }
     }()
 }
+func iaStartClone(){
+    ui:=&iaCurrentUI
+    if ui.busy||!ui.cloneAllowed||ui.gameFile==""{return}
+    yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
+        uintptr(unsafe.Pointer(iaUTF16("Cierra el juego y sus lanzadores. Se creará una carpeta Juego-IA-VXACE nueva junto al juego, con copia de recursos y partidas. No se cambiará el origen. No abras la copia si la instalación no termina. ¿Continuar?"))),
+        uintptr(unsafe.Pointer(iaUTF16("Crear copia VX Ace"))),0x24|0x100)
+    if yes!=6{return}
+    ui.busy=true
+    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.browse,0)
+    iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
+    iaSet(ui.status,"Creando copia independiente. No abras el juego.")
+    iaLog("[IA_VXACE_COPIA_INICIADA] El original no se reemplazará.")
+    game:=ui.gameFile
+    go func(){
+        info:="IA_ERROR_NO_CLASIFICADO";final:=""
+        defer func(){
+            if recover()!=nil{info="IA_INSTALACION_PANICO_RECUPERADO";final=""}
+            ui.mu.Lock();ui.result=info;ui.resultGame=final;ui.mu.Unlock()
+            iaPostMessage.Call(ui.hwnd,iaWMAppDone,0,0)
+        }()
+        executable,e:=os.Executable()
+        if e!=nil{info="IA_NO_SE_PUEDE_LEER_SERVIDOR";return}
+        pkg,e:=readPackage(executable)
+        if e!=nil{info=e.Error();return}
+        defer pkg.Close()
+        path,identity,e:=vxaceCloneInstall(game,"",pkg)
+        if e!=nil{info=e.Error();return}
+        final=path
+        info="IA_INSTALACION_COMPLETADA_VERIFICADA|"+identity
+    }()
+}
+
 func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
     defer func(){
         if recover()!=nil{
@@ -334,8 +378,8 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             }else if file!=""{
                 if kind,e:=detectInstallTarget(file);e!=nil{
                     // An invalid new selection must never leave a different game armed for installation.
-                    ui.gameFile="";iaSet(ui.input,"")
-                    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
+                    ui.gameFile="";iaSet(ui.input,"");ui.cloneAllowed=false
+                    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
                     code:=iaSafeInstallCode(e.Error())
                     if code==cookToolPackedCode||code==cookToolUnsafeCode{
                         iaLog("[IA_RPG_HALVA_DETECTADO] "+e.Error())
@@ -346,6 +390,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                     }
                 }else{
                     ui.gameFile=file;iaSet(ui.input,file)
+                    fp,matched,ve:=detectVXAce(file)
+                    ui.cloneAllowed=matched&&ve==nil&&fp.Packed
+                    if ui.cloneAllowed{iaEnableWindow.Call(ui.cloneBtn,1)}else{iaEnableWindow.Call(ui.cloneBtn,0)}
                     iaEnableWindow.Call(ui.install,1);iaEnableWindow.Call(ui.recoverBtn,1)
                     iaSet(ui.status,"Juego "+kind+" seleccionado. Listo para instalar.")
                     iaLog("[IA_EXE_SELECCIONADO] Motor "+kind+" verificado.")
@@ -361,6 +408,8 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             if lparam==ui.install {iaStartInstall()}
         case iaCmdRecover:
             if lparam==ui.recoverBtn {iaStartRecover()}
+        case iaCmdClone:
+            if lparam==ui.cloneBtn {iaStartClone()}
         case iaCmdCopy:
             if lparam==ui.copyBtn{
                 if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{
@@ -375,10 +424,11 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         }
         return 0
     case iaWMAppDone:
-        ui.mu.Lock();result:=ui.result;ui.mu.Unlock()
+        ui.mu.Lock();result:=ui.result;newGame:=ui.resultGame;ui.resultGame="";ui.mu.Unlock()
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
         iaEnableWindow.Call(ui.recoverBtn,1)
+        if ui.cloneAllowed{iaEnableWindow.Call(ui.cloneBtn,1)}
         code:=iaSafeInstallCode(result)
         if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
             iaLog("[IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA] Registro o paquete original restaurado. Los archivos del traductor se conservaron.")
@@ -387,7 +437,11 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         }else if code=="IA_INSTALACION_COMPLETADA_VERIFICADA"{
             iaLog("[IA_INSTALACION_COMPLETADA_VERIFICADA] Listo para iniciar la copia del juego.")
             if pieces:=strings.SplitN(result,"|",2);len(pieces)==2{iaLog("[IA_VERSION_INSTALADA] "+pieces[1])}
-            iaSet(ui.status,"Instalación completa. Reinicia la copia del juego y prueba F10.")
+            if newGame!=""{
+                ui.gameFile=newGame;iaSet(ui.input,newGame)
+                iaLog("[IA_VXACE_COPIA_LISTA] Abre Game.exe de la NUEVA carpeta indicada arriba. El origen permanece intacto.")
+                iaSet(ui.status,"Copia nueva verificada. Abre el EXE indicado arriba y prueba F10.")
+            }else{iaSet(ui.status,"Instalación completa. Reinicia la copia del juego y prueba F10.")}
         }else{
             text:=iaFriendlyInstall(code)
             iaLog("["+code+"] "+text)
@@ -425,7 +479,8 @@ func runUI(){
     ui.infoLabel=iaControl(hwnd,"STATIC","1. Selecciona el archivo EXE del juego (una copia cerrada):",0,230,187,780,34,0)
     ui.input=iaControl(hwnd,"EDIT","",iaWSBorder|iaESReadOnly,230,227,597,44,0)
     ui.browse=iaControl(hwnd,"BUTTON","EXE",0,843,226,169,46,iaCmdBrowse)
-    ui.install=iaControl(hwnd,"BUTTON","2. INSTALAR TRADUCTOR AUTOMÁTICO",0,230,302,782,59,iaCmdInstall)
+    ui.install=iaControl(hwnd,"BUTTON","2. INSTALAR TRADUCTOR",0,230,302,485,59,iaCmdInstall)
+    ui.cloneBtn=iaControl(hwnd,"BUTTON","CREAR COPIA VX ACE",0,725,302,287,59,iaCmdClone)
     iaControl(hwnd,"STATIC","Estado de instalación:",0,230,379,760,31,0)
     ui.logs=iaControl(hwnd,"EDIT","",iaWSBorder|iaWSVScroll|iaESMultiline|
         iaESReadOnly|iaESAutoVScroll,230,414,782,236,0)
@@ -437,7 +492,7 @@ func runUI(){
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
-    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
+    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
     iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace: instalación. MZ comprimida, Halva y MV SOLData: compatibilidad experimental. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
