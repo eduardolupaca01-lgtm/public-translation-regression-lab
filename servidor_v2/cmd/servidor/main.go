@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R35-20261126"
- packageBuildID="RPG-MVMZ-VXACE-WEB-R39-20261127"
+ packageBuildID="RPG-MVMZ-VXACE-WEB-R40-20261127"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -431,15 +431,18 @@ func main(){
  webFolder:=flag.String("web-folder","","Carpeta web extraída con index.html y assets (experimental, no EXE)")
  webPort:=flag.Int("web-port",8765,"Puerto local fijo de la carpeta web")
  webNoBrowser:=flag.Bool("web-no-browser",false,"No abrir navegador automáticamente (pruebas)")
+ webEXE:=flag.String("web-exe","","EXE Go con recursos web embed.FS (lectura estática, sin ejecutarlo)")
  webCopy:=flag.Bool("web-copy",false,"Preparar copia web independiente con lanzador de escritorio")
  webCopyParent:=flag.String("web-copy-parent","","Carpeta existente para la copia web")
  flag.Parse()
- if (*webCopy&&(*webFolder==""||*webNoBrowser||*webPort!=8765))||(!*webCopy&&*webCopyParent!=""){
+ webInput:=*webFolder!=""||*webEXE!=""
+ if (*webFolder!=""&&*webEXE!="")||(*webEXE!=""&&!*webCopy)||
+    (*webCopy&&(!webInput||*webNoBrowser||*webPort!=8765))||(!*webCopy&&*webCopyParent!=""){
   fmt.Fprintln(os.Stderr,"IA_WEB_ARGUMENTOS_INVALIDOS");os.Exit(1)
  }
- if (*webFolder!=""&&(*exe!=""||*inspect||*recoverGame||*copyVXAce||*copyParent!=""))||
-    (*webFolder==""&&(*webPort!=8765||*webNoBrowser))||
-    (*webFolder!=""&&(*webPort<1024||*webPort>65535)){
+ if (webInput&&(*exe!=""||*inspect||*recoverGame||*copyVXAce||*copyParent!=""))||
+    (!webInput&&(*webPort!=8765||*webNoBrowser))||
+    (webInput&&(*webPort<1024||*webPort>65535)){
   fmt.Fprintln(os.Stderr,"IA_WEB_ARGUMENTOS_INVALIDOS");os.Exit(1)
  }
  if (*copyVXAce&&(*inspect||*recoverGame||*exe==""))||(!*copyVXAce&&*copyParent!=""){
@@ -458,14 +461,16 @@ func main(){
   fmt.Println("IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA")
   return
  }
- if *exe==""&&*webFolder==""{runUI();return}
+ if *exe==""&&!webInput{runUI();return}
  source:=*payload;if source==""{var err error;source,err=os.Executable();if err!=nil{fmt.Fprintln(os.Stderr,"IA_EXE_NO_DISPONIBLE");os.Exit(1)}}
  p,err:=readPackage(source)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  defer p.Close()
- if *webFolder!=""{
+ if webInput{
   if *webCopy{
-   path,e:=webCloneInstall(*webFolder,*webCopyParent,p)
+   var path string
+   var e error
+   if *webEXE!=""{path,e=webCloneFromEXE(*webEXE,*webCopyParent,p)}else{path,e=webCloneInstall(*webFolder,*webCopyParent,p)}
    if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
    fmt.Println("IA_WEB_COPIA_LISTA|"+path)
   }else if e:=webLaunch(*webFolder,*webPort,*webNoBrowser,p);e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
