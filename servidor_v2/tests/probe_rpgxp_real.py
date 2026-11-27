@@ -61,7 +61,7 @@ def main():
         target=data/"Scripts.rxdata";original=scripts();target.write_bytes(original)
         for name in ("System.rxdata","MapInfos.rxdata"):(data/name).write_bytes(b"\x04\x08[6")
         untouched={f.name:f.read_bytes() for f in data.iterdir() if f!=target}
-        invoke(exe,"--xp-lab-install","--game",game)
+        invoke(exe,"--game",game)
         sidecar=root/"IA Traductora";engine=sidecar/".local"/"Rpg"/"engine"
         receipt=sidecar/"install"/"rpgxp"/"receipt.json"
         state=json.loads(receipt.read_text("utf8"))
@@ -74,7 +74,7 @@ def main():
             wait_closed(engine)
             count=read_translation_count(engine.parent/"cache"/"translation-memory-v2.sqlite3")
             assert count==3, "missing or duplicate memory keys"
-        invoke(exe,"--xp-lab-recover","--game",game)
+        invoke(exe,"--recover","--game",game)
         assert target.read_bytes()==original
         assert json.loads(receipt.read_text("utf8"))["status"]=="RESTORED"
         assert untouched=={f.name:f.read_bytes() for f in data.iterdir() if f!=target}

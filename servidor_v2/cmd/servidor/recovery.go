@@ -17,6 +17,7 @@ func RecoverGame(gameEXE string)error{
  }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
+  if err.Error()==rpgxpLooseRouteCode{return xpRecoverLab(gameEXE)}
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{return recoverHalva(packed)}
   return err
  }

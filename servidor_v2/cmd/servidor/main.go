@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R42-20261127"
- packageBuildID="RPG-MVMZ-VXACE-WEB-R42-20261127"
+ packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R43-PRUEBA"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -229,7 +229,7 @@ func detectGame(gameEXE string)(string,string,error){
  if matched,xpErr:=detectRPGXP(gameEXE);matched{
   if chosen!=""{return "","",errors.New("IA_RPG_RUTAS_AMBIGUAS")}
   if xpErr!=nil{return "","",xpErr}
-  return "","",errors.New(rpgxpPendingCode)
+  return "","",errors.New(rpgxpLooseRouteCode)
  }
  if chosen==""{return "","",errors.New("IA_SOLO_RPG_MAKER_MV_MZ")}
  if info,err:=os.Lstat(filepath.Join(chosen,"js","plugins"));err!=nil||!info.IsDir()||
@@ -326,6 +326,7 @@ func Install(gameEXE string,pkg *packageReader)error{
  }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
+  if err.Error()==rpgxpLooseRouteCode{return xpInstallLab(gameEXE,pkg)}
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{
    if _,_,e:=halvaInspect(packed);e==nil{return installHalva(packed,pkg)}
   }
@@ -402,6 +403,7 @@ func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
  }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
+  if err.Error()==rpgxpLooseRouteCode{return xpInstalledIdentity(gameEXE,pkg)}
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{return halvaIdentity(packed,pkg)}
   return "",err
  }
@@ -429,9 +431,9 @@ func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
  return build+" SHA256="+hash(source),nil
 }
 func main(){
- exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV, MZ o VX Ace")
+ exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV, MZ, VX Ace o XP experimental")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
- recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV/MZ (no necesita modelos)")
+ recoverGame:=flag.Bool("recover",false,"Recuperar el inicio RPG original (no necesita modelos)")
  inspect:=flag.Bool("inspect",false,"Diagnóstico RPG de solo lectura, sin modelos ni ejecución del juego")
  copyVXAce:=flag.Bool("copy-vxace",false,"Crear una copia independiente VX Ace empaquetada, sin reemplazar el original")
  copyParent:=flag.String("copy-parent","","Carpeta existente donde crear una nueva copia VX Ace (opcional)")

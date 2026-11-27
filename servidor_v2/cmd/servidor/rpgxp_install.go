@@ -1,7 +1,6 @@
 package main
 
-// Experimental loose XP installation. The public selector stays blocked
-// until the actual RGSS1 runtime is independently validated.
+// Experimental loose XP installation. Real-game compatibility is still a trial.
 import (
  "bytes"
  "encoding/hex"
@@ -153,6 +152,19 @@ func xpInstallLab(exe string,pkg *packageReader)error{
  if e=xpHashFile(target,expected.After);e!=nil{return e}
  expected.Status="INSTALLED"
  return xpRecord(receiptFile,expected)
+}
+func xpInstalledIdentity(exe string,pkg *packageReader)(string,error){
+ root,target,e:=xpTarget(exe);if e!=nil{return "",e}
+ if pkg==nil||pkg.files[xpPluginAsset]==nil||pkg.files[xpLauncherAsset]==nil{return "",xpError("PAQUETE_INCOMPLETO")}
+ sidecar,_,_,backup,receiptFile:=xpPaths(root)
+ r,ok,e:=xpReadReceipt(receiptFile)
+ if e!=nil||!ok||r.Status!="INSTALLED"{return "",xpError("INSTALACION_NO_VERIFICADA")}
+ if r.Plugin!=pkg.manifest.Files[xpPluginAsset]||r.Worker!=pkg.manifest.Files["IATraductora.exe"]||r.Launcher!=pkg.manifest.Files[xpLauncherAsset]{return "",xpError("VERSION_DISTINTA")}
+ if e=xpVerifiedAssets(root,r);e!=nil{return "",e}
+ if e=iaCheckEngine(sidecar,pkg);e!=nil{return "",e}
+ if e=xpHashFile(target,r.After);e!=nil{return "",e}
+ if e=xpHashFile(backup,r.Before);e!=nil{return "",e}
+ return xpLabBuild+" SHA256="+r.After,nil
 }
 func xpRecoverLab(exe string)error{
  root,target,e:=xpTarget(exe);if e!=nil{return e}

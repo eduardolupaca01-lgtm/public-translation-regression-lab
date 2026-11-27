@@ -140,6 +140,7 @@ func detectInstallTarget(gameEXE string)(string,error){
  }
  root,content,e:=detectGame(gameEXE)
  if e==nil{return engineAt(content),nil}
+ if e.Error()==rpgxpLooseRouteCode{return rpgxpTrialKind,nil}
  if packed,ok:=halvaRootFromDetection(gameEXE,e);ok{
   root=packed
   if kind,_,probe:=halvaInspect(root);probe==nil{return kind+" Halva",nil}

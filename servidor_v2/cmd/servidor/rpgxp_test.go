@@ -41,15 +41,15 @@ func rpgxpFixture(t *testing.T) string {
     return filepath.Join(root,"Game.exe")
 }
 
-func TestRPGXPDetectionDoesNotEnableInstaller(t *testing.T) {
+func TestRPGXPDetectionRoutesTrialWithoutWriting(t *testing.T) {
     exe := rpgxpFixture(t)
     root := filepath.Dir(exe)
     scripts := filepath.Join(root,"Data","Scripts.rxdata")
     before, e := os.ReadFile(scripts)
     if e != nil { t.Fatal(e) }
     if matched,e := detectRPGXP(exe); !matched || e != nil { t.Fatalf("XP not recognized: %v %v",matched,e) }
-    if _,e := detectInstallTarget(exe); e == nil || e.Error()!=rpgxpPendingCode { t.Fatalf("XP must be detected but blocked: %v",e) }
-    if e := Install(exe,nil); e == nil || e.Error()!=rpgxpPendingCode { t.Fatalf("unimplemented XP installation not blocked: %v",e) }
+    if kind,e := detectInstallTarget(exe); e != nil || kind!=rpgxpTrialKind { t.Fatalf("XP trial not routed: %v %v",kind,e) }
+    if e := Install(exe,nil); e == nil || e.Error()!="IA_RPGXP_PAQUETE_INCOMPLETO" { t.Fatalf("missing XP package not blocked: %v",e) }
     after,e := os.ReadFile(scripts)
     if e != nil || !bytes.Equal(before,after) { t.Fatal("original script changed") }
     if _,e := os.Stat(filepath.Join(root,"IA Traductora")); !os.IsNotExist(e) { t.Fatal("detector created sidecar") }

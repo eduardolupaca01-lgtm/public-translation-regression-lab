@@ -11,7 +11,8 @@ import (
 )
 
 const (
-    rpgxpPendingCode = "IA_RPGXP_RGSS1_ADAPTADOR_PENDIENTE"
+    rpgxpLooseRouteCode = "IA_RPGXP_RUTA_SUELTA_EXPERIMENTAL"
+    rpgxpTrialKind = "XP (RGSS1 experimental)"
     rpgxpPackedCode = "IA_RPGXP_RGSSAD_PENDIENTE"
     rpgxpInvalidCode = "IA_RPGXP_RECURSOS_NO_VERIFICADOS"
 )

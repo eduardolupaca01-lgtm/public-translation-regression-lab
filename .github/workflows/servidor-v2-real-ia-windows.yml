@@ -1,4 +1,4 @@
-name: Servidor R43 lab - XP reversible installation and real OPUS
+name: Servidor R43 candidate - XP experimental installation and real OPUS
 on:
   push:
     branches:
@@ -471,33 +471,32 @@ jobs:
         run: |
           python servidor_v2/tests/probe_web_desktop.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --auto-exe
           if ($LASTEXITCODE -ne 0) { throw "IA_WEB_AUTO_EXE_REAL_ACCEPTANCE_FAIL" }
-      # This is an encrypted diagnostic artifact, not a production release.
-      # No user or proprietary runtime files are included. The real RGSS1
-      # acceptance gate is deliberately local and still pending.
-      - name: Cifrar candidato exclusivo de diagnostico RGSS1
+      # Encrypted user-authorized trial, not certified real-game compatibility.
+      # The normal installer path must pass all previous CI gates.
+      - name: Cifrar candidato experimental R43
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:IA_PASSWORD)) { throw "IA_CIFRADO_CLAVE_FALTANTE" }
           $seven="C:\Program Files\7-Zip\7z.exe"
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
-          $dir=Join-Path $env:RUNNER_TEMP "IA-R43-Diagnostico-Cifrado"
+          $dir=Join-Path $env:RUNNER_TEMP "IA-R43-Prueba-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $stage=Join-Path $env:RUNNER_TEMP "IA-R43-Diagnostico-Staging"
+          $stage=Join-Path $env:RUNNER_TEMP "IA-R43-Prueba-Staging"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP "Servidor.exe") -Destination $stage
           Copy-Item -LiteralPath "servidor_v2/rpgxp/Diagnostico-XP.cmd" -Destination $stage
-          'R43 SOLO DIAGNOSTICO. No es una version de instalacion XP aprobada. Ejecutar Diagnostico-XP.cmd con un Game.exe XP original, confiable y cerrado. El ensayo usa una copia temporal sintetica; no incluye ni modifica recursos del juego. Compartir solo R43-Diagnostico.txt. La compatibilidad RGSS1 real sigue pendiente.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
-          $package=Join-Path $dir "Servidor-R43-XP-Diagnostico.7z"
+          'R43 EXPERIMENTAL. Abre Servidor.exe, elige RPG y selecciona Game.exe de una COPIA CERRADA de XP con Data/Scripts.rxdata suelto. Pulsa Instalar traductor y confirma el aviso. Abre el juego y prueba los dialogos y elecciones. Si falla, cierra el juego, selecciona la misma copia y pulsa Recuperar inicio RPG. No borres la memoria ni los respaldos. No requiere diagnostico previo. No se ha certificado RGSS1 autentico ni scripts personalizados. Los otros motores conservan sus pruebas anteriores.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
+          $package=Join-Path $dir "Servidor-R43-XP-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $stage "Servidor.exe") (Join-Path $stage "Diagnostico-XP.cmd") (Join-Path $stage "LEEME.txt") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R43_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R43_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-R43-XP-Diagnostico.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
-      - name: Entregar solo diagnostico cifrado (no release)
+          "$sha  Servidor-R43-XP-Prueba.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
+      - name: Entregar candidato cifrado R43 (prueba, no release)
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-R43-XP-DIAGNOSTICO-CIFRADO
-          path: ${{ runner.temp }}/IA-R43-Diagnostico-Cifrado/
+          name: SERVIDOR-R43-XP-PRUEBA-CIFRADO
+          path: ${{ runner.temp }}/IA-R43-Prueba-Cifrado/
           retention-days: 7
           if-no-files-found: error

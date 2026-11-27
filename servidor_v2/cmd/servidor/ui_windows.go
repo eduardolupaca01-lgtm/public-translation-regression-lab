@@ -170,8 +170,12 @@ func iaSafeInstallCode(message string)string{
 }
 func iaFriendlyInstall(code string)string{
     switch code{
-    case rpgxpPendingCode:
-        return "RPG Maker XP (RGSS1) detectado. El adaptador XP aún requiere validación; juego intacto."
+    case "IA_RPGXP_PAQUETE_INCOMPLETO":
+        return "Este paquete no contiene el traductor XP. Usa Servidor R43 de prueba."
+    case "IA_RPGXP_OPERACION_ACTIVA_O_PENDIENTE","IA_RPGXP_SESION_ACTIVA_O_PENDIENTE":
+        return "Cierra el juego y espera a que termine el motor. Conserva la memoria y el respaldo."
+    case "IA_RPGXP_SCRIPTS_MARSHAL_INVALIDO","IA_RPGXP_MAIN_NO_ENCONTRADO","IA_RPGXP_MAIN_AMBIGUO":
+        return "Scripts.rxdata no coincide con el formato XP admitido. No se reemplazó el original. Copia el diagnóstico."
     case rpgxpPackedCode:
         return "RPG Maker XP con archivo RGSSAD detectado. Formato empaquetado aún no admitido; juego intacto."
     case rpgxpInvalidCode:
@@ -283,6 +287,13 @@ func iaStartInstall(){
         return
     }
     if ui.busy{return}
+    if kind,e:=detectInstallTarget(ui.gameFile);e==nil&&kind==rpgxpTrialKind{
+        yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
+            uintptr(unsafe.Pointer(iaUTF16("RPG Maker XP experimental. Usa una copia cerrada del juego, no el original. Se respaldará Scripts.rxdata; podrás usar Recuperar inicio RPG. La compatibilidad con los scripts personalizados aún no está confirmada. ¿Instalar en la copia seleccionada?"))),
+            uintptr(unsafe.Pointer(iaUTF16("Servidor R43 — prueba XP"))),0x24|0x100)
+        if yes!=6{return}
+        iaLog("[IA_RPGXP_PRUEBA] Instalación experimental autorizada en una copia cerrada.")
+    }
     ui.busy=true
     iaEnableWindow.Call(ui.install,0)
     iaEnableWindow.Call(ui.browse,0)
@@ -324,7 +335,7 @@ func iaStartRecover(){
     iaEnableWindow.Call(ui.recoverBtn,0)
     iaEnableWindow.Call(ui.cloneBtn,0)
     iaSet(ui.status,"Comprobando respaldo original...")
-    iaLog("[IA_RECUPERACION_INICIADA] Solo el registro original de esta copia RPG.")
+    iaLog("[IA_RECUPERACION_INICIADA] Restaurando el recurso original de esta copia RPG; se conserva la memoria.")
     game:=ui.gameFile
     go func(){
         info:="IA_RECUPERACION_ERROR_NO_CLASIFICADO"
@@ -467,7 +478,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                         iaSet(ui.status,iaFriendlyInstall(code))
                     }else{
                         iaLog("[IA_EXE_NO_COMPATIBLE] "+code)
-                        iaSet(ui.status,"Selecciona Game.exe de una copia de RPG Maker MV, MZ o VX Ace.")
+                        iaSet(ui.status,"Selecciona Game.exe de una copia MV, MZ, VX Ace o XP experimental.")
                     }
                 }else{
                     ui.gameFile=file;iaSet(ui.input,file)
@@ -477,6 +488,10 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                     iaEnableWindow.Call(ui.install,1);iaEnableWindow.Call(ui.recoverBtn,1)
                     iaSet(ui.status,"Juego "+kind+" seleccionado. Listo para instalar.")
                     iaLog("[IA_EXE_SELECCIONADO] Motor "+kind+" verificado.")
+                    if kind==rpgxpTrialKind{
+                        iaLog("[IA_RPGXP_DETECTADO] RGSS1: instalación de prueba, respaldo de Scripts.rxdata y recuperación disponibles.")
+                        iaSet(ui.status,"RPG Maker XP detectado. Instala únicamente en una copia cerrada.")
+                    }
                     if strings.HasSuffix(kind," Halva"){
                         iaLog("[IA_HALVA_NATIVO_PRUEBA] Copia cerrada; solo se modifica EnginePackage con respaldo. Abre mediante el lanzador habitual.")
                         iaSet(ui.status,"Halva plano compatible con instalación de prueba; arranque por comprobar.")
@@ -534,6 +549,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 ui.gameFile=newGame;iaSet(ui.input,newGame)
                 iaLog("[IA_VXACE_COPIA_LISTA] Abre Game.exe de la NUEVA carpeta indicada arriba. El origen permanece intacto.")
                 iaSet(ui.status,"Copia nueva verificada. Abre el EXE indicado arriba y prueba F10.")
+            }else if strings.HasPrefix(result,"IA_INSTALACION_COMPLETADA_VERIFICADA|"+xpLabBuild+" "){
+                iaLog("[IA_RPGXP_INSTALACION_PRUEBA] Abre Game.exe y comprueba diálogos y elecciones. Si falla, cierra el juego y pulsa Recuperar inicio RPG. No requiere F10.")
+                iaSet(ui.status,"XP instalado para prueba. Abre Game.exe. Compatibilidad real pendiente.")
             }else{iaSet(ui.status,"Instalación completa. Reinicia la copia del juego y prueba F10.")}
         }else{
             text:=iaFriendlyInstall(code)
@@ -558,11 +576,11 @@ func runUI(){
     reg,_,_:=iaRegClass.Call(uintptr(unsafe.Pointer(&class)))
     if reg==0{fmt.Fprintln(os.Stderr,"IA_VENTANA_NO_REGISTRADA");return}
     hwnd,_,_:=iaCreateWindow.Call(0,uintptr(unsafe.Pointer(className)),
-        uintptr(unsafe.Pointer(iaUTF16("Servidor"))),iaWSOverlappedWindow|iaWSVisible,
+        uintptr(unsafe.Pointer(iaUTF16("Servidor R43 — prueba"))),iaWSOverlappedWindow|iaWSVisible,
         100,60,1050,760,0,0,instance,0)
     if hwnd==0{fmt.Fprintln(os.Stderr,"IA_NO_SE_PUEDE_ABRIR_VENTANA");return}
     ui:=&iaCurrentUI;ui.hwnd=hwnd
-    ui.titleLabel=iaControl(hwnd,"STATIC","Servidor",0,30,20,360,55,0)
+    ui.titleLabel=iaControl(hwnd,"STATIC","Servidor R43",0,30,20,360,55,0)
     ui.sectionLabel=iaControl(hwnd,"STATIC","RPG",0,233,123,250,40,0)
     for i,label:=range []string{"01","RPG","WEB","04","05","+"}{
         style:=uint32(0)
@@ -587,7 +605,7 @@ func runUI(){
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
-    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace y SOLData. Botón WEB: seleccionar EXE original o index.html extraído y crear copia. Motor local OPUS.")
+    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental y SOLData. Botón WEB: seleccionar EXE original o index.html extraído y crear copia. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {
