@@ -19,7 +19,7 @@ const (
 	vxaceLibraryName = "RGSS301.dll"
 	vxaceArchiveName = "Game.rgss3a"
 	vxaceMaxArchive  = int64(900 * 1024 * 1024)
-	vxaceMaxMarshal  = int64(128 * 1024 * 1024)
+	vxaceMaxMarshal  = int64(512 * 1024 * 1024)
 )
 
 type vxaceFingerprint struct {
@@ -129,6 +129,29 @@ func vxacePE(file string) bool {
 	}
 	machine := binary.LittleEndian.Uint16(signature[4:6])
 	return machine == 0x014c || machine == 0x8664
+}
+
+func vxaceAMD64PE(file string) bool {
+	f, err := os.Open(file)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var dos [64]byte
+	if _, err = f.Read(dos[:]); err != nil || dos[0] != 'M' || dos[1] != 'Z' {
+		return false
+	}
+	offset := int64(binary.LittleEndian.Uint32(dos[0x3c:0x40]))
+	if offset < 64 || offset > 1024*1024 {
+		return false
+	}
+	var signature [26]byte
+	if _, err = f.ReadAt(signature[:], offset); err != nil {
+		return false
+	}
+	return bytes.Equal(signature[:4], []byte{'P', 'E', 0, 0}) &&
+		binary.LittleEndian.Uint16(signature[4:6]) == 0x8664 &&
+		binary.LittleEndian.Uint16(signature[24:26]) == 0x20b
 }
 
 func vxaceParseGameINI(raw []byte) (map[string]string, error) {
@@ -451,7 +474,7 @@ func installVXAce(fp vxaceFingerprint, pkg *packageReader) error {
 		return err
 	}
 	_, _, helper, plugin, worker, receiptFile, installDir := vxaceSidecarPaths(fp.Root)
-	if !ordinary(helper) || !ordinary(plugin) || !ordinary(worker) {
+	if !ordinary(helper) || !vxaceAMD64PE(helper) || !ordinary(plugin) || !ordinary(worker) {
 		return errors.New("IA_VXACE_COMPONENTES_NO_INSTALADOS")
 	}
 	helperSHA, err := digestFile(helper)
