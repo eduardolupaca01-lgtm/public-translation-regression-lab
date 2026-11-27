@@ -1,5 +1,6 @@
 """Actual packaged Windows installer/launcher/OPUS; synthetic XP archive/window."""
 import argparse
+from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
@@ -40,6 +41,15 @@ def wait_closed(engine):
         time.sleep(.2)
     assert not session.exists() and not lock.exists(),"XP worker did not stop with parent"
 
+def read_translation_count(database):
+    # This reader belongs to the acceptance harness, not the worker.
+    # sqlite3.Connection's context manager only manages transactions;
+    # explicitly close the connection even if querying/asserting fails.
+    uri=database.resolve(strict=True).as_uri()+"?mode=ro"
+    with closing(sqlite3.connect(uri,uri=True)) as conn:
+        with closing(conn.execute("SELECT COUNT(*) FROM translations")) as cursor:
+            return cursor.fetchone()[0]
+
 def main():
     ap=argparse.ArgumentParser();ap.add_argument("--servidor",type=Path,required=True);args=ap.parse_args()
     exe=args.servidor.resolve(strict=True)
@@ -62,14 +72,15 @@ def main():
             if run.returncode or b"IA_RPGXP_REAL_OPUS_INSTALLED_NATIVE_CONTRACT_PASS" not in run.stdout:
                 raise AssertionError("XP real worker fixture failed: "+run.stderr.decode("utf8","replace")[-1000:])
             wait_closed(engine)
-            with sqlite3.connect(engine.parent/"cache"/"translation-memory-v2.sqlite3") as conn:
-                count=conn.execute("SELECT COUNT(*) FROM translations").fetchone()[0]
+            count=read_translation_count(engine.parent/"cache"/"translation-memory-v2.sqlite3")
             assert count==3, "missing or duplicate memory keys"
         invoke(exe,"--xp-lab-recover","--game",game)
         assert target.read_bytes()==original
         assert json.loads(receipt.read_text("utf8"))["status"]=="RESTORED"
         assert untouched=={f.name:f.read_bytes() for f in data.iterdir() if f!=target}
         assert (engine.parent/"cache"/"translation-memory-v2.sqlite3").is_file()
-        print("IA_RPGXP_REAL_OPUS_AUTOSTART_CACHE_RESTORE_PASS")
+    # Announce success only after strict TemporaryDirectory cleanup has
+    # completed. Never suppress WinError 32 or delete a player's cache.
+    print("IA_RPGXP_REAL_OPUS_AUTOSTART_CACHE_RESTORE_PASS")
 
 if __name__=="__main__":main()
