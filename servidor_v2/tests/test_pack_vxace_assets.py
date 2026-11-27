@@ -4,7 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
+import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.pack_vxace_assets import (
     HELPER_NAME,
     PLUGIN_NAME,
