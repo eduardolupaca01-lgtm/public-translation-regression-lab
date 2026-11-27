@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R41-20261127"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R42-20261127"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -923,6 +923,7 @@ function languageFor(s){
     if(isJapanese(s))return "ja";
     if(actorNames[s])return null;
     if(r25ClearlySpanish(s)&&!r25DeclaredEnglish(s))return null;
+    if(typeof r42Units!=="undefined"&&r42Units&&r42Units.has(s))return r42Units.get(s);
     if(r22Authored.has(s)&&(!isMZ||!externalTables()&&!remNative.detected&&!cte.enabled))return "en";
     if((typeof questTexts!=="undefined"&&questTexts.has(s))||
        (typeof discovered!=="undefined"&&discovered.has("en\u0000"+s)))return "en";
@@ -1859,6 +1860,7 @@ function projectSurface(win,text){
     var txt=questTxtProject(text,win,true);if(txt)return txt.text;
     if(questSurface(win,text))return questDraw(win,text);
     if(isAmbientSurface(win,text))return projectCaption(text);
+    var formatted=r42NativeSurface(win,text,true);if(formatted!==null)return formatted;
     return text;
 }
 // Intercept the author's final conversion before word-wrap, even when a
@@ -2355,6 +2357,7 @@ function nativeDisplayProjection(text,context,bitmap){
     var named=csvNameReady(text);if(named!==null)return named;
     var known=csvKnownReady(text);if(known!==null)return known;
     var txt=questTxtProject(text,bitmap&&bitmap._iaOwnerWindow,true);if(txt)return txt.text;
+    var formatted=r42NativeSurface(bitmap&&bitmap._iaOwnerWindow,text,true);if(formatted!==null)return formatted;
     var source=(solData?solSources.get(text):null)||displaySource(text,context||"surface");if(!source)return null;
     var ready=readyText(source,text);
     if(typeof ready==="string"&&ready!==text&&validTranslation(source,text,ready,true))return ready;
@@ -3107,7 +3110,10 @@ function hookNativeSurface(){
                 try{
                     if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
                         var txt=!identity&&!statusPresentationScope()?questTxtProject(args[0],this,true):null;
+                        var formatted=!txt&&!identity&&!statusPresentationScope()&&!questSurface(this,args[0])&&!isAmbientSurface(this,args[0])?
+                            r42NativeSurface(this,args[0],true):null;
                         if(txt)args[0]=txt.text;
+                        else if(formatted!==null)args[0]=formatted;
                         else if(!identity&&statusPresentationScope())args[0]=statusRenderValue(args[0]);
                         else if(!identity&&questSurface(this,args[0]))args[0]=questDraw(this,args[0]);
                         else if(!identity&&isAmbientSurface(this,args[0]))args[0]=projectCaption(args[0]);
@@ -3115,7 +3121,7 @@ function hookNativeSurface(){
                             if(bookLabel===null&&csvWindowEligible(this))bookLabel=csvProjectDisplay(args[0],csvWindowChoice(this),true);
                             if(bookLabel===null&&!identity)bookLabel=nativeDisplayProjection(args[0],csvWindowChoice(this)?"choice":"surface",this.contents);
                             args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
-                        if(!txt&&!identity&&!statusPresentationScope()&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
+                        if(!txt&&formatted===null&&!identity&&!statusPresentationScope()&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
                            languageFor(args[0])==="en"){
                             var cachedEnglish=readyText("en",args[0]);
@@ -3611,7 +3617,7 @@ function hookNativeSurface(){
             return withQuestGlyphs(bitmap,args[0],function(){return measure.apply(bitmap,args);});
         };
     }
-    hookPixiTextSurface();
+    hookPixiTextSurface();hookR42CustomWindows();
 }
 
 function readyIndependentLines(source,text){
@@ -4095,6 +4101,8 @@ function firstViewMissing(win,raw,choice){
             raw=value;
         }
     }
+    var formatted=!choice?r42NoticeProject(raw,win,true,false):null;
+    if(formatted)return formatted.missing;
     var source=displaySource(raw,choice?"choice":"message");if(!source)return false;
     if(readyText(source,raw)!==null||(tableStats.root&&csvKnownReady(raw)!==null))return false;
     if(rejectedKeys.get(source+"\u0000"+raw)===Infinity)return false;
@@ -5757,7 +5765,7 @@ function hookMessages(){
                     source=null;
                 }
                 if(!scripted&&!entries.length&&!externalEntry&&!projection&&!(tsv.detected&&tsvRef(keys))){
-                    var txt=questTxtProject(text,this,true);
+                    var txt=questTxtProject(text,this,true)||r42NoticeProject(text,this,true,false);
                     if(txt){
                         source=null;
                         if(txt.text!==text)projection={message:$gameMessage,raw:rawText,text:txt.text,used:false,questTxt:true};
@@ -6856,6 +6864,233 @@ function questTxtLabel(){
         " · Textos: "+questTxtStats.fields+" · Om.: "+questTxtStats.omitted;
 }
 
+// R42: local presentation of proven battle templates and formatted notices.
+// Keep names, HP amounts, native escape codes and gameplay state intact.
+// Unknown executable controls or unrecognized battle identities fail open.
+var r42Units=new Map(),r42Windows=new Set();
+var r42Stats={battle:0,notices:0,units:0};
+var r42WindowPattern=/^Window_(?:Battle(?:Log|Message|ActionLog|Notification)|Notification|Notice|Toast|Popup|Tips?)(?:[A-Za-z0-9_]*)$/;
+var r42BattlePattern=/^Window_Battle(?:Log|Message|ActionLog|Notification)(?:[A-Za-z0-9_]*)$/;
+var r42Token=/(?:\\|\x1b)(?:(?:c\[(?:\d{1,3}|#[0-9a-f]{6,8})\]|(?:i|v|n|p|fs|px|py)\[\d{1,6}\])|[{}!.,|^<>$]|g(?![a-z]))|<\/?wordwrap>|【[A-Za-z0-9_+\- ]{1,16}】|\[(?:[A-Z0-9]|F(?:[1-9]|1[0-2])|Esc|Enter|Space|Shift|Ctrl|Alt)\]|[※"“”]/gi;
+function r42BattleScope(win){
+    return !!win&&((typeof Window_BattleLog!=="undefined"&&win instanceof Window_BattleLog)||hasNativeClass(win,r42BattlePattern));
+}
+function r42NoticeScope(win){
+    return !!win&&!r42BattleScope(win)&&hasNativeClass(win,r42WindowPattern);
+}
+function r42Safe(raw){
+    return typeof raw==="string"&&raw.trim()&&raw.length<=1800&&
+        !actorNames[raw]&&!remNativeSpanishText(raw)&&!externalLocalizationReference(raw)&&
+        !tsvRef(raw)&&!tsvExcluded(raw)&&!csvExecutableSyntax(raw)&&
+        !/(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(raw);
+}
+function r42Identity(raw){
+    if(typeof raw!=="string")return false;
+    var name=raw.replace(/(?:\\|\x1b)c\[(?:\d{1,3}|#[0-9a-f]{6,8})\]/gi,"").trim();
+    if(!name||name.length>120||/[\\\x1b<>{}\r\n]/.test(name))return false;
+    if(actorNames[name])return true;
+    var rows=[typeof $dataActors!=="undefined"?$dataActors:null,typeof $dataEnemies!=="undefined"?$dataEnemies:null];
+    for(var i=0;i<rows.length;i++){
+        if(Array.isArray(rows[i])&&rows[i].some(function(v){return v&&v.name===name;}))return true;
+    }
+    var groups=[typeof $gameParty!=="undefined"?$gameParty:null,typeof $gameTroop!=="undefined"?$gameTroop:null];
+    for(var j=0;j<groups.length;j++){
+        try{
+            var members=groups[j]&&typeof groups[j].members==="function"?groups[j].members():[];
+            if(Array.isArray(members)&&members.some(function(v){return v&&typeof v.name==="function"&&v.name()===name;}))return true;
+        }catch(_){}
+    }
+    return false;
+}
+function r42TypedSkill(raw){
+    var body=raw.replace(/(?:\\|\x1b)(?:i\[\d{1,6}\]|c\[(?:\d{1,3}|#[0-9a-f]{6,8})\])/gi,"").trim();
+    if(!body||body.length>180||r42Identity(body))return false;
+    var lists=[typeof $dataSkills!=="undefined"?$dataSkills:null,typeof $dataItems!=="undefined"?$dataItems:null];
+    return lists.some(function(rows){return Array.isArray(rows)&&rows.some(function(v){return v&&v.name===body;});});
+}
+function r42NoticeSource(body,typed){
+    if(!r42Safe(body)||r42Identity(body)||r25ClearlySpanish(body))return null;
+    if(/[\\\x1b<>{}=$@#\x00-\x1f]/.test(body)||
+       /^\s*(?:\/\/|(?:var|let|const|function|import|export|return)\b)/i.test(body)||
+       /(?:https?:|file:|[A-Za-z0-9_./-]+\.(?:js|json|exe|dll|png|ogg|mp3|txt)\b)/i.test(body))return null;
+    var src=languageFor(body)||displaySource(body,"surface");
+    if(src)return src;
+    var normalized=body.replace(/[\u2018\u2019]/g,"'").replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...");
+    if(/[^\x20-\x7e]/.test(normalized))return null;
+    var words=normalized.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g)||[];
+    if(words.length<2)return null;
+    if(r25NativeEnglishEvidence(normalized)||
+       /\b(?:controls?|hotkeys?|keyboard|movement|speed|gameplay|remembering|tips|notification|notice|assault|flash|damage|critical|attack|press|button|screen|smoother|refer|tutorial)\b/i.test(normalized))return "en";
+    if(typed&&(r22EnglishLocale||(typeof $dataSystem!=="undefined"&&$dataSystem&&/^en(?:[_-]|$)/i.test($dataSystem.locale||""))))return "en";
+    return null;
+}
+var r42Fixed={"Tips":"Consejos","tips":"consejos","Hotkeys":"Atajos","hotkeys":"atajos",
+    "Controls":"Controles","controls":"controles","Notice":"Aviso","Notification":"Notificación"};
+function r42NoticePlan(raw,forced){
+    if(!r42Safe(raw)||cte.enabled)return null;
+    // Ordinary dialogue keeps the previous adapters. Opt in only for
+    // a paired quote envelope, explicit notice/key glyphs or native UI.
+    var plain=visibleProse(raw).trim();
+    var marked=/[※]|【[A-Za-z0-9_+\- ]{1,16}】/.test(raw)||
+        /(?:^|\r?\n)[ \t]*(?:"[^"\r\n]+"|“[^”\r\n]+”)[ \t]*(?=\r?\n|$)/.test(plain);
+    if(!forced&&!marked)return null;
+    var lines=raw.split(/(\r?\n)/),plans=[],units=0;
+    for(var i=0;i<lines.length;i+=2){
+        var line=lines[i],parts=[],at=0,m,unsafe=false;
+        var re=new RegExp(r42Token.source,"gi");
+        function literal(s){if(s)parts.push({raw:s});}
+        function prose(value){
+            if(!value)return;
+            if(/[\\\x1b<>{}=$@#\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value)){unsafe=true;return;}
+            var lead=(value.match(/^[ \t\u00a0]*/)||[""])[0];
+            var tail=(value.slice(lead.length).match(/[ \t\u00a0]*$/)||[""])[0];
+            var body=value.slice(lead.length,value.length-tail.length);
+            if(!body||r42Identity(body)||r25ClearlySpanish(body)){literal(value);return;}
+            var fixed=Object.prototype.hasOwnProperty.call(r42Fixed,body)?r42Fixed[body]:null;
+            var source=fixed===null?r42NoticeSource(body,forced):null;
+            if(fixed===null&&!source){literal(value);return;}
+            units++;
+            parts.push({raw:value,lead:lead,tail:tail,body:body,source:source,fixed:fixed});
+        }
+        while((m=re.exec(line))!==null){
+            prose(line.slice(at,m.index));literal(m[0]);at=re.lastIndex;
+        }
+        prose(line.slice(at));
+        if(unsafe)return null;
+        plans.push({index:i,parts:parts});
+    }
+    return units?{lines:lines,plans:plans}:null;
+}
+function r42RememberUnit(part,priority){
+    if(!part.source)return;
+    if(!r42Units.has(part.body)){
+        if(r42Units.size>=50000)return;
+        r42Units.set(part.body,part.source);r42Stats.units++;
+    }
+    addPrefetch(part.body,priority,part.source);
+}
+function r42NoticeRemember(raw,priority){
+    var plan=r42NoticePlan(raw,false);
+    if(!plan)return false;
+    plan.plans.forEach(function(line){line.parts.forEach(function(p){r42RememberUnit(p,priority);});});
+    return true;
+}
+function r42NoticeProject(raw,win,request,forced){
+    if(inputFormActive()||identityDrawDepth||win&&(win._iaNameSurface||win._iaOwnSurface))return null;
+    var plan=r42NoticePlan(raw,!!forced);
+    if(!plan)return null;
+    var missing=false;
+    plan.plans.forEach(function(line){
+        var waiting=false;
+        var rendered=line.parts.map(function(p){
+            if(p.fixed!==undefined&&p.fixed!==null)return p.lead+p.fixed+p.tail;
+            if(!p.source)return p.raw;
+            if(request)r42RememberUnit(p,true);
+            var value=readyText(p.source,p.body);
+            if(typeof value==="string"&&validTranslation(p.source,p.body,value,true)&&
+               !/[\\\x1b<>{}"“”※【】\r\n]/.test(value))return p.lead+value+p.tail;
+            if(rejectedKeys.get(p.source+"\u0000"+p.body)!==Infinity){
+                missing=true;waiting=true;
+                if(request)firstViewRequest(p.source,p.body);
+            }
+            return p.raw;
+        }).join("");
+        // Never move icon/color/hotkey markers or draw a half-ready line.
+        if(!waiting)plan.lines[line.index]=rendered;
+    });
+    var out=plan.lines.join("");
+    if(out!==raw)r42Stats.notices++;
+    return {text:out,missing:missing};
+}
+var r42Color="(?:\\\\|\\x1b)c\\[(?:\\d{1,3}|#[0-9a-f]{6,8})\\]";
+var r42Amount="((?:"+r42Color+")*\\d+(?:[.,]\\d+)?(?:"+r42Color+")*)";
+function r42BattleProject(raw,win,request){
+    if(!r42BattleScope(win)||inputFormActive()||identityDrawDepth||win._iaOwnSurface||win._iaNameSurface||
+       !r42Safe(raw)||cte.enabled)return null;
+    var lead=(raw.match(/^[ \t]*/)||[""])[0],tail=(raw.slice(lead.length).match(/[ \t]*$/)||[""])[0];
+    var body=raw.slice(lead.length,raw.length-tail.length),m,out=null;
+    var exact={"Critical Hit!":"¡Golpe crítico!","Critical hit!":"¡Golpe crítico!","Miss!":"¡Fallo!",
+        "Missed!":"¡Falló!","No damage!":"¡Sin daño!","Counterattack!":"¡Contraataque!"};
+    if(Object.prototype.hasOwnProperty.call(exact,body))out=exact[body];
+    if(out===null){
+        m=/^(.+?)\s+attacks([!.])$/i.exec(body);
+        if(m&&r42Identity(m[1]))out=m[1]+" ataca"+m[2];
+    }
+    if(out===null){
+        m=new RegExp("^dealt\\s+"+r42Amount+"\\s+to\\s+(.+?)\\s+damage([!.])$","i").exec(body);
+        if(m&&r42Identity(m[2]))out="Infligió "+m[1]+" de daño a "+m[2]+m[3];
+    }
+    if(out===null){
+        m=new RegExp("^dealt\\s+"+r42Amount+"\\s+damage\\s+to\\s+(.+?)([!.])$","i").exec(body);
+        if(m&&r42Identity(m[2]))out="Infligió "+m[1]+" de daño a "+m[2]+m[3];
+    }
+    if(out===null){
+        m=new RegExp("^(.+?)\\s+(?:took|takes|received)\\s+"+r42Amount+"\\s+damage([!.])$","i").exec(body);
+        if(m&&r42Identity(m[1]))out=m[1]+" recibió "+m[2]+" de daño"+m[3];
+    }
+    if(out===null){
+        m=new RegExp("^(.+?)\\s+dealt\\s+"+r42Amount+"\\s+damage\\s+to\\s+(.+?)([!.])$","i").exec(body);
+        if(m&&r42Identity(m[1])&&r42Identity(m[3]))out=m[1]+" infligió "+m[2]+" de daño a "+m[3]+m[4];
+    }
+    if(out===null){
+        m=/^(.+?)\s*(used|uses)\s+(.+?)([!.])$/i.exec(body);
+        if(m&&r42Identity(m[1])){
+            var skill=m[3],translated=r42TypedSkill(skill)?r42NoticeProject(skill,win,request,true):null;
+            out=m[1]+(m[2].toLowerCase()==="used"?" usó ":" usa ")+(translated?translated.text:skill)+m[4];
+        }
+    }
+    if(out===null){
+        m=/^(.+?)\s+(missed|dodged the attack|was defeated|evaded the attack)([!.])$/i.exec(body);
+        var verbs={"missed":"falló","dodged the attack":"esquivó el ataque","was defeated":"fue derrotado","evaded the attack":"evadió el ataque"};
+        if(m&&r42Identity(m[1]))out=m[1]+" "+verbs[m[2].toLowerCase()]+m[3];
+    }
+    if(out===null)return null;
+    out=lead+out+tail;
+    if(numbersIn(raw)!==numbersIn(out)||csvControlSignature(raw)!==csvControlSignature(out))return null;
+    r42Stats.battle++;
+    return out;
+}
+function r42NativeSurface(win,raw,request){
+    if(r42BattleScope(win)){
+        var battle=r42BattleProject(raw,win,request);
+        if(battle!==null)return battle;
+        // Never ask OPUS to guess names or damage values in an unknown
+        // battle template. Leave the original to the existing native log.
+        return typeof raw==="string"?raw:null;
+    }
+    var notice=r42NoticeProject(raw,win,request,r42NoticeScope(win));
+    return notice?notice.text:null;
+}
+function hookR42CustomWindows(){
+    var classes=[];
+    if(typeof Window_BattleLog!=="undefined")classes.push(Window_BattleLog);
+    if(typeof window!=="undefined")Object.getOwnPropertyNames(window).forEach(function(k){
+        if(!r42WindowPattern.test(k))return;
+        var d=Object.getOwnPropertyDescriptor(window,k);
+        if(d&&typeof d.value==="function")classes.push(d.value);
+    });
+    classes.forEach(function(C){
+        var p=C&&C.prototype;
+        if(!p||r42Windows.has(p))return;
+        r42Windows.add(p);
+        // The base renderer already translates inherited draw calls.
+        // Wrap only actual overrides to support custom window renderers.
+        ["drawText","drawTextEx"].forEach(function(method){
+            if(!Object.prototype.hasOwnProperty.call(p,method)||typeof p[method]!=="function")return;
+            var native=p[method];
+            p[method]=function(){
+                if(surfaceDepth||inputFormActive()||identityDrawDepth||this._iaOwnSurface||this._iaNameSurface||isAmbientWindow(this))
+                    return native.apply(this,arguments);
+                var args=Array.prototype.slice.call(arguments);
+                try{var value=r42NativeSurface(this,args[0],true);if(value!==null)args[0]=value;}catch(_){state.errors++;}
+                surfaceDepth++;r24GlyphDepth++;
+                try{return native.apply(this,args);}finally{r24GlyphDepth--;surfaceDepth--;}
+            };
+        });
+        if(!isAmbientWindow(p))hookSurfaceConversion(p,true);
+    });
+}
+
 function questSource(text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text])return null;
     return questTexts.get(text)||languageFor(text)||null;
@@ -7830,9 +8065,10 @@ function scanCommands(list,priority){
                 cmd=list[++i];
             }
             // Same exact group and component fragments used by native rendering.
-            if(parts.length)r22Remember(parts.join("\n"),priority,"message");
+            var special=parts.length&&r42NoticeRemember(parts.join("\n"),priority);
+            if(parts.length&&!special)r22Remember(parts.join("\n"),priority,"message");
             for(var j=0;j<parts.length;j++){
-                r22Remember(parts[j],priority,"message");
+                if(!special&&!r42NoticeRemember(parts[j],priority))r22Remember(parts[j],priority,"message");
                 var caption=captionEnvelope(parts[j]);
                 if(caption)addPrefetch(caption.body,priority,captionSource(caption.body));
             }
@@ -8731,6 +8967,7 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         solCollectLive:solCollectLive,
         questTxt:function(){return {detected:questTxtStats.detected,files:questTxtStats.files,total:questTxtStats.total,omitted:questTxtStats.omitted,lines:questTxtStats.lines,fields:questTxtStats.fields,ignored:questTxtStats.ignored,done:questTxtStats.done};},
         questTxtProject:function(raw){return questTxtProject(raw,null,true);},
+        r42Stats:r42Stats,
         r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
         r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise,
         displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,

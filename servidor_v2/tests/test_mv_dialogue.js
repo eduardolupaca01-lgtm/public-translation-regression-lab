@@ -821,6 +821,83 @@ async function testR4P2NoStaleLateOverlayAndNoArtificialWait(){
     assert.equal(m._iaLateTicket,null);
     assert.equal(m.originalStarts,1);assert.equal(m.updates,1);
 }
+async function testR42BattleLogAndFormattedNotices(mz){
+    const root=path.join("/tmp","servidor-r42-"+(mz?"mz":"mv"));
+    const content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const quote='"Please open the wooden gate."';
+    const notice="※\\c[2]Remember the hotkeys.\\c[0] 【M】\n\\I[17] Please check the menu.";
+    const skill="Flash Assault";
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[
+        {code:401,parameters:[quote]},{code:401,parameters:[notice]}]}]}]});
+    const responses={"Please open the wooden gate.":"Abre la puerta de madera.",
+        "Remember the hotkeys.":"Recuerda los atajos.","Please check the menu.":"Consulta el menú.",
+        [skill]:"Asalto relámpago","Please close the wooden door.":"Cierra la puerta de madera."};
+    const f=fixture(5,{root,mz,fsState:state,batch:true,testHooks:true,nativePaint:true,responses,configure(c){
+        c.$dataActors=[null,{name:"Mira"}];c.$dataEnemies=[null,{name:"Training Golem"}];
+        c.$dataSkills=[null,{name:skill}];
+        c.$gameTroop={members:()=>[{name:()=>"Training Golem A"}]};
+        function Window_BattleLog(){this._lines=[];this.drawn=[];}
+        Window_BattleLog.prototype=Object.create(c.Window_Base.prototype);
+        Window_BattleLog.prototype.constructor=Window_BattleLog;
+        Window_BattleLog.prototype.drawTextEx=function(value){this.drawn.push(value);};
+        Window_BattleLog.prototype.addText=function(value){this._lines.push(value);this.drawTextEx(value);};
+        c.Window_BattleLog=Window_BattleLog;c.window.Window_BattleLog=Window_BattleLog;
+        function Window_Notification(){this.drawn=[];}
+        Window_Notification.prototype=Object.create(c.Window_Base.prototype);
+        Window_Notification.prototype.constructor=Window_Notification;
+        Window_Notification.prototype.drawTextEx=function(value){this.drawn.push(value);};
+        c.Window_Notification=Window_Notification;c.window.Window_Notification=Window_Notification;
+    }});
+    new f.context.Scene_Title().start();
+    const c=f.context,qa=c.window.__IA_TRADUCTORA_TEST__,log=new c.Window_BattleLog();
+    const raw=["Training Golem A attacks!","dealt \\c[2]69\\c[0] to Mira damage!",
+        "Dealt 46 damage to Training Golem A!","Mira attacks!","Mira took 92 damage!"];
+    raw.forEach(v=>log.addText(v));
+    assert.deepEqual(log._lines,raw,"combat history is original");
+    assert.deepEqual(log.drawn,["Training Golem A ataca!","Infligió \\c[2]69\\c[0] de daño a Mira!",
+        "Infligió 46 de daño a Training Golem A!","Mira ataca!","Mira recibió 92 de daño!"]);
+    const deadline=Date.now()+12000;
+    while(Date.now()<deadline&&(!qa.done()||!["Please open the wooden gate.","Remember the hotkeys.","Please check the menu."].every(v=>f.posts.some(p=>p.text===v))))await wait(25);
+    assert.ok(qa.done(),"inventory did not finish");
+    for(const v of ["Please open the wooden gate.","Remember the hotkeys.","Please check the menu."])assert.ok(qa.has("en",v),"missing formatted unit "+v);
+    const expected='"Abre la puerta de madera."';
+    let box;
+    do{
+        f.$gameMessage._texts=[quote];box=new c.Window_Message();box.startMessage();
+        if(box._textState.text===expected)break;
+        await wait(25);
+    }while(Date.now()<deadline);
+    assert.equal(box._textState.text,expected);assert.equal(f.$gameMessage._texts[0],quote);
+    const popup=new c.Window_Notification();
+    const target="※\\c[2]Recuerda los atajos.\\c[0] 【M】\n\\I[17] Consulta el menú.";
+    do{
+        popup.drawTextEx(notice);
+        if(popup.drawn[popup.drawn.length-1]===target)break;
+        await wait(25);
+    }while(Date.now()<deadline);
+    assert.equal(popup.drawn[popup.drawn.length-1],target);
+    const use="Training Golem Aused \\I[17] Flash Assault!";
+    const used="Training Golem A usó \\I[17] Asalto relámpago!";
+    do{
+        log.drawTextEx(use);
+        if(log.drawn[log.drawn.length-1]===used)break;
+        await wait(25);
+    }while(Date.now()<deadline);
+    assert.equal(log.drawn[log.drawn.length-1],used);
+    assert.deepEqual(log._lines,raw);
+    const bad='"$gameVariables.setValue(3, 7)"';popup.drawTextEx(bad);
+    assert.equal(popup.drawn[popup.drawn.length-1],bad);
+    log.drawTextEx("Unknown Identity attacks!");
+    assert.equal(log.drawn[log.drawn.length-1],"Unknown Identity attacks!");
+    c.SceneManager._scene=new c.Scene_Name();
+    popup.drawTextEx(quote);assert.equal(popup.drawn[popup.drawn.length-1],quote);
+    assert.ok(!f.posts.some(p=>/Training Golem A|Mira|\\[cI]|【M】|※|gameVariables/.test(p.text)));
+    assert.ok(qa.r42Stats.battle>=6);
+    console.log("IA_R42_BATTLE_LOG_NOTICE_QUOTES_NATIVE_PASS "+(mz?"MZ":"MV"));
+}
+
 async function testR41PlainQuestTxtAndLongNativeJournal(mz){
     const root=path.join("/tmp","servidor-quest-txt-"+(mz?"mz":"mv"));
     const content=mz?root:path.join(root,"www"),data=path.join(content,"data");
@@ -2870,7 +2947,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R41-20261127"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R42-20261127"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -4130,6 +4207,8 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     await testR4EnglishFormatContextAndStaleCache();
     await testR4InkAndCsvReadOnlyPreload();
     await testR4P2NoStaleLateOverlayAndNoArtificialWait();
+    await testR42BattleLogAndFormattedNotices(false);
+    await testR42BattleLogAndFormattedNotices(true);
     await testR41PlainQuestTxtAndLongNativeJournal(false);
     await testR41PlainQuestTxtAndLongNativeJournal(true);
     await testR4P2QuestMetadataAndVisibleRefresh();

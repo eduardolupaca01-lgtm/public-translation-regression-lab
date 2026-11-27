@@ -342,6 +342,17 @@ async function run(){
     assert.equal(JSON.stringify(gameMessage._texts),beforeQuest,"IA_QUEST_TXT_STATE_CHANGED");
     assert.equal(fs.readFileSync(questFile,"utf8"),questRaw,"IA_QUEST_TXT_SOURCE_CHANGED");
     console.log("IA_R41_REAL_OPUS_QUEST_TXT_NATIVE_JOURNAL_PASS "+(isMZ?"MZ":"MV"));
+    // Fresh native quote/hotkey route. The worker must translate the
+    // inner prose, while the original formatting and _texts survive.
+    const formattedNotice='※"Please close the wooden door." 【M】';
+    await until(()=>{
+        gameMessage._texts=[formattedNotice];
+        const w=new Window_Message();w.startMessage();
+        return /cerr/i.test(w.paintedText)&&/puerta/i.test(w.paintedText)&&
+            w.paintedText.indexOf('※"')===0&&w.paintedText.endsWith('" 【M】')&&
+            gameMessage._texts[0]===formattedNotice;
+    },120000,"IA_R42_REAL_OPUS_NOTICE_FORMAT_TIMEOUT");
+    console.log("IA_R42_REAL_OPUS_NOTICE_QUOTES_HOTKEY_PASS "+(isMZ?"MZ":"MV"));
     const preloaded=new Window_Message();
     gameMessage._texts=[csvMessage];preloaded.startMessage();
     assert.equal(preloaded.starts,1,"IA_EXTERNAL_CSV_FIRST_PAINT_RESTARTED");
