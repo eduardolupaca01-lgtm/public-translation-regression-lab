@@ -80,8 +80,12 @@ def run_ruby_session(ruby,game):
                 handle=kernel.OpenProcess(0x00101000,0,pid)
                 if not handle:
                     raise AssertionError("IA_VXACE_WORKER_OBSERVE_FAILED_%d"%ctypes.get_last_error())
-                with observed.open("x",encoding="ascii") as marker:
-                    marker.write("observed\n")
+                # Publish exact LF bytes atomically; Ruby reads in binary mode.
+                # Text-mode writes on Windows would otherwise produce CRLF.
+                pending=observed.with_suffix(".tmp")
+                with pending.open("xb") as marker:
+                    marker.write(b"observed\n")
+                os.replace(pending,observed)
                 break
             time.sleep(.05)
         assert handle,"IA_VXACE_WORKER_OBSERVE_TIMEOUT"
