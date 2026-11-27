@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	vxacePluginBuildID = "VXACE-RGSS3-20261126-E"
+	vxacePluginBuildID = "VXACE-RGSS3-20261126-F"
 	vxaceLibraryName = "RGSS301.dll"
 	vxaceArchiveName = "Game.rgss3a"
 	vxaceMaxArchive  = int64(900 * 1024 * 1024)
@@ -672,7 +672,7 @@ func installedVXAceIdentity(fp vxaceFingerprint, pkg *packageReader) (string, er
 	if helperSHA != receipt.HelperSHA || pluginSHA != receipt.PluginSHA || workerSHA != receipt.WorkerSHA {
 		return "", errors.New("IA_VXACE_INSTALACION_COMPONENTE_MODIFICADO")
 	}
-	return "VXACE-RGSS3-" + receipt.Build + " SHA256=" + targetSHA, nil
+	return receipt.Build + " SHA256=" + targetSHA, nil
 }
 
 func recoverVXAce(fp vxaceFingerprint) error {

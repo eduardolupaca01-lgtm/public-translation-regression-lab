@@ -554,7 +554,7 @@ fn parse_arg(args: &[String], name: &str) -> Result<PathBuf, String> {
 }
 
 
-const RUNTIME_BUILD: &str = "VXACE-RGSS3-20261126-E";
+const RUNTIME_BUILD: &str = "VXACE-RGSS3-20261126-F";
 const SIDECAR: &str = "IA Traductora/.local/Rpg";
 fn safe_runtime_file(root: &Path, relative: &str, maximum: u64) -> Result<PathBuf, String> {
     let mut file = root.to_owned();

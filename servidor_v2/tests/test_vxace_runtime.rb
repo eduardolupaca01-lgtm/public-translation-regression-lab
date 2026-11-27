@@ -117,6 +117,38 @@ def checks(mock)
   puts(mock ? 'IA_VXACE_SYNTHETIC_NATIVE_FIBER_PASS' : 'IA_VXACE_REAL_OPUS_DESKTOP_RUBY_NATIVE_CONTRACT_PASS')
 end
 
+
+# Exercise an uncached native UI phrase using the same real OPUS IPC, then
+# verify it is reused without changing a command symbol or selection.
+class PresentationMenuProbe
+  attr_reader :refreshes, :index
+  def initialize
+    @refreshes=0
+    @index=1
+  end
+  def visible; true; end
+  def disposed?; false; end
+  def refresh; @refreshes+=1; end
+end
+
+def real_ui_checks
+  window=PresentationMenuProbe.new
+  phrase='Please open the window.'
+  first=IATraductoraVXACE.ui_text(window,phrase)
+  deadline=Time.now+50
+  while first==phrase
+    assert(Time.now<deadline,'IA_VXACE_REAL_UI_OPUS_TIMEOUT')
+    IATraductoraVXACE.ui_tick
+    sleep 0.025
+    first=IATraductoraVXACE.ui_text(window,phrase)
+  end
+  assert(first =~ /ventana/i,'native UI OPUS response not Spanish')
+  assert(window.refreshes>0 && window.index==1,'native UI refresh/selection failed')
+  count=IATraductoraVXACE.requests
+  assert(IATraductoraVXACE.ui_text(window,phrase)==first && IATraductoraVXACE.requests==count,'native UI cache failed')
+  puts 'IA_VXACE_REAL_OPUS_NATIVE_MENU_REFRESH_PASS'
+end
+
 if ARGV[0]=='--mock'
   Dir.mktmpdir('ia-vxace-') do |game|
     Dir.chdir(game) do
@@ -181,6 +213,7 @@ elsif ARGV[0]=='--real'
       File.delete(observed)
     end
     checks(false)
+    real_ui_checks
   end
 elsif ARGV[0]=='--launch-probe'
   game=File.realpath(ARGV.fetch(1))
