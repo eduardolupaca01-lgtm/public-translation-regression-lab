@@ -6914,7 +6914,7 @@ function r42NoticeSource(body,typed){
        /^\s*(?:\/\/|(?:var|let|const|function|import|export|return)\b)/i.test(body)||
        /(?:https?:|file:|[A-Za-z0-9_./-]+\.(?:js|json|exe|dll|png|ogg|mp3|txt)\b)/i.test(body))return null;
     var src=languageFor(body)||displaySource(body,"surface");
-    if(src)return src;
+    if(src)return src==="en"?"en":null;
     var normalized=body.replace(/[\u2018\u2019]/g,"'").replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...");
     if(/[^\x20-\x7e]/.test(normalized))return null;
     var words=normalized.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g)||[];
@@ -6927,7 +6927,10 @@ function r42NoticeSource(body,typed){
 var r42Fixed={"Tips":"Consejos","tips":"consejos","Hotkeys":"Atajos","hotkeys":"atajos",
     "Controls":"Controles","controls":"controles","Notice":"Aviso","Notification":"Notificación"};
 function r42NoticePlan(raw,forced){
-    if(!r42Safe(raw)||cte.enabled)return null;
+    // R42 is an English display adapter. Japanese and mixed-language text
+    // must keep the previous name-reading, fixed-notice and cache pipeline.
+    // In particular, the Japanese surname instructions also contain ※.
+    if(!r42Safe(raw)||cte.enabled||isJapanese(raw))return null;
     // Ordinary dialogue keeps the previous adapters. Opt in only for
     // a paired quote envelope, explicit notice/key glyphs or native UI.
     var plain=visibleProse(raw).trim();
@@ -8967,7 +8970,7 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         solCollectLive:solCollectLive,
         questTxt:function(){return {detected:questTxtStats.detected,files:questTxtStats.files,total:questTxtStats.total,omitted:questTxtStats.omitted,lines:questTxtStats.lines,fields:questTxtStats.fields,ignored:questTxtStats.ignored,done:questTxtStats.done};},
         questTxtProject:function(raw){return questTxtProject(raw,null,true);},
-        r42Stats:r42Stats,
+        r42Stats:r42Stats,r42NoticePlan:r42NoticePlan,
         r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
         r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise,
         displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,

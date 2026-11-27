@@ -852,6 +852,14 @@ async function testR42BattleLogAndFormattedNotices(mz){
     }});
     new f.context.Scene_Title().start();
     const c=f.context,qa=c.window.__IA_TRADUCTORA_TEST__,log=new c.Window_BattleLog();
+    // A notice marker does not make a Japanese name instruction English.
+    // Keep the existing native name-setup regression in the suite unchanged.
+    for(const raw of ["※日本語の案内です。","“日本語の案内です。”","※日本語の案内です。\nPlease check the menu."]){
+        assert.equal(qa.r42NoticePlan(raw,false),null,"Japanese/mixed prose must keep the legacy message pipeline");
+        assert.equal(qa.r42NoticePlan(raw,true),null,"custom notice windows must not bypass Japanese handling");
+    }
+    assert.ok(qa.r42NoticePlan(quote,false),"English quote envelope remains enabled");
+    assert.ok(qa.r42NoticePlan(notice,false),"English formatted notice remains enabled");
     const raw=["Training Golem A attacks!","dealt \\c[2]69\\c[0] to Mira damage!",
         "Dealt 46 damage to Training Golem A!","Mira attacks!","Mira took 92 damage!"];
     raw.forEach(v=>log.addText(v));
