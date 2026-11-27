@@ -519,7 +519,7 @@ def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
         raise ValueError("IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO")
 
     archive=root/"Game.rgss3a"
-    if archive.exists():
+    if archive.is_symlink() or archive.exists():
         if archive.is_symlink() or not ordinary(archive,900*1024*1024):
             raise ValueError("IA_VXACE_RGSS3A_INVALIDO")
         with archive.open("rb") as stream:
