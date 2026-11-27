@@ -193,12 +193,13 @@ fn validate_game_root(root: &Path) -> Result<GameLayout, String> {
         return Err(fail("IA_VXACE_DATA_NO_DISPONIBLE"));
     }
     let scripts = data.join("Scripts.rvdata2");
-    if !ordinary(&scripts, MAX_SCRIPT_BYTES) {
-        return Err(fail("IA_VXACE_SCRIPTS_NO_DISPONIBLE"));
-    }
-    let header = read_bounded(&scripts, MAX_SCRIPT_BYTES)?;
-    if header.len() < 2 || header[..2] != [4, 8] {
-        return Err(fail("IA_VXACE_MARSHAL_INVALIDO"));
+    for name in ["Scripts.rvdata2", "System.rvdata2", "MapInfos.rvdata2"] {
+        let file = data.join(name);
+        let limit = if name == "Scripts.rvdata2" { MAX_SCRIPT_BYTES } else { 128 * 1024 * 1024 };
+        let header = read_bounded(&file, limit)?;
+        if header.len() < 2 || header[..2] != [4, 8] {
+            return Err(fail("IA_VXACE_MARSHAL_INVALIDO"));
+        }
     }
     Ok(GameLayout {
         root,
@@ -478,6 +479,12 @@ fn install_game_root(
             .collect();
         if script_indices.len() != 1 {
             return Err(fail("IA_VXACE_SCRIPTS_ARCHIVE_ENTRY_MISSING"));
+        }
+        for required in ["Data/System.rvdata2", "Data/MapInfos.rvdata2"] {
+            let count = records.iter().filter(|entry| entry.decoded_path.replace('\\', "/").eq_ignore_ascii_case(required)).count();
+            if count != 1 {
+                return Err(fail("IA_VXACE_ARCHIVE_DATA_INCOMPLETE"));
+            }
         }
         let index = script_indices[0];
         let original_scripts = read_bounded(&records[index].file, MAX_SCRIPT_BYTES)?;
