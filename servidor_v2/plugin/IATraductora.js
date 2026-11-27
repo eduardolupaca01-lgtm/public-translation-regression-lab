@@ -7731,7 +7731,10 @@ function scanCommonEventsChunked(data,done){
                 var entry=deferred[deferredAt++];
                 priorityCommon(entry[0],entry[1]);worked++;
             }
-            while(at<data.length&&worked<12&&Date.now()-started<7){
+            // Keep the time budget for rendering/input, but allow more cheap
+            // events per slice. A 12-row cap imposed thousands of timer turns
+            // on Windows even when the actual work took less than 7 ms.
+            while(at<data.length&&worked<128&&Date.now()-started<7){
                 var row=data[at++];
                 if(row&&typeof row==="object")scanCommands(row.list,false);
                 worked++;

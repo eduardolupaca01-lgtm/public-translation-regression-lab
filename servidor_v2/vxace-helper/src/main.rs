@@ -10,7 +10,7 @@ use std::{
     collections::HashSet,
     env,
     fs::{self, File, OpenOptions},
-    io::{self, BufReader, BufWriter, Read, Write},
+    io::{self, BufWriter, Read, Write},
     path::{Path, PathBuf},
 };
 use tempfile::Builder as TempDirBuilder;
@@ -217,7 +217,9 @@ fn patch_scripts(original: &[u8], plugin: &str) -> Result<(Vec<u8>, usize), Stri
     if plugin.len() as u64 > MAX_PLUGIN_BYTES || !plugin.contains(PLUGIN_MARKER) {
         return Err(fail("IA_VXACE_PLUGIN_NO_VERIFICADO"));
     }
-    let arena = load(original).map_err(|_| fail("IA_VXACE_MARSHAL_INVALIDO"))?;
+    // The script decoder requires an owned arena; keep all backing bytes
+    // scoped to this operation instead of leaking them for a static borrow.
+    let arena = load(original).map_err(|_| fail("IA_VXACE_MARSHAL_INVALIDO"))?.into_owned();
     let root = arena.root();
     let mut scripts: Scripts =
         Base::decode_scripts(&arena, root, None).map_err(|_| fail("IA_VXACE_SCRIPTS_DECODE_FALLO"))?;
@@ -262,7 +264,7 @@ fn patch_scripts(original: &[u8], plugin: &str) -> Result<(Vec<u8>, usize), Stri
     if encoded.len() as u64 > MAX_SCRIPT_BYTES || encoded.get(..2) != Some(&[4, 8]) {
         return Err(fail("IA_VXACE_MARSHAL_WRITE_INVALIDO"));
     }
-    let check = load(&encoded).map_err(|_| fail("IA_VXACE_MARSHAL_WRITE_INVALIDO"))?;
+    let check = load(&encoded).map_err(|_| fail("IA_VXACE_MARSHAL_WRITE_INVALIDO"))?.into_owned();
     let check_scripts: Scripts =
         Base::decode_scripts(&check, check.root(), None).map_err(|_| fail("IA_VXACE_MARSHAL_WRITE_INVALIDO"))?;
     if check_scripts.numbers != scripts.numbers || check_scripts.names != scripts.names
@@ -635,12 +637,23 @@ mod tests {
         assert_eq!(report["mode"], "loose");
         assert_eq!(fs::read(root.join("Data/Scripts.rvdata2")).unwrap(), original);
         let patched = fs::read(output).unwrap();
-        let arena = load(&patched).unwrap();
+        let arena = load(&patched).unwrap().into_owned();
         let scripts: Scripts = Base::decode_scripts(&arena, arena.root(), None).unwrap();
         let index = scripts.names.iter().position(|name| name == PLUGIN_NAME).unwrap();
         let main = scripts.names.iter().position(|name| name == "Main").unwrap();
         assert!(index < main);
         assert!(scripts.contents[index].contains(PLUGIN_MARKER));
+        // Removing the inserted plugin must recover every original script ID,
+        // name and body in the same order, not just the Main entry.
+        let before = load(&original).unwrap().into_owned();
+        let expected = Base::decode_scripts(&before, before.root(), None).unwrap();
+        let mut restored = scripts;
+        restored.numbers.remove(index);
+        restored.names.remove(index);
+        restored.contents.remove(index);
+        assert_eq!(restored.numbers, expected.numbers);
+        assert_eq!(restored.names, expected.names);
+        assert_eq!(restored.contents, expected.contents);
     }
 
     #[test]
@@ -673,7 +686,8 @@ mod tests {
         let plugin = make_plugin();
         let (once, _) = patch_scripts(&original, &plugin).unwrap();
         let (twice, _) = patch_scripts(&once, &plugin).unwrap();
-        let arena = load(&twice).unwrap();
+        assert_eq!(once, twice, "reinstalling the identical owned script must not rewrite bytes");
+        let arena = load(&twice).unwrap().into_owned();
         let scripts: Scripts = Base::decode_scripts(&arena, arena.root(), None).unwrap();
         assert_eq!(scripts.names.iter().filter(|name| name.as_str() == PLUGIN_NAME).count(), 1);
     }

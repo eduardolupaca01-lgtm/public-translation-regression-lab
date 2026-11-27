@@ -2233,8 +2233,13 @@ async function testInventoryHasNoFortyThousandTextCeiling(){
     const inspect=f.context.window.__IA_TRADUCTORA_TEST__;
     assert.ok(inspect,"opt-in inventory test probe must be installed");
     const deadline=Date.now()+45000;
-    while(!inspect.done()&&Date.now()<deadline)await wait(10);
-    assert.ok(inspect.done(),"full inventory must finish without a candidate-count cutoff");
+    let heartbeats=0;
+    const heartbeat=setInterval(()=>heartbeats++,1);
+    try{
+        while(!inspect.done()&&Date.now()<deadline)await wait(10);
+    }finally{clearInterval(heartbeat);}
+    assert.ok(inspect.done(),"full inventory must finish without a candidate-count cutoff; inventoried="+inspect.inventorySize());
+    assert.ok(heartbeats>2,"large unique inventory must yield to the event loop");
     assert.ok(inspect.inventorySize()>40000,
         "the inventory must exceed the former 40,000-text ceiling");
     assert.ok(inspect.has("en",lastText),
