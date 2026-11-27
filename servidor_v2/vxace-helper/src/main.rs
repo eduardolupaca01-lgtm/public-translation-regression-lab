@@ -103,7 +103,9 @@ fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
 
 fn ini_values(path: &Path) -> Result<(String, String), String> {
     let bytes = read_bounded(path, 64 * 1024)?;
-    let text = std::str::from_utf8(&bytes).map_err(|_| fail("IA_VXACE_GAME_INI_INVALIDO"))?;
+    // Game.ini titles may be ANSI/Shift-JIS. The fields used here are ASCII;
+    // decode lossily so unrelated localized titles cannot reject a valid game.
+    let text = String::from_utf8_lossy(&bytes);
     let mut in_game = false;
     let mut library = None;
     let mut scripts = None;
@@ -135,6 +137,10 @@ fn ini_values(path: &Path) -> Result<(String, String), String> {
     }
     let library = library.ok_or_else(|| fail("IA_VXACE_GAME_INI_INVALIDO"))?;
     let scripts = scripts.unwrap_or_else(|| "Data\\Scripts.rvdata2".to_owned());
+    let normalized_scripts = scripts.replace('\\', "/").trim_start_matches("./").to_ascii_lowercase();
+    if normalized_scripts != "data/scripts.rvdata2" {
+        return Err(fail("IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO"));
+    }
     if Path::new(&library.replace('\\', "/"))
         .file_name()
         .and_then(|name| name.to_str())
@@ -442,7 +448,11 @@ fn install_game_root(
     if plugin_path.is_symlink() || !ordinary(plugin_path, MAX_PLUGIN_BYTES) {
         return Err(fail("IA_VXACE_PLUGIN_NO_VERIFICADO"));
     }
-    let plugin_bytes = read_bounded(plugin_path, MAX_PLUGIN_BYTES)?;
+    let plugin_absolute = plugin_path.canonicalize().map_err(|_| fail("IA_VXACE_PLUGIN_NO_VERIFICADO"))?;
+    if !plugin_absolute.starts_with(&layout.root) {
+        return Err(fail("IA_VXACE_PLUGIN_NO_VERIFICADO"));
+    }
+    let plugin_bytes = read_bounded(&plugin_absolute, MAX_PLUGIN_BYTES)?;
     let plugin = std::str::from_utf8(&plugin_bytes).map_err(|_| fail("IA_VXACE_PLUGIN_ENCODING_INVALIDO"))?;
     if !plugin.contains(PLUGIN_MARKER) {
         return Err(fail("IA_VXACE_PLUGIN_NO_VERIFICADO"));
