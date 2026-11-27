@@ -5,7 +5,15 @@ on:
       - feature/servidor-v2-rpg-vxace-integration-20261126
     paths:
       - ".github/workflows/servidor-v2-real-ia-windows.yml"
+      - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/tests/test_vxace_real_worker.py"
+      - "servidor_v2/tests/test_vxace_runtime.rb"
+      - "servidor_v2/tests/test_vxace_cache_release.py"
   workflow_dispatch:
+
+concurrency:
+  group: servidor-r31-real-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
