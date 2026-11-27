@@ -2810,7 +2810,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R30-20261126"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R35-20261126"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -2919,6 +2919,50 @@ async function testR19CteNativeChoicesAndCatalogs(){
     assert.equal(JSON.stringify(Object.entries(state.files).filter(([name])=>name.startsWith(languages))),snapshots);
     c.$gameMessage.clear();win.active=false;for(let i=0;i<12;i++)win.update();assert.equal(win.starts,1);
 }
+async function testR35SolDataNativeInventory(){
+    const sol=require("./soldata_fixture.js"),root=path.join("/tmp","servidor-qa-sol-日本語"),
+        content=path.join(root,"www"),data=path.join(content,"data"),js=path.join(content,"js"),plugins=path.join(js,"plugins");
+    const state={files:{},dirs:{[data]:true,[js]:true,[plugins]:true}},calls=[];
+    for(const n of ["rpg_core","rpg_managers","rpg_objects","rpg_scenes","rpg_windows"])
+        state.files[path.join(js,n+".js")]="// synthetic MV";
+    const originals={};
+    for(const n of Object.keys(sol.docs).concat(sol.excluded)){
+        const physical=n.endsWith(".json")?n.replace(/\.json$/,".soldata"):n;
+        // ASCII mock bytes have the same opaque size as the binary CI fixture.
+        const p=path.join(data,physical);originals[p]="x".repeat(32);state.files[p]=originals[p];
+    }
+    state.files[path.join(data,"message_data.json")]=JSON.stringify(sol.docs["message_data.json"]);
+    const missing=new Set(["Map369.json"]);
+    const f=fixture(1,{root,fsState:state,testHooks:true,batch:true,configure(c){
+        c.XMLHttpRequest=sol.loader(calls,missing);
+        c.$gameMap={mapId:()=>369};c.$dataMap=null;
+    }});
+    const c=f.context,qa=c.window.__IA_TRADUCTORA_TEST__;
+    new c.Scene_Title().start();
+    const until=async predicate=>{
+        const end=Date.now()+12000;
+        while(Date.now()<end){if(predicate())return;await wait(20);}
+        assert.fail("SOLData contract timeout");
+    };
+    await until(()=>qa.done());
+    const info=qa.soldata();
+    assert.equal(info.detected,true);
+    assert.equal(info.total,10);assert.equal(info.read,9);assert.equal(info.unavailable,1);
+    assert.ok(qa.limited(),"unavailable map must not be called complete");
+    assert.ok(calls.includes("Map369.json")&&calls.includes("Quests.json")&&calls.includes("Achievements.json"));
+    assert.ok(!calls.includes("message_data.json")&&!calls.includes("Test_Actors.json")&&!calls.includes("MapInfos.json"));
+    for(const text of ["The lantern is on the table.","Open the wooden gate.","Good morning.","Find the ancient key.","Please open the window.","Thank you for your help.","Please wait here."])
+        assert.ok(qa.has("en",text),"missing typed source: "+text);
+    assert.ok(!qa.has("en","Never execute this script")&&!qa.has("en","Do not translate this image name")&&!qa.has("en","Alice"));
+    c.$dataMap=sol.docs["Map369.json"];qa.solCollectLive();
+    await until(()=>qa.soldata().unavailable===0);
+    assert.ok(qa.has("ja","橋を渡ってください。"));assert.equal(qa.soldata().live,1);
+    assert.equal(qa.limited(),false);
+    for(const [p,value] of Object.entries(originals))assert.equal(state.files[p],value);
+    assert.equal(state.files[path.join(data,"System.json")],undefined);
+    console.log("IA_SOLDATA_NATIVE_INVENTORY_TYPED_FIELDS_LIVE_FALLBACK_PASS");
+}
+
 async function testR17CompressedNativeMZ(){
     const root=path.join("/tmp","servidor-qa-por-日本語"),data=path.join(root,"data"),js=path.join(root,"js"),pluginsDir=path.join(js,"plugins");
     const state={files:{},dirs:{[data]:true,[js]:true,[pluginsDir]:true}};
@@ -3982,6 +4026,7 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     await testR21CteNativeContextFirstPresentation();
     await testR20CteLargeInventoryAndPhysicalF10();
     await testR19CteNativeChoicesAndCatalogs();
+    await testR35SolDataNativeInventory();
     await testR17CompressedNativeMZ();
     await testR16HexChoicesAndChauPopup();
     await testR15NativeLocaleAndFallback();

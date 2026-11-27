@@ -355,6 +355,34 @@ class MZLayoutTests(unittest.TestCase):
                 (content/"js"/"rpg_core.js").write_text("{}")
                 with self.assertRaises(ValueError):ia.game_root(root)
 
+class SolDataWorkerTests(unittest.TestCase):
+    def test_mv_soldata_root_and_www_no_plaintext(self):
+        for wrapped in (False,True):
+            with self.subTest(wrapped=wrapped),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                content=root/"www" if wrapped else root
+                for name in ("rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"):
+                    file=content/"js"/name
+                    file.parent.mkdir(parents=True,exist_ok=True)
+                    file.write_text("// synthetic MV",encoding="utf8")
+                (content/"js"/"plugins").mkdir()
+                data=content/"data"
+                data.mkdir()
+                for name in ("System","Actors","CommonEvents","MapInfos"):
+                    (data/(name+".soldata")).write_bytes(b"\xa9"*32)
+                self.assertEqual(ia.game_root(root),(root.resolve(),content.resolve()))
+                engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+                engine.mkdir(parents=True)
+                service=ia.Service(root,engine,neural=FakeNeural())
+                try:
+                    self.assertEqual(service.translate("en","Good morning."),"Buen día")
+                finally:
+                    service.close()
+                self.assertFalse((data/"System.json").exists())
+                self.assertEqual((data/"Actors.soldata").read_bytes(),b"\xa9"*32)
+                (data/"Actors.soldata").write_bytes(b"invalid")
+                with self.assertRaises(ValueError):ia.game_root(root)
+
 class CompressedMZWorkerTests(unittest.TestCase):
     def fixture(self,root,wrapped=False):
         content=root/"www" if wrapped else root

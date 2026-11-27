@@ -253,7 +253,41 @@ async function runCteMZ(){
     assert.equal(scene._iaPanel.visible,false);
     console.log("SERVIDOR_V2_R20_REAL_OPUS_CTE_F10_LARGE_INVENTORY_DIALOG_CHOICE_QUEST_PASS");
 }
+async function runSolData(){
+    const sol=require("./soldata_fixture.js"),data=path.join(content,"data"),calls=[];
+    assert.ok(!isMZ&&!fs.existsSync(path.join(data,"System.json")),"IA_SOL_EXPECT_OPAQUE_MV");
+    const originals=new Map();
+    for(const n of fs.readdirSync(data).filter(n=>n.endsWith(".soldata")||n==="message_data.json"))
+        originals.set(n,fs.readFileSync(path.join(data,n)));
+    ctx.XMLHttpRequest=sol.loader(calls,new Set());
+    ctx.window.__IA_TRADUCTORA_TEST_HOOKS__=true;
+    vm.runInNewContext(source,ctx,{filename:"IATraductora.js"});
+    const scene=new Scene_Map();ctx.SceneManager._scene=scene;scene.createAllWindows();
+    const qa=ctx.window.__IA_TRADUCTORA_TEST__;
+    await until(()=>{scene.update();return qa.done();},30000,"IA_SOL_INVENTORY_TIMEOUT");
+    assert.ok(qa.soldata().detected&&qa.soldata().read===qa.soldata().total&&qa.soldata().unavailable===0,"IA_SOL_INVENTORY_INCOMPLETE");
+    assert.ok(calls.includes("Map369.json")&&calls.includes("Quests.json")&&calls.includes("Achievements.json"),"IA_SOL_REMOTE_MAP_OR_TYPED_FIELDS_MISSING");
+    const win=new Window_Base();win.initialize(0,0,600,200);
+    // Native window draw uses the same OPUS/cache as dialogue. Require
+    // actual Spanish from the installed frozen worker, not the loader shim.
+    await until(()=>{
+        scene.update();win.drawText("Please open the window.",0,0,600,"left");
+        return /ventana/i.test(win.drawn[win.drawn.length-1]);
+    },120000,"IA_SOL_REAL_QUEST_TIMEOUT");
+    await until(()=>{
+        win.drawText("Thank you for your help.",0,0,600,"left");
+        return /gracias|ayuda|agradez/i.test(win.drawn[win.drawn.length-1])&&win.drawn[win.drawn.length-1]!=="Thank you for your help.";
+    },120000,"IA_SOL_REAL_PHONE_TIMEOUT");
+    await until(()=>{
+        gameMessage._texts=["橋を渡ってください。"];new Window_Message().startMessage();
+        return /puente/i.test(gameMessage.allText())&&!japanese(gameMessage.allText());
+    },120000,"IA_SOL_REAL_UNVISITED_MAP_TIMEOUT");
+    for(const [n,before] of originals)assert.deepEqual(fs.readFileSync(path.join(data,n)),before,"IA_SOL_ORIGINAL_CHANGED");
+    assert.ok(!fs.existsSync(path.join(data,"System.json")),"IA_SOL_PLAINTEXT_CREATED");
+    console.log("IA_SOLDATA_SIMULATED_NATIVE_LOADER_REAL_OPUS_QUEST_PHONE_MAP_PASS");
+}
 async function run(){
+    if(process.argv[3]==="--soldata")return runSolData();
     if(process.argv[3]==="--cte")return runCteMZ();
     if(process.argv[3]==="--por")return runCompressedMZ();
     // This is the CI-created synthetic acceptance game, not a user's game.

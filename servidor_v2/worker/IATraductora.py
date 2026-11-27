@@ -449,6 +449,29 @@ def por_compressed_database(content: Path) -> bool:
     except (OSError,ValueError,UnicodeError,TypeError,RecursionError):
         return False
 
+def soldata_database(content:Path)->bool:
+    """Recognize the observed MV layout; never interpret the opaque bytes."""
+    js=content/"js"
+    data=content/"data"
+    try:
+        for folder in (content,js,js/"plugins",data):
+            if folder.is_symlink() or not folder.is_dir():
+                return False
+        for name in ("rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"):
+            file=js/name
+            if file.is_symlink() or not file.is_file() or not 0<file.stat().st_size<=8*1024*1024:
+                return False
+        for name in ("System","Actors","CommonEvents","MapInfos"):
+            file=data/(name+".soldata")
+            if file.is_symlink() or not file.is_file():
+                return False
+            size=file.stat().st_size
+            if not 16<=size<=32*1024*1024 or size%16:
+                return False
+        return True
+    except OSError:
+        return False
+
 def game_root(exe_root:Path)->tuple[Path,Path]:
     if exe_root.is_symlink():raise ValueError("IA_JUEGO_NO_VALIDO")
     root=exe_root.resolve(strict=True)
@@ -465,10 +488,13 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
         if not ordinary(js/"plugins.js"):continue
         plain=ordinary(folder/"data"/"System.json")
         if not plain:
-            if not mz:continue
-            if not por_compressed_database(folder):
-                if (folder/"data"/"System.jsono").exists():invalid_compressed=True
-                continue
+            if mv:
+                if not soldata_database(folder):continue
+            elif mz:
+                if not por_compressed_database(folder):
+                    if (folder/"data"/"System.jsono").exists():invalid_compressed=True
+                    continue
+            else:continue
         if mz:
             if any(not ordinary(js/n) for n in ("rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js")):
                 raise ValueError("IA_RPG_RUTAS_AMBIGUAS")

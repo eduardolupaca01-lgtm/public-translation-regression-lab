@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R30-20261126"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R35-20261126"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -20,7 +20,27 @@ try{
 }catch(_){return;}
 if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
-var porCompressed=false,halvaMode=false;
+var porCompressed=false,halvaMode=false,solData=false;
+var solStats={total:0,read:0,unavailable:0,excluded:0,live:0,done:false};
+var solPending=new Map(),solSources=new Map();
+var SOL_LIMIT=32*1024*1024;
+function soldataAt(folder){
+    if(isMZ)return false;
+    var js=path.join(folder,"js"),data=path.join(folder,"data");
+    if(ordinary(path.join(data,"System.json")))return false;
+    if(!directoryUnder(folder,js)||!directoryUnder(folder,data)||
+       !directoryUnder(folder,path.join(js,"plugins")))return false;
+    if(!["rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"].every(function(n){
+        return regularUnder(js,path.join(js,n),8*1024*1024);
+    }))return false;
+    return ["System","Actors","CommonEvents","MapInfos"].every(function(n){
+        var file=path.join(data,n+".soldata");
+        try{
+            var size=fs.lstatSync(file).size;
+            return regularUnder(data,file,SOL_LIMIT)&&size>=16&&size%16===0;
+        }catch(_){return false;}
+    });
+}
 var remNative={detected:false,images:false,configured:false,spanish:new Set(),fallback:new Map()};
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var r26PixiStats={detected:0,rendered:0,requested:0,late:0,rewrapped:0,errors:0};
@@ -160,6 +180,7 @@ function halvaPersistentRoot(found){
 function initPaths(){
     var found=resolveMVGame(),persistent=halvaPersistentRoot(found);
     halvaMode=!!persistent;game=persistent||found.root;content=found.content;porCompressed=porCompressedAt(content);
+    solData=!halvaMode&&soldataAt(content);
     sidecar=path.join(game,"IA Traductora");
     worker=path.join(sidecar,".local","Rpg","engine","IATraductora.exe");
     descriptorFile=halvaMode?path.join(sidecar,".local","Rpg","bridge.json"):path.join(content,"data","IATraductora","bridge.json");
@@ -1834,6 +1855,7 @@ function projectSurface(win,text){
     var external=iavraDisplayValue(text,true);if(external!==null)return external;
     if(typeof Window_Message!=="undefined"&&win instanceof Window_Message)
         return projectMessageSurface(win,text);
+    var sol=solProjected(text);if(sol!==null)return sol;
     if(questSurface(win,text))return questDraw(win,text);
     if(isAmbientSurface(win,text))return projectCaption(text);
     return text;
@@ -2331,7 +2353,7 @@ function nativeDisplayProjection(text,context,bitmap){
     if(tsvExcluded(text))return null;
     var named=csvNameReady(text);if(named!==null)return named;
     var known=csvKnownReady(text);if(known!==null)return known;
-    var source=displaySource(text,context||"surface");if(!source)return null;
+    var source=(solData?solSources.get(text):null)||displaySource(text,context||"surface");if(!source)return null;
     var ready=readyText(source,text);
     if(typeof ready==="string"&&ready!==text&&validTranslation(source,text,ready,true))return ready;
     var owner=bitmap&&bitmap._iaOwnerWindow,key=source+"\u0000"+text;
@@ -7747,6 +7769,210 @@ function scanCommonEventsChunked(data,done){
     }
     slice();
 }
+// SOLData compatibility: use the same logical JSON URL used by the game's
+// own DataManager. The translator neither reads an encryption key nor tries
+// to decode .soldata itself. All JSON stays in memory.
+var solOrder=["System.json","Actors.json","CommonEvents.json","Items.json","Weapons.json",
+    "Armors.json","Skills.json","States.json","Classes.json","Enemies.json","Troops.json",
+    "Quests.json","Achievements.json","message_data.json","news_source.json"];
+function solAllowed(name){return solOrder.indexOf(name)>=0||/^Map\d{3,6}\.json$/.test(name);}
+function solValid(name,doc){
+    if(name==="System.json")return !!doc&&typeof doc==="object"&&!Array.isArray(doc)&&integer(doc.startMapId)&&doc.startMapId>0;
+    if(/^Map\d{3,6}\.json$/.test(name))return !!doc&&Array.isArray(doc.events);
+    return Array.isArray(doc);
+}
+function solReadLogical(dataDir,name,done){
+    var physical=path.join(dataDir,name.replace(/\.json$/,".soldata"));
+    var plain=path.join(dataDir,name),settled=false,timer=null,xhr=null;
+    function finish(raw){
+        if(settled)return;
+        settled=true;if(timer!==null)clearTimeout(timer);
+        if(typeof raw!=="string"||!raw||raw.length>SOL_LIMIT){done(null);return;}
+        if(name==="CommonEvents.json"){
+            parseJsonArrayChunked(raw,function(doc){done(solValid(name,doc)?doc:null);});
+            return;
+        }
+        try{
+            var doc=JSON.parse(raw.replace(/^\uFEFF/,""));
+            done(solValid(name,doc)?doc:null);
+        }catch(_){done(null);}
+    }
+    if(!solAllowed(name)){finish(null);return;}
+    // These two observed auxiliary resources can be normal local JSON.
+    if(/^(?:message_data|news_source)\.json$/.test(name)&&regularUnder(dataDir,plain,SOL_LIMIT)){
+        fs.readFile(plain,"utf8",function(err,raw){finish(err?null:raw);});
+        return;
+    }
+    if(!regularUnder(dataDir,physical,SOL_LIMIT)||typeof XMLHttpRequest!=="function"){
+        finish(null);return;
+    }
+    try{
+        xhr=new XMLHttpRequest();
+        xhr.open("GET","data/"+name,true);
+        if(typeof xhr.overrideMimeType==="function")xhr.overrideMimeType("application/json");
+        xhr.onload=function(){
+            try{finish(xhr.status===0||xhr.status>=200&&xhr.status<300?xhr.responseText:null);}
+            catch(_){finish(null);}
+        };
+        xhr.onerror=xhr.ontimeout=xhr.onabort=function(){finish(null);};
+        xhr.onprogress=function(e){
+            if(e&&e.loaded>SOL_LIMIT){finish(null);try{xhr.abort();}catch(_){}}
+        };
+        // Explicit timer works even for older NW.js local-file XHRs.
+        timer=setTimeout(function(){finish(null);try{xhr.abort();}catch(_){}},5000);
+        xhr.send();
+    }catch(_){finish(null);}
+}
+function solRemember(value,quest){
+    if(typeof value!=="string"||!value.trim()||value.length>1800||actorNames[value]||
+       csvExecutableSyntax(value)||/^(?:https?:|file:|[./\\]|[A-Za-z0-9_./-]+\.(?:json|soldata|png|jpg|ogg|js)$)/i.test(value)||
+       /(?:\\|\x1b)(?:js|eval|script)\b|<script\b/i.test(value))return;
+    var source=languageFor(value)||displaySource(value,"surface")||
+        (r25ClearlySpanish(value)?null:r22EnglishSource(value,"message"));
+    if(!source&&/^[A-Za-z][A-Za-z0-9 .,'!?-]{0,79}$/.test(value)&&!r25ClearlySpanish(value))source="en";
+    if(!source)return;
+    solSources.set(value,source);
+    if(quest)registerQuestText(value);
+    addPrefetch(value,false,source);
+}
+function solExtra(name,doc,done){
+    // Typed display fields only. Never translate quest IDs, scripts, image
+    // paths, conditions, numeric step progress, reward IDs or speaker names.
+    var at=0;
+    if(name==="message_data.json")doc.forEach(function(row){
+        if(row&&typeof row.name==="string"&&row.name.length<=100)actorNames[row.name]=true;
+    });
+    function slice(){
+        var started=Date.now(),worked=0;
+        try{
+            while(at<doc.length&&worked++<128&&Date.now()-started<7){
+                var row=doc[at++];
+                if(name==="news_source.json"){solRemember(row,false);continue;}
+                if(!row||typeof row!=="object")continue;
+                if(name==="Quests.json"){
+                    questStats.records++;
+                    [row.name,row.desc,row.description].forEach(function(v){solRemember(v,true);});
+                    if(Array.isArray(row.steps))row.steps.forEach(function(step){
+                        if(Array.isArray(step))solRemember(step[0],true);
+                    });
+                    if(Array.isArray(row.rewards))row.rewards.forEach(function(reward){
+                        if(Array.isArray(reward)&&reward[0]==="custom")solRemember(reward[2],true);
+                    });
+                }else if(name==="Achievements.json"){
+                    ["name","description","lockedName","lockedDescription"].forEach(function(k){solRemember(row[k],false);});
+                }else if(name==="message_data.json"&&Array.isArray(row.messages)){
+                    row.messages.forEach(function(v){solRemember(v,false);});
+                }
+            }
+        }catch(_){state.errors++;}
+        if(at<doc.length){setTimeout(slice,0);return;}
+        done();
+    }
+    slice();
+}
+function solScanDoc(name,doc,done){
+    if(!solValid(name,doc)){done(false);return;}
+    try{
+        if(/^(?:Quests|Achievements|message_data|news_source)\.json$/.test(name)){
+            solExtra(name,doc,function(){done(true);});return;
+        }
+        if(name==="System.json")initialMapFile="Map"+("000"+doc.startMapId).slice(-Math.max(3,String(doc.startMapId).length))+".json";
+        scanDatabase(name,doc);
+        if(name==="CommonEvents.json"){
+            scanCommonEventsChunked(doc,function(){done(true);});return;
+        }
+        done(true);
+    }catch(_){done(false);}
+}
+function solMark(name,live){
+    solStats.read++;scanStats.files++;
+    if(live){solStats.live++;scanStats.skipped=Math.max(0,scanStats.skipped-1);}
+    solPending.delete(name);solStats.unavailable=solPending.size;
+    scanStats.limited=solPending.size>0;
+}
+function startSolScan(dataDir){
+    fs.readdir(dataDir,function(err,names){
+        if(err||!Array.isArray(names)){
+            scanStats.skipped++;scanStats.limited=true;scanStats.done=true;solStats.done=true;return;
+        }
+        var list=[],seen=new Set();
+        names.forEach(function(n){
+            if(typeof n!=="string")return;
+            var logical=/\.soldata$/.test(n)?n.slice(0,-8)+".json":
+                /^(?:message_data|news_source)\.json$/.test(n)?n:null;
+            if(!logical)return;
+            if(!solAllowed(logical)){if(/\.soldata$/.test(n))solStats.excluded++;return;}
+            if(!seen.has(logical)){seen.add(logical);list.push(logical);}
+        });
+        list.sort(function(a,b){
+            var i=solOrder.indexOf(a),j=solOrder.indexOf(b);
+            return (i<0?99:i)-(j<0?99:j)||a.localeCompare(b);
+        });
+        solStats.total=list.length;scanStats.totalFiles=list.length;
+        var at=0;
+        function next(){
+            if(at>=list.length){
+                solStats.done=true;
+                scanStats.limited=solPending.size>0;
+                scanQuestParameters(function(){scanExtraSources(dataDir,function(){scanStats.done=true;nextPrefetch();});});
+                return;
+            }
+            var name=list[at++];
+            solReadLogical(dataDir,name,function(doc){
+                solScanDoc(name,doc,function(ok){
+                    if(ok){
+                        solMark(name,false);
+                        if(name==="System.json"&&initialMapFile){
+                            var index=list.indexOf(initialMapFile);
+                            if(index>=at){list.splice(index,1);list.splice(at,0,initialMapFile);}
+                        }
+                    }else{
+                        solPending.set(name,true);solStats.unavailable=solPending.size;
+                        scanStats.skipped++;scanStats.limited=true;
+                    }
+                    nextPrefetch();setTimeout(next,0);
+                });
+            });
+        }
+        next();
+    });
+}
+// If the game's native route differs from XHR, recover already loaded
+// objects without calling DataManager.loadDataFile or changing globals,
+// map load state, event execution or saves.
+var solLiveBusy=false;
+function solCollectLive(){
+    if(!solData||!solStats.done||solLiveBusy||!solPending.size||typeof window==="undefined")return;
+    var entries=Array.from(solPending.keys());
+    for(var i=0;i<entries.length;i++){
+        var name=entries[i],doc=null;
+        if(/^Map\d{3,6}\.json$/.test(name)){
+            if(typeof $gameMap!=="undefined"&&$gameMap&&typeof $gameMap.mapId==="function"&&
+               Number(name.slice(3,-5))===$gameMap.mapId()&&typeof $dataMap!=="undefined")doc=$dataMap;
+        }else if(name==="message_data.json")doc=window.$gameDhoomMessageData;
+        else if(name!=="Achievements.json"&&name!=="news_source.json")doc=window["$data"+name.slice(0,-5)];
+        if(!solValid(name,doc))continue;
+        solLiveBusy=true;
+        (function(logical,value){
+            solScanDoc(logical,value,function(ok){
+                if(ok)solMark(logical,true);
+                solLiveBusy=false;nextPrefetch();
+            });
+        })(name,doc);
+        return;
+    }
+}
+function solLabel(){
+    return "SOLData: "+solStats.read+"/"+solStats.total+" legibles · "+solStats.unavailable+" pendientes · "+solStats.excluded+" no textuales/prueba";
+}
+function solProjected(raw){
+    if(!solData||typeof raw!=="string"||actorNames[raw]||inputFormActive()||identityDrawDepth)return null;
+    var source=solSources.get(raw);if(!source)return null;
+    var ready=readyText(source,raw);
+    if(ready!==null)return ready;
+    firstViewRequest(source,raw);return null;
+}
+
 function startFullScan(){
     if(cte.enabled){startCteScan();return;}
     if(scanStarted||!content||(externalTables()&&!cacheReadDone)||(iavra.detected&&!iavra.done))return;
@@ -7760,6 +7986,7 @@ function startFullScan(){
         var relative=path.relative(content,fs.realpathSync(dataDir));
         if(relative!=="data")throw Error("unexpected MV data path");
     }catch(_){scanStats.skipped++;scanStats.done=true;return;}
+    if(solData){startSolScan(dataDir);return;}
     fs.readdir(dataDir,function(error,names){
         if(error){scanStats.skipped++;scanStats.done=true;return;}
         var order=["System.json","Actors.json","CommonEvents.json","Items.json",
@@ -8078,7 +8305,7 @@ function cteHudRefresh(){
         "Solicitudes: "+state.requested+" · Recibidas: "+state.received+" · Mostradas: "+state.shown,
         "Caché: "+diskStats.loaded+" cargadas · "+diskStats.saved+" guardadas",
         "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+" · Omitidos: "+scanStats.skipped,
-        cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos":"Interfaz MV/MZ · memoria OPUS",
+        cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos":solData?solLabel():"Interfaz MV/MZ · memoria OPUS",
         cte.enabled?"Idioma: "+cte.locale.status+" · Contexto: "+cte.contextHits+" · TextState: "+cte.textStates:"Etiquetas y diálogos nativos",
         "Textos listos: "+scanStats.ready+"/"+discovered.size+" · Fallos: "+scanStats.rejected,
         "Errores: "+state.errors+" · Avisos CTE: "+cte.errors,
@@ -8171,7 +8398,7 @@ function setupHud(){
             "RSP: "+r27RspStats.rendered+" repintados · "+r27RspStats.requested+" solicitudes · "+r27RspStats.skipped+" omitidos",
             "NPC: "+r28PartyTalkStats.rendered+" burbujas traducidas · "+r28PartyTalkStats.lines+" líneas detectadas",
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
-            "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
+            "Errores: "+state.errors+"   "+(solData?solLabel():scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
             cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.errors+" avisos":
             iavra.detected?(iavra.por?"JSONO externo: ":"JSON externo: ")+iavra.files+" archivos · "+iavra.strings+" textos · "+iavra.shown+" mostrados":
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
@@ -8243,7 +8470,7 @@ try{
     state.phase="CONEXION";loadIavraCatalogs(function(){startFullScan();nextPrefetch();});startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.
-        if(runtimeActivated)try{startFullScan();collectMapText();}catch(_){state.errors++;}
+        if(runtimeActivated)try{startFullScan();collectMapText();solCollectLive();}catch(_){state.errors++;}
         queueFlush();nextPrefetch();
         try{cteHudRefresh();}catch(_){state.errors++;}
     },750);
@@ -8260,6 +8487,8 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         has:function(source,text){return discovered.has(source+"\u0000"+text);},
         done:function(){return scanStats.done;},
         limited:function(){return scanStats.limited;},
+        soldata:function(){return {detected:solData,total:solStats.total,read:solStats.read,unavailable:solStats.unavailable,excluded:solStats.excluded,live:solStats.live,done:solStats.done};},
+        solCollectLive:solCollectLive,
         r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
         r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise,
         displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,

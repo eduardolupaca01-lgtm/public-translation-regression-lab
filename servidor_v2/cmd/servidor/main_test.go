@@ -377,6 +377,38 @@ func TestMZDetectionAndInstallation(t *testing.T){
  }
 }
 
+func TestMVSolDataDetectionInstallRestore(t *testing.T){
+ for _,wrapped:=range []bool{false,true}{
+  root:=filepath.Join(t.TempDir(),"RPG SOLData 日本語")
+  content:=root;if wrapped{content=filepath.Join(root,"www")}
+  js:=filepath.Join(content,"js");data:=filepath.Join(content,"data")
+  if err:=os.MkdirAll(filepath.Join(js,"plugins"),0700);err!=nil{t.Fatal(err)}
+  if err:=os.MkdirAll(data,0700);err!=nil{t.Fatal(err)}
+  put:=func(p string,v []byte){t.Helper();if err:=os.WriteFile(p,v,0600);err!=nil{t.Fatal(err)}}
+  for _,n:=range []string{"rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js"}{put(filepath.Join(js,n),[]byte("// synthetic MV"))}
+  original:=[]byte("var $plugins = [];")
+  registry:=filepath.Join(js,"plugins.js");put(registry,original)
+  exe:=filepath.Join(root,"SOL.exe");put(exe,[]byte("fixture"))
+  for _,n:=range []string{"System","Actors","CommonEvents","MapInfos"}{put(filepath.Join(data,n+".soldata"),bytes.Repeat([]byte{0xa9},32))}
+  gotRoot,gotContent,err:=detectGame(exe)
+  if err!=nil||gotRoot!=root||gotContent!=content||engineAt(content)!="MV"{t.Fatalf("SOLData profile: %v",err)}
+  pkg,err:=readPackage(fakePackage(t));if err!=nil{t.Fatal(err)}
+  if err=Install(exe,pkg);err!=nil{t.Fatal(err)}
+  if _,err=installedPackageIdentity(exe,pkg);err!=nil{t.Fatal(err)}
+  if err=RecoverGame(exe);err!=nil{t.Fatal(err)}
+  pkg.Close()
+  recovered,_:=os.ReadFile(registry)
+  if !bytes.Equal(original,recovered){t.Fatal("registry changed")}
+  if ordinary(filepath.Join(data,"System.json")){t.Fatal("plaintext database created")}
+  for _,n:=range []string{"System","Actors","CommonEvents","MapInfos"}{
+   b,e:=os.ReadFile(filepath.Join(data,n+".soldata"))
+   if e!=nil||!bytes.Equal(b,bytes.Repeat([]byte{0xa9},32)){t.Fatal("opaque resource changed")}
+  }
+  put(filepath.Join(data,"Actors.soldata"),[]byte("invalid"))
+  if _,_,err=detectGame(exe);err==nil{t.Fatal("incomplete SOLData fingerprint accepted")}
+ }
+}
+
 func TestMZCompressedNativeDetectionAndInstallation(t *testing.T){
  for _,wrapped:=range []bool{false,true}{
   root:=filepath.Join(t.TempDir(),"RPG MZ compressed 日本語")

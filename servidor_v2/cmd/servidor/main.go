@@ -25,9 +25,9 @@ const (
  packageMagic="SERVIDOR2ZIPSHA1" // exactamente 16 bytes
  brandFolder="IA Traductora"
  pluginName="IATraductora"
- // Keep the MV/MZ plugin identity tied to the unchanged JS payload.
- installerBuildID="RPG-MVMZ-R30-20261126"
- packageBuildID="RPG-MVMZ-VXACE-R34-20261126"
+ // The JS payload now includes the read-only SOLData runtime adapter.
+ installerBuildID="RPG-MVMZ-R35-20261126"
+ packageBuildID="RPG-MVMZ-VXACE-R35-20261126"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -155,6 +155,31 @@ func porCompressedDatabase(content string) bool {
  for _,c:=range body{if !((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='+'||c=='/'){return false}}
  return true
 }
+// SOLData is an observed MV deployment profile, not proof that an
+// arbitrary binary file is decryptable. The game owns its loader.
+// Require the complete MV core, normal directories and four consistent
+// opaque database markers. No decoder, key, extraction or rename.
+func soldataDatabase(content string) bool {
+ js:=filepath.Join(content,"js")
+ data:=filepath.Join(content,"data")
+ for _,dir:=range []string{content,js,filepath.Join(js,"plugins"),data}{
+  st,err:=os.Lstat(dir)
+  if err!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{return false}
+ }
+ for _,n:=range []string{"rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"}{
+  f:=filepath.Join(js,n)
+  if !ordinary(f){return false}
+  st,err:=os.Stat(f)
+  if err!=nil||st.Size()<=0||st.Size()>8*1024*1024{return false}
+ }
+ for _,n:=range []string{"System","Actors","CommonEvents","MapInfos"}{
+  f:=filepath.Join(data,n+".soldata")
+  if !ordinary(f){return false}
+  st,err:=os.Stat(f)
+  if err!=nil||st.Size()<16||st.Size()>32*1024*1024||st.Size()%16!=0{return false}
+ }
+ return true
+}
 // Detect deployed engines by original file markers, without running game code.
 func engineAt(content string) string {
  js:=filepath.Join(content,"js")
@@ -163,7 +188,7 @@ func engineAt(content string) string {
  if mv&&mz{return "AMBIGUOUS"}
  if !ordinary(filepath.Join(js,"plugins.js")){return ""}
  plain:=ordinary(filepath.Join(content,"data","System.json"))
- if !plain&&!(mz&&porCompressedDatabase(content)){return ""}
+ if !plain&&!(mz&&porCompressedDatabase(content))&&!(mv&&soldataDatabase(content)){return ""}
  if mz {
   for _,n:=range []string{"rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"}{
    if !ordinary(filepath.Join(js,n)){return "AMBIGUOUS"}
