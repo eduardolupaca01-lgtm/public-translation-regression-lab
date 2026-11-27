@@ -125,7 +125,10 @@ func mvnwbinProfile(root,content string)(bool,error){
   Name string `json:"name"`
   Node *bool `json:"nodejs"`
  }
- if json.Unmarshal(raw,&desc)!=nil||strings.TrimSpace(desc.Name)==""||desc.Node!=nil&&!*desc.Node{return true,invalid}
+ if json.Unmarshal(raw,&desc)!=nil||desc.Node!=nil&&!*desc.Node{return true,invalid}
+ // Some deployed games leave the application name empty. That is not
+ // evidence of a different engine. Diagnose a missing extension first;
+ // keep the nonempty-name requirement for the installable lab profile.
  want:="index.html"
  if !strings.EqualFold(root,content){want="www/index.html"}
  if strings.TrimPrefix(desc.Main,"./")!=want{return true,invalid}
@@ -134,6 +137,7 @@ func mvnwbinProfile(root,content string)(bool,error){
  // already load the independent plaintext registry after both binaries.
  at:=pos["js/plugins.js"]
  if at*100<=pluginsAt||at>=pos["js/main.js"]{return true,errors.New(mvnwbinExtensionUnavailable)}
+ if strings.TrimSpace(desc.Name)==""{return true,invalid}
  registry,e:=mvnwbinRead(filepath.Join(js,"plugins.js"),4*1024*1024)
  if e!=nil{return true,errors.New(mvnwbinExtensionUnavailable)}
  first:=strings.SplitN(string(registry),"\n",2)[0]

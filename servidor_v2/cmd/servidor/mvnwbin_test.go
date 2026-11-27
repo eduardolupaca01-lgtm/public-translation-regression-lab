@@ -85,6 +85,26 @@ func TestR44NWBinOpaqueGameRemainsReadOnly(t *testing.T){
  if _,e=os.Lstat(filepath.Join(root,"www","js","plugins.js"));!os.IsNotExist(e){t.Fatal("fabricated plugin registry")}
  mvnwbinSame(t,snapshot)
 }
+func TestR44NWBinEmptyManifestNameDoesNotEnableInstallation(t *testing.T){
+ // A blank name in a deployed NWBin app is not a reason to misclassify
+ // its engine. It does not authorize adding a new loader either.
+ for _,approved:=range []bool{false,true}{
+  t.Run(fmt.Sprintf("registry_%t",approved),func(t *testing.T){
+   root:=mvnwbinFixture(t,approved)
+   exe:=filepath.Join(root,"Game.exe")
+   mvnwbinWrite(t,filepath.Join(root,"package.json"),`{"name":"","main":"www/index.html","window":{"width":816,"height":624}}`)
+   before:=mvnwbinSnapshot(t,root)
+   want:=mvnwbinExtensionUnavailable
+   if approved{want=mvnwbinInvalid}
+   pkg,e:=readPackage(fakePackage(t));if e!=nil{t.Fatal(e)};defer pkg.Close()
+   if _,e=detectInstallTarget(exe);e==nil||e.Error()!=want{t.Fatalf("incorrect diagnostic: %v; want %s",e,want)}
+   if e=Install(exe,pkg);e==nil||e.Error()!=want{t.Fatalf("unsafe install: %v",e)}
+   if _,e=os.Lstat(filepath.Join(root,"IA Traductora"));!os.IsNotExist(e){t.Fatal("sidecar created")}
+   mvnwbinSame(t,before)
+  })
+ }
+}
+
 func TestR44NWBinPublisherRegistryInstallAndRestore(t *testing.T){
  root:=mvnwbinFixture(t,true)
  exe:=filepath.Join(root,"Game.exe")
