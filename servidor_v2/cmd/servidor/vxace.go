@@ -327,10 +327,10 @@ func vxaceCopyFileNew(source, destination string) error {
 	if !ordinary(source) {
 		return errors.New("IA_VXACE_BACKUP_SOURCE_INVALID")
 	}
-	if present, err := iaPathIsPresent(destination); err != nil {
-		return err
-	} else if present {
+	if _, err := os.Lstat(destination); err == nil {
 		return errors.New("IA_VXACE_BACKUP_EXISTS")
+	} else if !os.IsNotExist(err) {
+		return errors.New("IA_VXACE_BACKUP_INSPECT_FAILED")
 	}
 	input, err := os.Open(source)
 	if err != nil {
@@ -443,14 +443,14 @@ func installVXAce(fp vxaceFingerprint, pkg *packageReader) error {
 	if pkg == nil || pkg.files["vxace-helper.exe"] == nil || pkg.files["vxace/TenshixgameVXACELive.rb"] == nil {
 		return errors.New("IA_VXACE_PAQUETE_INCOMPLETO")
 	}
-	sidecar, err := prepareSidecar(fp.Root, pkg)
+	sidecar, err := iaPrepareAndPublishSidecar(fp.Root, pkg)
 	if err != nil {
 		return err
 	}
 	if err = iaCheckEngine(sidecar, pkg); err != nil {
 		return err
 	}
-	_, engine, helper, plugin, worker, receiptFile, installDir := vxaceSidecarPaths(fp.Root)
+	_, _, helper, plugin, worker, receiptFile, installDir := vxaceSidecarPaths(fp.Root)
 	if !ordinary(helper) || !ordinary(plugin) || !ordinary(worker) {
 		return errors.New("IA_VXACE_COMPONENTES_NO_INSTALADOS")
 	}
@@ -625,7 +625,7 @@ func installedVXAceIdentity(fp vxaceFingerprint, pkg *packageReader) (string, er
 }
 
 func recoverVXAce(fp vxaceFingerprint) error {
-	sidecar, _, _, _, _, receiptFile, installDir := vxaceSidecarPaths(fp.Root)
+	_, _, _, _, _, receiptFile, installDir := vxaceSidecarPaths(fp.Root)
 	receipt, ok, err := vxaceReadReceipt(receiptFile)
 	if err != nil || !ok {
 		return errors.New("IA_VXACE_RECIBO_NO_DISPONIBLE")
