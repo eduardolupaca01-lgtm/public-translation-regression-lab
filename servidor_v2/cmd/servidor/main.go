@@ -25,7 +25,9 @@ const (
  packageMagic="SERVIDOR2ZIPSHA1" // exactamente 16 bytes
  brandFolder="IA Traductora"
  pluginName="IATraductora"
- installerBuildID="RPG-MVMZ-VXACE-R32-20261126"
+ // Keep the MV/MZ plugin identity tied to the unchanged JS payload.
+ installerBuildID="RPG-MVMZ-R30-20261126"
+ packageBuildID="RPG-MVMZ-VXACE-R32-20261126"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -400,7 +402,7 @@ func main(){
   if *exe==""||*recoverGame{fmt.Fprintln(os.Stderr,"IA_INSPECCION_GAME_EXE_REQUERIDO");os.Exit(1)}
   kind,e:=detectInstallTarget(*exe)
   if e!=nil{fmt.Println(e.Error());os.Exit(2)}
-  fmt.Println("IA_RPG_RECURSOS_ACCESIBLES motor="+kind+" version="+installerBuildID)
+  fmt.Println("IA_RPG_RECURSOS_ACCESIBLES motor="+kind+" version="+packageBuildID)
   return
  }
  if *recoverGame{

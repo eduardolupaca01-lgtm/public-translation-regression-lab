@@ -430,7 +430,7 @@ func runUI(){
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0)
-    iaLog("[IA_TRADUCTORA_LISTA] "+installerBuildID+". MV/MZ/VX Ace: instalación. MZ comprimida y Halva: compatibilidad experimental. Motor local OPUS.")
+    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace: instalación. MZ comprimida y Halva: compatibilidad experimental. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {
