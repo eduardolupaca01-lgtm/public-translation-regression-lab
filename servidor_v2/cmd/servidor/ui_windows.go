@@ -170,6 +170,12 @@ func iaSafeInstallCode(message string)string{
 }
 func iaFriendlyInstall(code string)string{
     switch code{
+    case mvnwbinManifestMissing:
+        return "RPG Maker MV con NWBin detectado. Falta verificar package.json; no se modificó el juego."
+    case mvnwbinExtensionUnavailable:
+        return "MV con complementos binarios detectado. Se necesita un registro de complementos autorizado por el juego. Binarios y arranque intactos."
+    case mvnwbinInvalid:
+        return "MV/NWBin detectado, pero su arranque o recursos no coinciden con el perfil verificado. Juego intacto."
     case "IA_RPGXP_PAQUETE_INCOMPLETO":
         return "Este paquete no contiene el traductor XP. Usa Servidor R43 de prueba."
     case "IA_RPGXP_OPERACION_ACTIVA_O_PENDIENTE","IA_RPGXP_SESION_ACTIVA_O_PENDIENTE":
@@ -473,6 +479,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                     if code==cookToolPackedCode||code==cookToolUnsafeCode{
                         iaLog("[IA_RPG_HALVA_DETECTADO] "+e.Error())
                         iaSet(ui.status,iaFriendlyInstall(code))
+                    }else if strings.HasPrefix(code,"IA_MV_NWBIN_"){
+                        iaLog("[IA_MV_NWBIN_DETECTADO] "+code)
+                        iaSet(ui.status,iaFriendlyInstall(code))
                     }else if strings.HasPrefix(code,"IA_RPGXP_"){
                         iaLog("[IA_RPGXP_DETECTADO] "+code)
                         iaSet(ui.status,iaFriendlyInstall(code))
@@ -488,6 +497,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                     iaEnableWindow.Call(ui.install,1);iaEnableWindow.Call(ui.recoverBtn,1)
                     iaSet(ui.status,"Juego "+kind+" seleccionado. Listo para instalar.")
                     iaLog("[IA_EXE_SELECCIONADO] Motor "+kind+" verificado.")
+                    if kind==mvnwbinKind{
+                        iaLog("[IA_MV_NWBIN_ADDONS] Registro adicional ya previsto en el arranque. No se sustituyen binarios ni index.html.")
+                    }
                     if kind==rpgxpTrialKind{
                         iaLog("[IA_RPGXP_DETECTADO] RGSS1: instalación de prueba, respaldo de Scripts.rxdata y recuperación disponibles.")
                         iaSet(ui.status,"RPG Maker XP detectado. Instala únicamente en una copia cerrada.")
@@ -576,11 +588,11 @@ func runUI(){
     reg,_,_:=iaRegClass.Call(uintptr(unsafe.Pointer(&class)))
     if reg==0{fmt.Fprintln(os.Stderr,"IA_VENTANA_NO_REGISTRADA");return}
     hwnd,_,_:=iaCreateWindow.Call(0,uintptr(unsafe.Pointer(className)),
-        uintptr(unsafe.Pointer(iaUTF16("Servidor R43 — prueba"))),iaWSOverlappedWindow|iaWSVisible,
+        uintptr(unsafe.Pointer(iaUTF16("Servidor R44 — laboratorio"))),iaWSOverlappedWindow|iaWSVisible,
         100,60,1050,760,0,0,instance,0)
     if hwnd==0{fmt.Fprintln(os.Stderr,"IA_NO_SE_PUEDE_ABRIR_VENTANA");return}
     ui:=&iaCurrentUI;ui.hwnd=hwnd
-    ui.titleLabel=iaControl(hwnd,"STATIC","Servidor R43",0,30,20,360,55,0)
+    ui.titleLabel=iaControl(hwnd,"STATIC","Servidor R44",0,30,20,360,55,0)
     ui.sectionLabel=iaControl(hwnd,"STATIC","RPG",0,233,123,250,40,0)
     for i,label:=range []string{"01","RPG","WEB","04","05","+"}{
         style:=uint32(0)
@@ -605,7 +617,7 @@ func runUI(){
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
-    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental y SOLData. Botón WEB: seleccionar EXE original o index.html extraído y crear copia. Motor local OPUS.")
+    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental, SOLData y diagnóstico MV/NWBin. Botón WEB: seleccionar EXE original o index.html extraído y crear copia. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

@@ -139,7 +139,10 @@ func detectInstallTarget(gameEXE string)(string,error){
   return "VX Ace",nil
  }
  root,content,e:=detectGame(gameEXE)
- if e==nil{return engineAt(content),nil}
+ if e==nil{
+  if matched,err:=mvnwbinProfile(root,content);matched&&err==nil{return mvnwbinKind,nil}
+  return engineAt(content),nil
+ }
  if e.Error()==rpgxpLooseRouteCode{return rpgxpTrialKind,nil}
  if packed,ok:=halvaRootFromDetection(gameEXE,e);ok{
   root=packed

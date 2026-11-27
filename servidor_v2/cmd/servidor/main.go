@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R42-20261127"
- packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R43-COBERTURA"
+ packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-NWBIN-LAB"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -216,6 +216,8 @@ func detectGame(gameEXE string)(string,string,error){
  // Packed Cook Tool roots must not be mistaken for a loose RPG project.
  // The launch cache can be regenerated or removed by the vendor.
  if e:=cookToolPreflight(root);e!=nil{return "","",e}
+ // Compiled plugin layouts are not ordinary plaintext plugin registries.
+ if e:=mvnwbinGate(root);e!=nil{return "","",e}
  var chosen string
  for _,dir:=range []string{filepath.Join(root,"www"),root}{
   kind:=engineAt(dir)

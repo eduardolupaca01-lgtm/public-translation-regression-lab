@@ -1,0 +1,53 @@
+name: Servidor R44 - genuine NWBin laboratory
+on:
+  push:
+    branches:
+      - feature/servidor-r44-mv-nwbin
+    paths:
+      - 'servidor_v2/cmd/servidor/**'
+      - '.github/workflows/servidor-r44-nwbin.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: servidor-r44-nwbin-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-nwbin:
+    name: NW.js 0.48.4 real compiled loader and reversible add-on
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.23.2'
+          cache-dependency-path: servidor_v2/go.sum
+      - name: Verify narrow profile and unchanged original files
+        working-directory: servidor_v2
+        run: go test ./cmd/servidor -run 'TestR44NWBin' -count=1 -v
+      - name: Obtain official SDK and verify published SHA256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $version='0.48.4'
+          $name="nwjs-sdk-v$version-win-x64.zip"
+          $base="https://dl.nwjs.io/v$version"
+          $archive=Join-Path $env:RUNNER_TEMP $name
+          $sums=Join-Path $env:RUNNER_TEMP "NWJS-SHASUMS256.txt"
+          Invoke-WebRequest "$base/SHASUMS256.txt" -OutFile $sums -TimeoutSec 120
+          $pattern='^([A-Fa-f0-9]{64})\s+\*?'+[regex]::Escape($name)+'\s*$'
+          $matches=@(Get-Content -LiteralPath $sums | Where-Object { $_ -match $pattern })
+          if ($matches.Count -ne 1) { throw "IA_NWBIN_OFFICIAL_SHA_MISSING" }
+          $want=([regex]::Match($matches[0],$pattern)).Groups[1].Value.ToLowerInvariant()
+          Invoke-WebRequest "$base/$name" -OutFile $archive -TimeoutSec 360
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $want) { throw "IA_NWBIN_SDK_SHA_MISMATCH" }
+          $dir=Join-Path $env:RUNNER_TEMP "r44-sdk"
+          Expand-Archive -LiteralPath $archive -DestinationPath $dir
+          $sdk=Join-Path $dir "nwjs-sdk-v$version-win-x64"
+          if (!(Test-Path -LiteralPath (Join-Path $sdk "nw.exe")) -or !(Test-Path -LiteralPath (Join-Path $sdk "nwjc.exe"))) { throw "IA_NWBIN_SDK_INCOMPLETE" }
+          "IA_R44_NWBIN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Compile two authored NWBin files and run native loader
+        working-directory: servidor_v2
+        run: go test ./cmd/servidor -run '^TestR44NWBinNativeLoader$' -count=1 -v
+      # No game files, downloaded SDK, model payload or candidate EXE published.
