@@ -1,4 +1,4 @@
-name: Servidor R31 candidate - MV MZ VX Ace - real OPUS and clean shutdown
+name: Servidor R31 candidate - MV MZ VX Ace - real OPUS and complete onefile shutdown
 on:
   push:
     branches:
@@ -9,6 +9,8 @@ on:
       - "servidor_v2/tests/test_vxace_real_worker.py"
       - "servidor_v2/tests/test_vxace_runtime.rb"
       - "servidor_v2/tests/test_vxace_cache_release.py"
+      - "servidor_v2/vxace-helper/src/main.rs"
+      - "servidor_v2/tests/probe_vxace_launch.py"
   workflow_dispatch:
 
 concurrency:

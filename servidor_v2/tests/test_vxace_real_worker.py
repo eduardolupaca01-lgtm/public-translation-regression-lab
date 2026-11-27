@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Windows candidate acceptance on generated resources + desktop Ruby, not RGSS3."""
-import argparse, ctypes, hashlib, os, re, sqlite3, subprocess, tempfile, time
+import argparse, ctypes, hashlib, json, os, re, sqlite3, subprocess, tempfile, time
 from contextlib import closing
 from pathlib import Path
 
@@ -47,11 +47,49 @@ def session_worker_pid(descriptor,parent):
         pass
     return None
 
-def run_ruby_session(ruby,game):
-    """Observe the worker handle while the fixture is alive, then wait for exit.
+def bootloader_pid(receipt,parent):
+    try:
+        if receipt.is_symlink() or receipt.stat().st_size>1024:
+            return None
+        data=json.loads(receipt.read_text("ascii"))
+        if (isinstance(data,dict) and data.get("schema")=="ia-vxace-process-v1"
+                and type(data.get("game_pid")) is int and data["game_pid"]==parent
+                and type(data.get("bootloader_pid")) is int
+                and 0<data["bootloader_pid"]<=0xffffffff):
+            return data["bootloader_pid"]
+    except (OSError,ValueError,UnicodeError):
+        pass
+    return None
 
-    The optional QA handshake keeps Ruby alive until the observer has captured
-    the process handle. No PID-based killing and no cleanup-error suppression.
+def observe_executable(kernel,pid,expected):
+    """Obtain a handle while the game is alive and verify its executable."""
+    handle=kernel.OpenProcess(0x00101000,0,pid)
+    if not handle:
+        raise AssertionError("IA_VXACE_PROCESS_OBSERVE_FAILED_%d"%ctypes.get_last_error())
+    try:
+        name=ctypes.create_unicode_buffer(32768)
+        size=ctypes.c_uint32(len(name))
+        assert kernel.QueryFullProcessImageNameW(handle,0,name,ctypes.byref(size)), \
+            "IA_VXACE_PROCESS_IMAGE_UNAVAILABLE"
+        assert Path(name.value).resolve()==expected.resolve(),"IA_VXACE_PROCESS_IMAGE_MISMATCH"
+        return handle
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+
+def wait_clean_exit(kernel,handle,role):
+    assert kernel.WaitForSingleObject(handle,35000)==0, \
+        "IA_VXACE_%s_DID_NOT_EXIT"%role
+    result=ctypes.c_uint32()
+    assert kernel.GetExitCodeProcess(handle,ctypes.byref(result)), \
+        "IA_VXACE_%s_EXIT_CODE_UNAVAILABLE"%role
+    assert result.value==0,"IA_VXACE_%s_EXIT_%d"%(role,result.value)
+
+def run_ruby_session(ruby,game):
+    """Observe both onefile processes while Ruby is alive, then require exit.
+
+    The handshake only lets Ruby continue after both process handles are open.
+    No PID-based killing or cleanup-error suppression.
     """
     rpg=game/"IA Traductora"/".local"/"Rpg"
     descriptor=rpg/"vxace-session.txt"
@@ -64,22 +102,30 @@ def run_ruby_session(ruby,game):
     kernel.WaitForSingleObject.restype=ctypes.c_uint32
     kernel.GetExitCodeProcess.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_uint32)]
     kernel.GetExitCodeProcess.restype=ctypes.c_int
+    kernel.QueryFullProcessImageNameW.argtypes=[ctypes.c_void_p,ctypes.c_uint32,
+                                               ctypes.c_wchar_p,ctypes.POINTER(ctypes.c_uint32)]
+    kernel.QueryFullProcessImageNameW.restype=ctypes.c_int
     kernel.CloseHandle.argtypes=[ctypes.c_void_p]
     kernel.CloseHandle.restype=ctypes.c_int
     process=subprocess.Popen(["ruby",str(ruby),"--real",str(game),"--observe-worker-exit"])
     observed=rpg/("qa-observed-%d.txt"%process.pid)
-    handle=None
+    receipt=rpg/("vxace-startup-process-%d.json"%process.pid)
+    expected=rpg/"engine"/"IATraductora.exe"
+    handles={}
     deadline=time.monotonic()+260
     try:
         while time.monotonic()<deadline:
             if process.poll() is not None:
                 raise AssertionError("IA_VXACE_RUBY_EXIT_BEFORE_OBSERVATION_%s"%process.returncode)
             pid=session_worker_pid(descriptor,process.pid)
-            if pid is not None:
-                # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION. Only observe.
-                handle=kernel.OpenProcess(0x00101000,0,pid)
-                if not handle:
-                    raise AssertionError("IA_VXACE_WORKER_OBSERVE_FAILED_%d"%ctypes.get_last_error())
+            outer=bootloader_pid(receipt,process.pid)
+            if pid is not None and outer is not None:
+                # The acceptance executable is compiled with --onefile.
+                # Distinct handles prove we do not mistake Python exit for
+                # the end of PyInstaller's outer cleanup process.
+                assert pid!=outer,"IA_VXACE_ONEFILE_TWO_PROCESSES_REQUIRED"
+                handles["WORKER"]=observe_executable(kernel,pid,expected)
+                handles["BOOTLOADER"]=observe_executable(kernel,outer,expected)
                 # Publish exact LF bytes atomically; Ruby reads in binary mode.
                 # Text-mode writes on Windows would otherwise produce CRLF.
                 pending=observed.with_suffix(".tmp")
@@ -88,13 +134,12 @@ def run_ruby_session(ruby,game):
                 os.replace(pending,observed)
                 break
             time.sleep(.05)
-        assert handle,"IA_VXACE_WORKER_OBSERVE_TIMEOUT"
+        assert set(handles)=={"WORKER","BOOTLOADER"},"IA_VXACE_ONEFILE_OBSERVE_TIMEOUT"
         code=process.wait(timeout=max(1,deadline-time.monotonic()))
         assert code==0,"IA_VXACE_RUBY_ACCEPTANCE_EXIT_%d"%code
-        assert kernel.WaitForSingleObject(handle,35000)==0,"IA_VXACE_WORKER_DID_NOT_EXIT_WITH_PARENT"
-        result=ctypes.c_uint32()
-        assert kernel.GetExitCodeProcess(handle,ctypes.byref(result)),"IA_VXACE_WORKER_EXIT_CODE_UNAVAILABLE"
-        assert result.value==0,"IA_VXACE_WORKER_EXIT_%d"%result.value
+        wait_clean_exit(kernel,handles["WORKER"],"WORKER")
+        wait_clean_exit(kernel,handles["BOOTLOADER"],"BOOTLOADER")
+        print("IA_VXACE_ONEFILE_BOTH_PROCESSES_EXIT_PASS",flush=True)
         assert not descriptor.exists(),"IA_VXACE_SESSION_NOT_RELEASED"
         assert not (rpg/"bridge.json").exists(),"IA_VXACE_HTTP_SESSION_NOT_RELEASED"
         assert_cache_released(rpg/"cache"/"translation-memory-v2.sqlite3")
@@ -104,7 +149,7 @@ def run_ruby_session(ruby,game):
         if process.poll() is None:
             process.kill()
             process.wait(timeout=15)
-        if handle:
+        for handle in handles.values():
             kernel.CloseHandle(handle)
         observed.unlink(missing_ok=True)
 
@@ -140,6 +185,13 @@ def main():
             run([a.servidor,"--recover","--game",game_exe])
             assert hash_file(target)==original and hash_file(save)==save_sha,"IA_VXACE_RECOVERY_HASH"
             assert cache_rows(cache)==rows,"IA_VXACE_RECOVERY_LOST_CACHE"
+            # This is a generated fixture, never a player's game. Verify the
+            # actual executable is deletable, only after all restoration,
+            # persistence and clean-exit checks. Do not ignore permission errors.
+            executable=game/"IA Traductora"/".local"/"Rpg"/"engine"/"IATraductora.exe"
+            executable.unlink()
+            assert not executable.exists(),"IA_VXACE_EXECUTABLE_NOT_RELEASED"
+            print("IA_VXACE_EXECUTABLE_RELEASE_PASS",flush=True)
             print("IA_VXACE_REAL_OPUS_INSTALL_ROUNDTRIP_"+mode.upper()+"_PASS",flush=True)
     # Reaching this point proves TemporaryDirectory cleanup was strict.
     print("IA_VXACE_STRICT_WORKSPACE_CLEANUP_PASS",flush=True)

@@ -70,6 +70,10 @@ def main():
         run([helper,"launch-worker","--parent-pid",str(parent)],cwd=tmp)
         wait_code(rpg/f"vxace-startup-worker-{parent}.json","IA_VXACE_PROBE_READY")
         assert (rpg/f"vxace-startup-helper-{parent}.txt").read_text("ascii").strip()=="IA_VXACE_WORKER_SPAWNED"
+        receipt=json.loads((rpg/f"vxace-startup-process-{parent}.json").read_text("ascii"))
+        assert receipt["schema"]=="ia-vxace-process-v1" and receipt["game_pid"]==parent
+        assert type(receipt["bootloader_pid"]) is int and receipt["bootloader_pid"]>0
+        print("IA_VXACE_NATIVE_CHILD_PROCESS_RECEIPT_PASS")
         print("IA_VXACE_HELPER_UNICODE_NATIVE_CHILD_PASS")
         run(["ruby",harness,"--launch-probe",root])
         # A modified plugin must not be allowed to start a child.
@@ -79,6 +83,7 @@ def main():
                                 cwd=tmp, capture_output=True,timeout=30)
         assert failed.returncode!=0
         assert (rpg/f"vxace-startup-helper-{parent}.txt").read_text("ascii").strip()=="IA_VXACE_RUNTIME_SHA_INVALIDO"
+        assert json.loads((rpg/f"vxace-startup-process-{parent}.json").read_text("ascii"))["bootloader_pid"]==0
         print("IA_VXACE_LAUNCH_TAMPER_REFUSED_PASS")
 
 if __name__=="__main__":

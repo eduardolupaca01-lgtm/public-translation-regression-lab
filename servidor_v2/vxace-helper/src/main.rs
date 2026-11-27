@@ -703,7 +703,11 @@ fn launch_worker(args: &[String]) -> Result<serde_json::Value, String> {
     let diagnostics = startup_directory(&root)?;
     let helper_status = diagnostics.join(format!("vxace-startup-helper-{parent}.txt"));
     let worker_status = diagnostics.join(format!("vxace-startup-worker-{parent}.json"));
+    let process_receipt = diagnostics.join(format!("vxace-startup-process-{parent}.json"));
     startup_record(&helper_status, b"IA_VXACE_LAUNCH_CHECKING\n")?;
+    // Invalidate any previous receipt before launching. The child ID below
+    // identifies the actual outer executable, not the embedded Python PID.
+    startup_record(&process_receipt, b"{\"schema\":\"ia-vxace-process-v1\",\"bootloader_pid\":0}\n")?;
     let result = (|| {
         let verified = verified_worker(&root, &helper)?;
         let worker = root.join(SIDECAR).join("engine/IATraductora.exe");
@@ -724,8 +728,16 @@ fn launch_worker(args: &[String]) -> Result<serde_json::Value, String> {
             command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
         let child = command.spawn().map_err(|_| fail("IA_VXACE_WORKER_NO_INICIA"))?;
-        // Status writes must never start a second child if the first started.
-        let _ = startup_record(&helper_status, b"IA_VXACE_WORKER_SPAWNED\n");
+        // PyInstaller onefile has a bootloader and a separate Python child.
+        // Record the PID returned by CreateProcess, while the child is owned
+        // by this helper. Do not restart or terminate it if recording fails.
+        let launched = json!({"schema":"ia-vxace-process-v1",
+            "game_pid":parent,"bootloader_pid":child.id()});
+        if startup_record(&process_receipt, format!("{launched}\n").as_bytes()).is_ok() {
+            let _ = startup_record(&helper_status, b"IA_VXACE_WORKER_SPAWNED\n");
+        } else {
+            let _ = startup_record(&helper_status, b"IA_VXACE_PROCESS_RECEIPT_FAILED\n");
+        }
         Ok(json!({"schema":"ia-vxace-launch-v1","pid":child.id()}))
     })();
     if let Err(ref code) = result {

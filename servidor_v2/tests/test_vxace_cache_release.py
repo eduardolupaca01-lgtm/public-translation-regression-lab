@@ -1,4 +1,5 @@
 """Regression for the exact Windows cache-handle leak in R31 acceptance."""
+import json
 import os
 import sqlite3
 import tempfile
@@ -56,6 +57,42 @@ class CacheReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError,"IA_VXACE_CACHE_HANDLE_OPEN_WINERROR_"):
                 acceptance.assert_cache_released(self.cache)
         acceptance.assert_cache_released(self.cache)
+
+    def test_bootloader_receipt_requires_matching_parent_and_integer_pid(self):
+        receipt=self.cache.with_name("process.json")
+        def write(parent,pid):
+            receipt.write_text(json.dumps({"schema":"ia-vxace-process-v1",
+                                           "game_pid":parent,"bootloader_pid":pid}),encoding="ascii")
+        write(101,202)
+        self.assertEqual(acceptance.bootloader_pid(receipt,101),202)
+        self.assertIsNone(acceptance.bootloader_pid(receipt,102))
+        for pid in (0,-1,True,"202",2**32):
+            write(101,pid)
+            self.assertIsNone(acceptance.bootloader_pid(receipt,101))
+        receipt.write_text("x"*1025,encoding="ascii")
+        self.assertIsNone(acceptance.bootloader_pid(receipt,101))
+
+    def test_exit_wait_checks_result_not_only_process_signal(self):
+        kernel=mock.Mock()
+        kernel.WaitForSingleObject.return_value=0
+        def result(handle,ptr):
+            ptr._obj.value=0
+            return 1
+        kernel.GetExitCodeProcess.side_effect=result
+        acceptance.wait_clean_exit(kernel,17,"WORKER")
+        acceptance.wait_clean_exit(kernel,18,"BOOTLOADER")
+        self.assertEqual(kernel.WaitForSingleObject.call_args_list,
+                         [mock.call(17,35000),mock.call(18,35000)])
+        kernel.WaitForSingleObject.return_value=258
+        with self.assertRaisesRegex(AssertionError,"BOOTLOADER_DID_NOT_EXIT"):
+            acceptance.wait_clean_exit(kernel,18,"BOOTLOADER")
+        kernel.WaitForSingleObject.return_value=0
+        def error(handle,ptr):
+            ptr._obj.value=7
+            return 1
+        kernel.GetExitCodeProcess.side_effect=error
+        with self.assertRaisesRegex(AssertionError,"BOOTLOADER_EXIT_7"):
+            acceptance.wait_clean_exit(kernel,18,"BOOTLOADER")
 
     def test_missing_cache_is_not_created(self):
         missing=self.cache.with_name("missing.sqlite3")
