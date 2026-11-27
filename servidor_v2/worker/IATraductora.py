@@ -3,7 +3,7 @@
 from __future__ import annotations
 import argparse, hashlib, json, os, secrets, sys, threading, time
 import configparser
-import re, sqlite3, unicodedata
+import re, sqlite3, unicodedata, stat
 from pathlib import Path
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -769,6 +769,188 @@ def publish(service,port):
         if tmp.exists():tmp.unlink()
     return dest
 
+
+# RGSS3 embeds Ruby 1.9.2 without the desktop Ruby socket/JSON libraries.
+# Its core-only client uses a bounded, game-local spool. The same Service
+# (quality gate, inference lock, models and SQLite memory) answers HTTP and IPC.
+VXACE_IPC_SCHEMA = "IA-VXACE-SESSION-1"
+VXACE_IPC_REQUEST = "IA-VXACE-REQUEST-1"
+VXACE_IPC_RESPONSE = "IA-VXACE-RESPONSE-1"
+VXACE_IPC_MAX = 96 * 1024
+_VXACE_ID = re.compile(r"[0-9a-f]{16}\Z")
+_VXACE_TOKEN = re.compile(r"[0-9a-f]{64}\Z")
+
+def _ipc_regular(path, limit):
+    try:
+        info = path.lstat()
+        return (stat.S_ISREG(info.st_mode)
+                and not (getattr(info, "st_file_attributes", 0) & 0x400)
+                and 0 < info.st_size <= limit)
+    except OSError:
+        return False
+
+def _ipc_directory(path, root):
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode)
+            or getattr(info, "st_file_attributes", 0) & 0x400
+            or not path.resolve(strict=True).is_relative_to(root)):
+        raise RuntimeError("IA_VXACE_IPC_RUTA_INVALIDA")
+    return path
+
+def _ipc_atomic(path, data):
+    tmp = path.parent / (".ia-" + secrets.token_hex(16) + ".tmp")
+    try:
+        with tmp.open("xb") as stream:
+            stream.write(data)
+            stream.flush()
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+class VXAceFileBridge:
+    """One authenticated session per worker; no arbitrary paths or commands."""
+    def __init__(self, service, parent_pid):
+        if not service.vxace or parent_pid <= 0 or not _VXACE_TOKEN.fullmatch(service.token):
+            raise ValueError("IA_VXACE_IPC_SESION_INVALIDA")
+        self.service = service
+        self.parent_pid = parent_pid
+        self.stop = threading.Event()
+        root = service.game
+        folder = root
+        for part in ("IA Traductora", ".local", "Rpg"):
+            folder = _ipc_directory(folder / part, root)
+        self.descriptor = folder / "vxace-session.txt"
+        self.lock_path = folder / "vxace-worker.lock"
+        if self.lock_path.exists() and not _ipc_regular(self.lock_path, 1):
+            raise RuntimeError("IA_VXACE_IPC_LOCK_INVALIDO")
+        if self.lock_path.is_symlink():
+            raise RuntimeError("IA_VXACE_IPC_LOCK_INVALIDO")
+        self.lock = self.lock_path.open("a+b")
+        self.thread = None
+        self.session = None
+        try:
+            self.lock.seek(0, 2)
+            if self.lock.tell() == 0:
+                self.lock.write(b"\0")
+                self.lock.flush()
+            self.lock.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self.lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            base = folder / "vxace-ipc"
+            base.mkdir(exist_ok=True)
+            _ipc_directory(base, root)
+            session = base / service.token
+            session.mkdir()
+            self.session = _ipc_directory(session, root)
+            if self.descriptor.is_symlink() or (
+                    self.descriptor.exists() and not _ipc_regular(self.descriptor, 512)):
+                raise RuntimeError("IA_VXACE_IPC_DESCRIPTOR_INVALIDO")
+            descriptor = ("%s\n%s\n%d\n%d\n" % (
+                VXACE_IPC_SCHEMA, service.token, os.getpid(), parent_pid)).encode("ascii")
+            _ipc_atomic(self.descriptor, descriptor)
+        except Exception:
+            self.lock.close()
+            if self.session is not None:
+                try: self.session.rmdir()
+                except OSError: pass
+            raise
+
+    def process_once(self):
+        # Session names are minted by the worker, never taken from a request.
+        _ipc_directory(self.session, self.service.game)
+        handled = 0
+        with os.scandir(self.session) as entries:
+            for entry in entries:
+                if handled >= 8 or self.stop.is_set():
+                    break
+                if not entry.name.endswith(".req"):
+                    continue
+                request_id = entry.name[:-4]
+                if not _VXACE_ID.fullmatch(request_id):
+                    continue
+                request = self.session / entry.name
+                response = self.session / (request_id + ".res")
+                if not _ipc_regular(request, VXACE_IPC_MAX) or response.exists() or response.is_symlink():
+                    continue
+                handled += 1
+                try:
+                    with request.open("rb") as stream:
+                        raw = stream.read(VXACE_IPC_MAX + 1)
+                    request.unlink()
+                    if len(raw) > VXACE_IPC_MAX:
+                        continue
+                    lines = raw.decode("ascii").splitlines()
+                    if (not 4 <= len(lines) <= 9 or lines[0] != VXACE_IPC_REQUEST
+                            or not secrets.compare_digest(lines[1], self.service.token)
+                            or lines[2] not in MODELS):
+                        continue
+                    lang = lines[2]
+                    texts = []
+                    for item in lines[3:]:
+                        if not re.fullmatch(r"(?:[0-9a-f]{2})+", item):
+                            raise ValueError("IA_VXACE_IPC_TEXTO_INVALIDO")
+                        texts.append(bytes.fromhex(item).decode("utf-8"))
+                    if any(not 0 < len(text) <= MAX_TEXT for text in texts):
+                        continue
+                    try:
+                        result = self.service.translate_batch(lang, texts)
+                        values = [
+                            row["translated"].encode("utf-8").hex()
+                            if isinstance(row.get("translated"), str) else "-"
+                            for row in result
+                        ]
+                    except Exception:
+                        values = ["-"] * len(texts)
+                    answer = ("\n".join([VXACE_IPC_RESPONSE, self.service.token,
+                                          request_id] + values) + "\n").encode("ascii")
+                    if len(answer) <= VXACE_IPC_MAX and not self.stop.is_set():
+                        _ipc_atomic(response, answer)
+                except (OSError, UnicodeError, ValueError):
+                    continue
+        return handled
+
+    def start(self):
+        def serve():
+            while not self.stop.is_set():
+                try:
+                    self.process_once()
+                except (OSError, RuntimeError):
+                    return
+                self.stop.wait(0.04)
+        self.thread = threading.Thread(target=serve, name="IA-VXACE-IPC", daemon=True)
+        self.thread.start()
+
+    def close(self):
+        self.stop.set()
+        if self.thread is not None:
+            # Wait for any in-flight inference before closing SQLite.
+            self.thread.join()
+        try:
+            if _ipc_regular(self.descriptor, 512):
+                fields = self.descriptor.read_text("ascii").splitlines()
+                if len(fields) == 4 and fields[1] == self.service.token:
+                    self.descriptor.unlink()
+        except (OSError, ValueError):
+            pass
+        try:
+            _ipc_directory(self.session, self.service.game)
+            # Only files with our strict request/response names; never recurse.
+            for entry in self.session.iterdir():
+                if (entry.suffix in (".req", ".res") and _VXACE_ID.fullmatch(entry.stem)
+                        and _ipc_regular(entry, VXACE_IPC_MAX)):
+                    entry.unlink()
+            self.session.rmdir()
+        except (OSError, RuntimeError):
+            pass
+        finally:
+            self.lock.close()
+
+
 def monitor_game_lifetime(http, parent_pid):
     """Follow the real Windows process HANDLE so PID reuse is harmless."""
     if os.name != "nt" or parent_pid <= 0:
@@ -794,16 +976,23 @@ def monitor_game_lifetime(http, parent_pid):
 
 def run(service,parent_pid=0):
     http=ThreadingHTTPServer(("127.0.0.1",0),make_handler(service))
-    dest=publish(service,http.server_port)
+    dest=None
+    ipc=None
     try:
+        if service.vxace and parent_pid > 0:
+            ipc=VXAceFileBridge(service,parent_pid)
+            ipc.start()
+        dest=publish(service,http.server_port)
         monitor_game_lifetime(http,parent_pid)
         http.serve_forever(poll_interval=0.5)
     finally:
         http.server_close()
+        if ipc is not None:ipc.close()
         service.close()
         try:
-            state=json.loads(dest.read_text("utf8"))
-            if state.get("token")==service.token:dest.unlink()
+            if dest is not None:
+                state=json.loads(dest.read_text("utf8"))
+                if state.get("token")==service.token:dest.unlink()
         except (OSError,ValueError):pass
 
 def safe_startup_code(error):

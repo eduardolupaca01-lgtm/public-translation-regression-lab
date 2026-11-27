@@ -529,6 +529,58 @@ class VXAceWorkerTests(unittest.TestCase):
         self.assertEqual(len(descriptor["token"]),64)
         self.assertFalse((root/"Data"/"IATraductora"/"bridge.json").exists())
 
+
+    def test_vxace_core_ipc_roundtrip_authentication_and_persistence(self):
+        root=self.make_game()
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        class Neural:
+            def __init__(self):self.calls=[]
+            def translate(self,lang,text):
+                self.calls.append((lang,text))
+                return {"Good morning.":"Buenos días.","Open the gate.":"Abre la puerta.",
+                        "123 apples":"Manzanas"}[text]
+        neural=Neural()
+        service=ia.Service(root,engine,neural=neural)
+        ipc=ia.VXAceFileBridge(service,101)
+        def request(bridge,number,texts,token=None):
+            ident="%016x"%number
+            path=bridge.session/(ident+".req")
+            path.write_text("\n".join([ia.VXACE_IPC_REQUEST,token or bridge.service.token,"en"]+
+                            [t.encode("utf8").hex() for t in texts])+"\n",encoding="ascii")
+            bridge.process_once()
+            return bridge.session/(ident+".res")
+        try:
+            descriptor=ipc.descriptor.read_text("ascii").splitlines()
+            self.assertEqual(descriptor[0],ia.VXACE_IPC_SCHEMA)
+            self.assertEqual(descriptor[3],"101")
+            self.assertFalse(request(ipc,1,["Good morning."],token="0"*64).exists())
+            self.assertEqual(neural.calls,[])
+            response=request(ipc,2,["Good morning.","Open the gate.","Good morning.","123 apples"])
+            fields=response.read_text("ascii").splitlines()
+            self.assertEqual(fields[:3],[ia.VXACE_IPC_RESPONSE,service.token,"%016x"%2])
+            self.assertEqual([bytes.fromhex(x).decode() if x!="-" else x for x in fields[3:]],
+                             ["Buenos días.","Abre la puerta.","Buenos días.","-"])
+            self.assertEqual(neural.calls.count(("en","Good morning.")),1)
+            with self.assertRaises((OSError,RuntimeError)):
+                other=ia.VXAceFileBridge(service,102)
+                other.close()
+        finally:
+            ipc.close()
+            service.close()
+        self.assertFalse(ipc.descriptor.exists())
+        second=Neural()
+        service2=ia.Service(root,engine,neural=second)
+        ipc2=ia.VXAceFileBridge(service2,103)
+        try:
+            self.assertNotEqual(ipc2.session,ipc.session)
+            response=request(ipc2,1,["Good morning."])
+            self.assertEqual(bytes.fromhex(response.read_text("ascii").splitlines()[3]).decode(),"Buenos días.")
+            self.assertEqual(second.calls,[])
+        finally:
+            ipc2.close()
+            service2.close()
+
     def test_vxace_rejects_non_rgss3a_and_incomplete_loose_data(self):
         root=self.make_game(packed=True)
         (root/"Game.rgss3a").write_bytes(b"not an RGSS3A archive")
