@@ -1,4 +1,4 @@
-name: Servidor R38 candidate - standalone web frontend and existing RPG OPUS
+name: Servidor R39 candidate - native WebView2 playable copy and existing RPG OPUS
 on:
   push:
     branches:
@@ -11,6 +11,10 @@ on:
       - "servidor_v2/tests/probe_web_real_worker.py"
       - "servidor_v2/tests/probe_web_browser.js"
       - "servidor_v2/tests/probe_web_browser_preflight.py"
+      - "servidor_v2/tests/probe_web_desktop.py"
+      - "servidor_v2/webhost/**"
+      - "servidor_v2/tools/build_webhost.ps1"
+      - "servidor_v2/tools/pack.py"
       - "servidor_v2/tests/test_vxace_real_worker.py"
       - "servidor_v2/tests/test_vxace_runtime.rb"
       - "servidor_v2/tests/test_vxace_cache_release.py"
@@ -105,6 +109,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_TEST_DEPENDENCY_FAIL" }
           python servidor_v2/tests/probe_web_browser_preflight.py --playwright (Join-Path $deps "node_modules/playwright-core")
           if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_CSP_PREFLIGHT_FAIL" }
+      - name: Build native Windows WebView2 player using pinned Microsoft SDK
+        shell: pwsh
+        run: |
+          servidor_v2/tools/build_webhost.ps1 -Output (Join-Path $env:RUNNER_TEMP "ia-webhost")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_DESKTOP_BUILD_FAIL" }
       - name: Bloqueo si no se dispone de origen privado cifrado
         shell: pwsh
         run: |
@@ -225,7 +234,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "IA_SERVIDOR_EXE_NO_COMPILA" }
           } finally { Pop-Location }
           $out=Join-Path $env:RUNNER_TEMP "Servidor.exe"
-          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --vxace-helper servidor_v2/vxace-helper/target/release/servidor-vxace-helper.exe --vxace-plugin servidor_v2/vxace/IATraductoraVXACE.rb --out $out
+          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --vxace-helper servidor_v2/vxace-helper/target/release/servidor-vxace-helper.exe --vxace-plugin servidor_v2/vxace/IATraductoraVXACE.rb --web-host-dir (Join-Path $env:RUNNER_TEMP "ia-webhost") --out $out
           if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $out)) {
             throw "IA_SERVIDOR_PROPIO_PAQUETE_INVALIDO"
           }
@@ -429,6 +438,11 @@ jobs:
           $deps=Join-Path $env:RUNNER_TEMP "ia-web-browser-deps"
           python servidor_v2/tests/probe_web_real_worker.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --playwright (Join-Path $deps "node_modules/playwright-core")
           if ($LASTEXITCODE -ne 0) { throw "IA_WEB_REAL_ACCEPTANCE_FAIL" }
+      - name: Validar nueva copia jugable WebView2 y guardado tras cerrar y volver a abrir
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/probe_web_desktop.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_DESKTOP_REAL_ACCEPTANCE_FAIL" }
       - name: Cifrar siempre la versión candidata antes de publicarla en GitHub
         shell: pwsh
         run: |
@@ -436,20 +450,20 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R38-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R39-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R38-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
-          'Servidor R38 candidato: modalidad web experimental de carpeta ya extraída, copia VX Ace independiente, MV/MZ/SOLData y OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R39-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          'Servidor R39 candidato: botón WEB, copia jugable de carpeta ya extraída con Jugar-IA.exe y ventana WebView2, MV/MZ/VX Ace/SOLData y OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Copy-Item -LiteralPath "servidor_v2/LICENSE-BROTLI.txt" -Destination (Join-Path $dir "LICENSE-BROTLI.txt")
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-WEB-R38-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-WEB-R39-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error

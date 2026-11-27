@@ -69,6 +69,12 @@ jobs:
           cargo build --release --manifest-path vxace-helper/Cargo.toml --bins --examples
           if ($LASTEXITCODE -ne 0) { throw 'VXACE_HELPER_BUILD_FAILED' }
           Pop-Location
+      - name: Compile native WebView2 desktop launcher and verify its distribution files
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          servidor_v2/tools/build_webhost.ps1 -Output (Join-Path $env:RUNNER_TEMP "ia-webhost")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_DESKTOP_BUILD_FAIL" }
       - name: Prove installed native launcher and Ruby startup in Unicode paths
         if: runner.os == 'Windows'
         shell: pwsh

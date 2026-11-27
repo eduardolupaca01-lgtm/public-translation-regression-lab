@@ -7,6 +7,7 @@ package main
 import(
     "fmt"
     "os"
+    "path/filepath"
     "errors"
     "runtime"
     "strings"
@@ -120,6 +121,7 @@ type iaUI struct{
     copyBtn uintptr
     recoverBtn uintptr
     cloneBtn uintptr
+    webBtn uintptr
     cloneAllowed bool
     resultGame string
     titleLabel uintptr
@@ -176,6 +178,10 @@ func iaFriendlyInstall(code string)string{
         return "El paquete o respaldo cambió. Se conserva intacto; usa una copia original verificada."
     case cookToolUnsafeCode:
         return "Estructura Dragonhouse/Halva incompleta o insegura. No se ha modificado el juego."
+    case "IA_WEB_RECURSOS_INCOMPLETOS","IA_WEB_MODULO_NO_ADMITIDO","IA_WEB_INDEX_INVALIDO","IA_WEB_COPIA_RECURSO_NO_ADMITIDO":
+        return "Selecciona index.html de una carpeta web extraída completa. No se modificará el origen."
+    case "IA_WEB_HOST_NO_INCLUIDO","IA_WEB_HOST_PAQUETE_INCOMPLETO","IA_WEB_HOST_SHA_INVALIDO":
+        return "El paquete de ventana web no se pudo verificar. No ejecutes una copia incompleta."
     case "IA_DESTINO_CREACION_DENEGADA":
         return "Windows bloqueó la creación de IA Traductora. No se modificó el registro."
     case "IA_DESTINO_SIN_PERMISO":
@@ -219,7 +225,15 @@ func iaFriendlyInstall(code string)string{
 
 var iaSelectFile=iaChooseEXE
 var iaCopyDiagnostics=iaClipboardText
-func iaChooseEXE(owner uintptr)(selected string,err error){
+func iaChooseEXE(owner uintptr)(string,error){
+    return iaChooseFile(owner,iaExeFilterUTF16(),"Selecciona el Game.exe de una COPIA cerrada del videojuego")
+}
+func iaChooseIndex(owner uintptr)(string,error){
+    filter:=append(syscall.StringToUTF16("Interfaz web extraída (index.html)"),syscall.StringToUTF16("index.html")...)
+    filter=append(filter,0)
+    return iaChooseFile(owner,filter,"Selecciona index.html dentro de la carpeta extraída dist")
+}
+func iaChooseFile(owner uintptr,filter []uint16,caption string)(selected string,err error){
     defer func(){
         if recover()!=nil{
             selected=""
@@ -227,8 +241,7 @@ func iaChooseEXE(owner uintptr)(selected string,err error){
         }
     }()
     buffer:=make([]uint16,32768)
-    filter:=iaExeFilterUTF16()
-    title:=iaUTF16("Selecciona el Game.exe de una COPIA cerrada del videojuego")
+    title:=iaUTF16(caption)
     data:=iaFileDialog{
         Size:uint32(unsafe.Sizeof(iaFileDialog{})),Owner:owner,
         Filter:&filter[0],File:&buffer[0],MaxFile:uint32(len(buffer)),
@@ -343,6 +356,46 @@ func iaStartClone(){
     }()
 }
 
+
+func iaStartWebClone(){
+ ui:=&iaCurrentUI
+ if ui.busy{return}
+ file,e:=iaChooseIndex(ui.hwnd)
+ if e!=nil{iaLog("[IA_SELECTOR_ERROR] "+iaSafeInstallCode(e.Error()));return}
+ if file==""{return}
+ if !strings.EqualFold(filepath.Base(file),"index.html"){
+  iaSet(ui.status,"Selecciona el archivo index.html de la carpeta dist extraída.");return
+ }
+ root,e:=webValidateFolder(filepath.Dir(file))
+ if e!=nil{code:=iaSafeInstallCode(e.Error());iaLog("["+code+"] Carpeta web no admitida.");iaSet(ui.status,iaFriendlyInstall(code));return}
+ executable,e:=os.Executable()
+ if e!=nil{iaLog("[IA_NO_SE_PUEDE_LEER_SERVIDOR]");return}
+ parent:=filepath.Dir(executable)
+ yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
+  uintptr(unsafe.Pointer(iaUTF16("Se creará una carpeta Juego-IA-WEB junto al Servidor, con Jugar-IA.exe y OPUS local. No se modificarán los recursos originales. Las partidas del navegador no se importan. ¿Continuar?"))),
+  uintptr(unsafe.Pointer(iaUTF16("Crear copia web jugable"))),0x24|0x100)
+ if yes!=6{return}
+ ui.busy=true
+ iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.browse,0)
+ iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0);iaEnableWindow.Call(ui.webBtn,0)
+ iaSet(ui.status,"Creando copia web con ventana propia...")
+ iaLog("[IA_WEB_COPIA_INICIADA] Recursos de origen intactos.")
+ go func(){
+  info:="IA_ERROR_NO_CLASIFICADO";final:=""
+  defer func(){
+   if recover()!=nil{info="IA_WEB_COPIA_FALLO";final=""}
+   ui.mu.Lock();ui.result=info;ui.resultGame=final;ui.mu.Unlock()
+   iaPostMessage.Call(ui.hwnd,iaWMAppDone,0,0)
+  }()
+  pkg,e:=readPackage(executable)
+  if e!=nil{info=e.Error();return}
+  defer pkg.Close()
+  final,e=webCloneInstall(root,parent,pkg)
+  if e!=nil{info=e.Error();final="";return}
+  info="IA_WEB_COPIA_LISTA"
+ }()
+}
+
 func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
     defer func(){
         if recover()!=nil{
@@ -369,6 +422,8 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         return iaColorControl(wparam,lparam)
     case iaWMCommand:
         switch int(wparam&0xFFFF){
+        case 302:
+            if lparam==ui.webBtn&&!ui.busy{iaStartWebClone()}
         case iaCmdBrowse:
             if lparam!=ui.browse || ui.busy{return 0}
             file,err:=iaSelectFile(hwnd)
@@ -427,10 +482,22 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         ui.mu.Lock();result:=ui.result;newGame:=ui.resultGame;ui.resultGame="";ui.mu.Unlock()
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
+        iaEnableWindow.Call(ui.webBtn,1)
         iaEnableWindow.Call(ui.recoverBtn,1)
         if ui.cloneAllowed{iaEnableWindow.Call(ui.cloneBtn,1)}
         code:=iaSafeInstallCode(result)
-        if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
+        if code=="IA_WEB_COPIA_LISTA"&&newGame!=""{
+            ui.gameFile="";ui.cloneAllowed=false;iaSet(ui.input,newGame)
+            iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
+            iaLog("[IA_WEB_COPIA_LISTA] Abre Jugar-IA.exe en la nueva carpeta. Ventana propia, sin navegador externo.")
+            iaSet(ui.status,"Copia web preparada. Abre Jugar-IA.exe y prueba F10.")
+            iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16("Copia lista:\n"+newGame+"\n\nAbre Jugar-IA.exe desde esa carpeta."))),uintptr(unsafe.Pointer(iaUTF16("IA Traductora"))),0x40)
+            // Open only the newly created local directory, not a URL.
+            shell:=syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+            folder:=iaUTF16(filepath.Dir(newGame));verb:=iaUTF16("open")
+            shell.Call(hwnd,uintptr(unsafe.Pointer(verb)),uintptr(unsafe.Pointer(folder)),0,0,1)
+            runtime.KeepAlive(folder);runtime.KeepAlive(verb)
+        }else if code=="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"{
             iaLog("[IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA] Registro o paquete original restaurado. Los archivos del traductor se conservaron.")
             iaSet(ui.status,"Inicio RPG original recuperado. Abre la copia del juego.")
             iaEnableWindow.Call(ui.install,0)
@@ -471,10 +538,11 @@ func runUI(){
     ui:=&iaCurrentUI;ui.hwnd=hwnd
     ui.titleLabel=iaControl(hwnd,"STATIC","Servidor",0,30,20,360,55,0)
     ui.sectionLabel=iaControl(hwnd,"STATIC","RPG",0,233,123,250,40,0)
-    for i,label:=range []string{"01","RPG","03","04","05","+"}{
+    for i,label:=range []string{"01","RPG","WEB","04","05","+"}{
         style:=uint32(0)
-        if label!="RPG"{style|=iaWSDisabled}
-        iaControl(hwnd,"BUTTON",label,style,20,127+i*70,169,54,300+i)
+        if label!="RPG"&&label!="WEB"{style|=iaWSDisabled}
+        control:=iaControl(hwnd,"BUTTON",label,style,20,127+i*70,169,54,300+i)
+        if label=="WEB"{ui.webBtn=control}
     }
     ui.infoLabel=iaControl(hwnd,"STATIC","1. Selecciona el archivo EXE del juego (una copia cerrada):",0,230,187,780,34,0)
     ui.input=iaControl(hwnd,"EDIT","",iaWSBorder|iaESReadOnly,230,227,597,44,0)
@@ -493,7 +561,7 @@ func runUI(){
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
-    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace: instalación. MZ comprimida, Halva y MV SOLData: compatibilidad experimental. Motor local OPUS.")
+    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace y SOLData. Botón WEB: crear copia desde index.html extraído. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

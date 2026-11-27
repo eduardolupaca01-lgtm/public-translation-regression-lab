@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R35-20261126"
- packageBuildID="RPG-MVMZ-VXACE-WEB-R38-20261127"
+ packageBuildID="RPG-MVMZ-VXACE-WEB-R39-20261127"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -112,6 +112,10 @@ func readPackage(filename string)(*packageReader,error){
    return nil,errors.New("IA_VXACE_MANIFIESTO_INVALIDO")
   }
  }
+ // Keep old packages readable; the optional desktop host is all-or-nothing.
+ hostCount:=0
+ for _,name:=range webHostFiles{if files["webhost/"+name]!=nil{hostCount++}}
+ if hostCount!=0&&hostCount!=len(webHostFiles){return nil,errors.New("IA_WEB_HOST_PAQUETE_INCOMPLETO")}
  good=true
  return &packageReader{f:f,archive:zr,files:files,manifest:manifest},nil
 }
@@ -427,7 +431,12 @@ func main(){
  webFolder:=flag.String("web-folder","","Carpeta web extraída con index.html y assets (experimental, no EXE)")
  webPort:=flag.Int("web-port",8765,"Puerto local fijo de la carpeta web")
  webNoBrowser:=flag.Bool("web-no-browser",false,"No abrir navegador automáticamente (pruebas)")
+ webCopy:=flag.Bool("web-copy",false,"Preparar copia web independiente con lanzador de escritorio")
+ webCopyParent:=flag.String("web-copy-parent","","Carpeta existente para la copia web")
  flag.Parse()
+ if (*webCopy&&(*webFolder==""||*webNoBrowser||*webPort!=8765))||(!*webCopy&&*webCopyParent!=""){
+  fmt.Fprintln(os.Stderr,"IA_WEB_ARGUMENTOS_INVALIDOS");os.Exit(1)
+ }
  if (*webFolder!=""&&(*exe!=""||*inspect||*recoverGame||*copyVXAce||*copyParent!=""))||
     (*webFolder==""&&(*webPort!=8765||*webNoBrowser))||
     (*webFolder!=""&&(*webPort<1024||*webPort>65535)){
@@ -455,7 +464,11 @@ func main(){
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  defer p.Close()
  if *webFolder!=""{
-  if e:=webLaunch(*webFolder,*webPort,*webNoBrowser,p);e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+  if *webCopy{
+   path,e:=webCloneInstall(*webFolder,*webCopyParent,p)
+   if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+   fmt.Println("IA_WEB_COPIA_LISTA|"+path)
+  }else if e:=webLaunch(*webFolder,*webPort,*webNoBrowser,p);e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
   return
  }
  if *copyVXAce{

@@ -20,7 +20,10 @@ def digest(file:Path):
  with file.open("rb") as stream:
   for block in iter(lambda:stream.read(1024*1024),b""):h.update(block)
  return h.hexdigest()
-def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path,*,vxace_helper=None,vxace_plugin=None):
+WEB_HOST=("Jugar-IA.exe","Jugar-IA.exe.config","Microsoft.Web.WebView2.Core.dll",
+          "Microsoft.Web.WebView2.WinForms.dll","WebView2Loader.dll","WebView2-LICENSE.txt")
+
+def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path,*,vxace_helper=None,vxace_plugin=None,web_host_dir=None):
  if not executable.is_file() or not worker.is_file() or not plugin.is_file():
   raise RuntimeError("IA_ARCHIVOS_DE_COMPILACION_INCOMPLETOS")
  if out.resolve() in {executable.resolve(),worker.resolve(),plugin.resolve()}:
@@ -33,6 +36,13 @@ def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path,*,vxace_h
   if out.resolve() in {asset.resolve() for asset in assets.values()}:
    raise ValueError("IA_NO_REEMPLAZAR_ORIGINALES")
   files.update(assets)
+ if web_host_dir is not None:
+  for filename in WEB_HOST:
+   source=Path(web_host_dir)/filename
+   if (not source.is_file() or source.is_symlink() or not 0<source.stat().st_size<=32*1024*1024
+       or source.resolve()==out.resolve()):
+    raise RuntimeError("IA_WEB_HOST_PAQUETE_INCOMPLETO")
+   files["webhost/"+filename]=source
  for lang in MODELS:
   for filename in SUFFIX:
    source=models/lang/filename
@@ -65,5 +75,6 @@ if __name__=="__main__":
  for arg in ("bootstrap","worker","plugin","models","out"):a.add_argument("--"+arg,type=Path,required=True)
  a.add_argument('--vxace-helper',type=Path)
  a.add_argument('--vxace-plugin',type=Path)
+ a.add_argument('--web-host-dir',type=Path)
  args=a.parse_args()
- build(args.bootstrap,args.worker,args.plugin,args.models,args.out,vxace_helper=args.vxace_helper,vxace_plugin=args.vxace_plugin)
+ build(args.bootstrap,args.worker,args.plugin,args.models,args.out,vxace_helper=args.vxace_helper,vxace_plugin=args.vxace_plugin,web_host_dir=args.web_host_dir)
