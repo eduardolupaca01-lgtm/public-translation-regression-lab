@@ -91,7 +91,7 @@ func r44PrepareFixture(t *testing.T,sdk,mode string)r44Fixture{
  fixturePath:=filepath.Join("..","..","tests","r44_nwbin_renderer.js")
  fixture,e:=os.ReadFile(fixturePath);if e!=nil{t.Fatal(e)}
  mvnwbinWrite(t,filepath.Join(js,"rpg_windows.js"),string(fixture))
- manager:="window.PluginManager={parameters:function(){return {};},setup:function(list){var plugins=list.filter(function(p){return p.status;});if(plugins.length!==1||plugins[0].name!=='IATraductora'){window.r44LoadFailed();return;}var s=document.createElement('script');s.src='js/plugins/'+plugins[0].name+'.js';s.async=false;s.onload=window.r44Run;s.onerror=window.r44LoadFailed;document.body.appendChild(s);}};\n"
+ manager:="window.PluginManager={parameters:function(){return {};},setup:function(list){var plugins=list.filter(function(p){return p.status;});if(plugins.length!==1||plugins[0].name!=='IATraductora'){window.r44LoadFailed();return;}var s=document.createElement('script');s.src='js/plugins/'+plugins[0].name+'.js';s.charset='UTF-8';s.async=false;s.onload=window.r44Run;s.onerror=window.r44LoadFailed;document.body.appendChild(s);}};\n"
  if mode=="ui"{manager=strings.Replace(manager,"s.onload=window.r44Run;","s.onload=window.r44RunUIOnly;",1)}else if mode!="real"{t.Fatal("IA_R44_MODE_INVALID")}
  mvnwbinWrite(t,filepath.Join(js,"rpg_managers.js"),manager)
  // Main remains the original author-provided plaintext add-on entry.

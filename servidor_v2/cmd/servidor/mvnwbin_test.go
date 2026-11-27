@@ -37,7 +37,9 @@ func mvnwbinFixture(t *testing.T,approved bool)string{
  name:=fmt.Sprintf("ia-r44-test-%d",time.Now().UnixNano())
  mvnwbinWrite(t,filepath.Join(root,"package.json"),fmt.Sprintf("{\"name\":%q,\"main\":\"www/index.html\",\"window\":{\"show\":false}}",name))
  var html strings.Builder
- html.WriteString("<!doctype html><html><body>\n")
+ // The real MV entry page declares UTF-8. Without it Chromium can
+ // decode external scripts as Windows-1252 and reject Japanese identifiers.
+ html.WriteString("<!doctype html><html><head><meta charset=\"UTF-8\"></head><body>\n")
  for _,n:=range mvnwbinCore{fmt.Fprintf(&html,"<script src=\"js/%s\"></script>\n",n)}
  html.WriteString("<script>\nvar w=nw.Window.get();\nw.evalNWBin(null,require('path').join(nw.App.startPath,'www','js','guard.bin'));\nw.evalNWBin(null,require('path').join(nw.App.startPath,'www','js','plugins.bin'));\n</script>\n")
  if approved{
@@ -191,7 +193,7 @@ func TestR44NWBinNativeLoader(t *testing.T){
   if e=os.Remove(bin);e!=nil{t.Fatal(e)}
   mvnwbinCompileFixture(t,sdk,item.name,item.source,bin)
  }
- mvnwbinWrite(t,filepath.Join(js,"rpg_managers.js"),"window.PluginManager={setup:function(list){list.forEach(function(p){if(p.status){var s=document.createElement('script');s.src='js/plugins/'+p.name+'.js';s.async=false;document.body.appendChild(s);}});}};\n")
+ mvnwbinWrite(t,filepath.Join(js,"rpg_managers.js"),"window.PluginManager={setup:function(list){list.forEach(function(p){if(p.status){var s=document.createElement('script');s.src='js/plugins/'+p.name+'.js';s.charset='UTF-8';s.async=false;document.body.appendChild(s);}});}};\n")
  mvnwbinWrite(t,filepath.Join(js,"main.js"),"PluginManager.setup($plugins);\n"+
   "var fs=require('fs'),p=require('path');var end=Date.now()+12000;function verify(){if(!window.originalGuardRan||!window.originalPluginsRan){fs.writeFileSync(p.join(nw.App.startPath,'r44-result.txt'),'FAIL_GUARD');nw.App.quit();return;}if(window.r44AddonRan){fs.writeFileSync(p.join(nw.App.startPath,'r44-result.txt'),'PASS');nw.App.quit();return;}if(Date.now()>end){fs.writeFileSync(p.join(nw.App.startPath,'r44-result.txt'),'FAIL_ADDON');nw.App.quit();return;}setTimeout(verify,50);}verify();\n")
  t.Log("IA_R44_NWBIN_BOTH_BINARIES_READY")

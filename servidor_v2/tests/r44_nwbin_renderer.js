@@ -142,6 +142,9 @@ function f10(){
 }
 function openScene(){
     check(process.versions.nw==="0.48.4","IA_R44_WRONG_RUNTIME");
+    check(document.characterSet.toUpperCase()==="UTF-8"&&jaRaw.charCodeAt(0)===0x6a4b&&
+        enRaw.charCodeAt(0)===0x203b&&enRaw.indexOf("\u3010M\u3011")>=0,
+        "IA_R44_FIXTURE_ENCODING_INVALID");
     check(window.coreReady&&window.originalGuardRan&&window.originalPluginsRan,"IA_R44_BINARY_ORDER");
     check(window.$plugins.filter(function(p){return p.name==="IATraductora"&&p.status===true;}).length===1,"IA_R44_REGISTRY");
     var boot=bootDiagnostic();
