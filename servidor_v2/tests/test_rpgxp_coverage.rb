@@ -1,5 +1,7 @@
 # encoding: UTF-8
 # Authored fixtures: no original game content or DLLs.
+require_relative "rpgxp_prose_contract"
+RPGXPProseContract.self_test!
 class Rect
   attr_reader :x,:y,:width,:height
   def initialize(x,y,w,h);@x=x;@y=y;@width=w;@height=h;end

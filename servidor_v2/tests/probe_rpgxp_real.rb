@@ -2,6 +2,9 @@
 # Synthetic XP window contract. Win32API here is a test double for the
 # 32-bit RGSS API; the installed Windows helper and OPUS worker are real.
 require 'rbconfig'
+require 'json'
+require_relative 'rpgxp_prose_contract'
+RPGXPProseContract.self_test!
 class Win32API
   def initialize(lib,func,args,result)
     @func=func
@@ -87,12 +90,29 @@ raise 'XP source changed' unless $game_temp.message_text==raw
 raise 'XP choice changed' unless $game_temp.choice_proc.equal?(callback) && $game_temp.choice_start==2 && $game_temp.choice_max==1
 # This phrase lacks the former short list of English stopwords.
 $game_temp.choice_max=0
-$game_temp.message_text="Hear me, mighty king!"
+expanded_source=RPGXPProseContract::SOURCE
+$game_temp.message_text=expanded_source.dup
+raise 'XP expanded prose source not recognized' unless IATraductoraXP.source(expanded_source)=='en'
 second=Window_Message.new
 deadline=Time.now.to_f+14
 while second.paints==0 && Time.now.to_f<deadline
   second.update
   sleep 0.02 if second.paints==0
 end
-raise 'XP expanded prose untranslated' unless second.paints==1 && second.painted!="Hear me, mighty king!" && second.painted =~ /rey/i && second.painted =~ /escuch|oye|oiga|o.d|o.r/i
+expanded=second.painted
+check=RPGXPProseContract.inspect_translation(expanded)
+# Only this authored fixture sentence is logged. Distinguish no native
+# paint, unchanged output and a genuine semantic rejection.
+diagnostic=check.merge(:paint_count=>second.paints,:original_preserved=>$game_temp.message_text==expanded_source)
+warn('IA_RPGXP_EXPANDED_CHECK '+JSON.generate(diagnostic))
+raise 'XP expanded prose native paint missing' unless second.paints==1
+raise 'XP expanded prose unchanged' unless check[:changed]
+raise 'XP expanded prose source modified' unless $game_temp.message_text==expanded_source
+unless check[:ok]
+  warn('IA_RPGXP_SYNTHETIC_PROSE_OUTPUT '+expanded.inspect[0,300])
+  raise 'XP expanded prose semantic mismatch'
+end
+# The parent verifies that the exact first-paint value was committed to
+# SQLite, rather than accepting a hard-coded or unrelated Spanish string.
+puts 'IA_RPGXP_EXPANDED_RESULT '+JSON.generate(expanded)
 puts 'IA_RPGXP_REAL_OPUS_INSTALLED_NATIVE_CONTRACT_PASS'

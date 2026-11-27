@@ -36,10 +36,12 @@ def invoke(exe,*args):
 def wait_closed(engine):
     deadline=time.monotonic()+120
     session=engine.parent/"rpgxp-session.txt"
+    bridge=engine.parent/"bridge.json"
     lock=engine.parent.parent.parent/"install"/"rpgxp"/"operation.lock"
-    while time.monotonic()<deadline and (session.exists() or lock.exists()):
+    markers=(session,bridge,lock)
+    while time.monotonic()<deadline and any(p.exists() for p in markers):
         time.sleep(.2)
-    assert not session.exists() and not lock.exists(),"XP worker did not stop with parent"
+    assert not any(p.exists() for p in markers),"XP worker did not stop with parent"
 
 def read_translation_count(database):
     # This reader belongs to the acceptance harness, not the worker.
@@ -49,6 +51,36 @@ def read_translation_count(database):
     with closing(sqlite3.connect(uri,uri=True)) as conn:
         with closing(conn.execute("SELECT COUNT(*) FROM translations")) as cursor:
             return cursor.fetchone()[0]
+
+EXPANDED_SOURCE="Hear me, mighty king!"
+EXPANDED_MARKER=b"IA_RPGXP_EXPANDED_RESULT "
+
+def read_expanded_translation(database):
+    uri=database.resolve(strict=True).as_uri()+"?mode=ro"
+    with closing(sqlite3.connect(uri,uri=True)) as conn:
+        with closing(conn.execute(
+            "SELECT translated FROM translations WHERE source=? AND original=?",
+            ("en",EXPANDED_SOURCE))) as cursor:
+            row=cursor.fetchone()
+            assert row is not None and cursor.fetchone() is None,"XP expanded prose cache key missing or duplicated"
+            return row[0]
+
+def run_native_probe(root,engine):
+    # Wait for the owned launcher and worker to stop even when Ruby exits
+    # with an assertion or times out. A Windows cleanup failure must not
+    # obscure the real presentation failure or race an open SQLite file.
+    try:
+        run=subprocess.run(["ruby",str(BASE/"tests"/"probe_rpgxp_real.rb")],cwd=root,
+                           stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=160)
+        if run.returncode or b"IA_RPGXP_REAL_OPUS_INSTALLED_NATIVE_CONTRACT_PASS" not in run.stdout:
+            raise AssertionError("XP real worker fixture failed: "+run.stderr.decode("utf8","replace")[-1800:])
+        lines=[line[len(EXPANDED_MARKER):] for line in run.stdout.splitlines() if line.startswith(EXPANDED_MARKER)]
+        assert len(lines)==1,"XP expanded native result missing or duplicated"
+        value=json.loads(lines[0])
+        assert isinstance(value,str) and value.strip() and value!=EXPANDED_SOURCE,"XP expanded result invalid"
+        return value
+    finally:
+        wait_closed(engine)
 
 def main():
     ap=argparse.ArgumentParser();ap.add_argument("--servidor",type=Path,required=True);args=ap.parse_args()
@@ -67,13 +99,11 @@ def main():
         state=json.loads(receipt.read_text("utf8"))
         assert state["status"]=="INSTALLED" and hashlib.sha256(target.read_bytes()).hexdigest()==state["after_sha256"]
         for attempt in range(2):
-            run=subprocess.run(["ruby",str(BASE/"tests"/"probe_rpgxp_real.rb")],cwd=root,
-                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=160)
-            if run.returncode or b"IA_RPGXP_REAL_OPUS_INSTALLED_NATIVE_CONTRACT_PASS" not in run.stdout:
-                raise AssertionError("XP real worker fixture failed: "+run.stderr.decode("utf8","replace")[-1000:])
-            wait_closed(engine)
-            count=read_translation_count(engine.parent/"cache"/"translation-memory-v2.sqlite3")
+            painted=run_native_probe(root,engine)
+            database=engine.parent/"cache"/"translation-memory-v2.sqlite3"
+            count=read_translation_count(database)
             assert count==4, "missing or duplicate memory keys"
+            assert read_expanded_translation(database)==painted,"XP expanded native paint differs from committed OPUS result"
         invoke(exe,"--recover","--game",game)
         assert target.read_bytes()==original
         assert json.loads(receipt.read_text("utf8"))["status"]=="RESTORED"

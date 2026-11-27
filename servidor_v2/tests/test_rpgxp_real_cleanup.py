@@ -2,9 +2,11 @@
 from contextlib import closing
 from pathlib import Path
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import probe_rpgxp_real as probe
 
@@ -48,6 +50,45 @@ class RPGXPAcceptanceCleanupTests(unittest.TestCase):
                 path.unlink()
                 self.assertFalse(path.exists())
         self.assertEqual(len(opened),2)
+
+    def test_worker_shutdown_always_precedes_fixture_cleanup(self):
+        engine=Path("synthetic-engine")
+        root=Path("synthetic-root")
+        good=SimpleNamespace(returncode=0,stdout=(
+            b'IA_RPGXP_EXPANDED_RESULT "Escuchame, poderoso rey!"\n'
+            b'IA_RPGXP_REAL_OPUS_INSTALLED_NATIVE_CONTRACT_PASS\n'),stderr=b"")
+        bad=SimpleNamespace(returncode=1,stdout=b"",stderr=b"semantic test failure")
+        for result,error in ((good,None),(bad,AssertionError),
+            (subprocess.TimeoutExpired("ruby",160),subprocess.TimeoutExpired)):
+            events=[]
+            def execute(*args,**kwargs):
+                events.append("ruby")
+                if isinstance(result,Exception):raise result
+                return result
+            def closed(path):
+                self.assertEqual(path,engine)
+                events.append("worker closed")
+            with patch.object(probe.subprocess,"run",side_effect=execute), \
+                 patch.object(probe,"wait_closed",side_effect=closed):
+                if error is None:
+                    self.assertEqual(probe.run_native_probe(root,engine),"Escuchame, poderoso rey!")
+                else:
+                    with self.assertRaises(error):
+                        probe.run_native_probe(root,engine)
+            self.assertEqual(events,["ruby","worker closed"])
+
+    def test_expanded_reader_checks_exact_key_without_leaking_handles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"probe.sqlite3"
+            with closing(sqlite3.connect(str(path))) as conn:
+                conn.execute("CREATE TABLE translations (source TEXT, original TEXT, translated TEXT)")
+                conn.execute("INSERT INTO translations VALUES (?,?,?)",
+                             ("en",probe.EXPANDED_SOURCE,"Escúchame, poderoso rey!"))
+                conn.execute("INSERT INTO translations VALUES (?,?,?)",
+                             ("en","Other phrase","Otra frase"))
+                conn.commit()
+            self.assertEqual(probe.read_expanded_translation(path),"Escúchame, poderoso rey!")
+            path.unlink()
 
     def test_missing_database_is_not_created(self):
         with tempfile.TemporaryDirectory() as tmp:
