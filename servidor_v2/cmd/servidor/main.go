@@ -444,7 +444,12 @@ func main(){
  xpLabInstall:=flag.Bool("xp-lab-install",false,"Experimental XP installation on a CLOSED loose copy")
  xpLabRecover:=flag.Bool("xp-lab-recover",false,"Restore an XP laboratory installation")
  xpParent:=flag.Int("xp-launch-parent",0,"Internal installed XP launcher; parent PID")
+ xpProbe:=flag.Bool("xp-native-probe",false,"Validate genuine RGSS1 using an isolated synthetic game")
  flag.Parse()
+ if *xpProbe {
+  if err:=xpNativeCommand(*exe,*payload);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
+  return
+ }
  if *xpLabInstall||*xpLabRecover||*xpParent!=0 {
   if err:=xpLabCommand(*xpLabInstall,*xpLabRecover,*xpParent,*exe,*payload);err!=nil{
    fmt.Fprintln(os.Stderr,err);os.Exit(1)
