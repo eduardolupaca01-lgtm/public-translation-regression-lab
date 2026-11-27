@@ -1083,12 +1083,19 @@ async function testR4P4ShortTextAndMacroAlias(){
     const result="¿Escritura \\m[Things]antigua\\c[0]? ¡Absurdo!";
     const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
     const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
-    const state={files:{[journal]:JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true})+"\n"},dirs:{[folder]:true}};
+    const cachedQuote='"We are ready."';
+    const cachedQuoteEs='"Estamos listos."';
+    const state={files:{[journal]:[
+        {schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true},
+        {schema:"ia-traductora-cache-v2",source:"en",original:cachedQuote,translated:cachedQuoteEs,composed:false}
+    ].map(v=>JSON.stringify(v)).join("\n")+"\n"},dirs:{[folder]:true}};
     const f=fixture(1,{plugins,fsState:state,disconnected:true});await wait(40);
     const m=new f.context.Window_Message();
     f.$gameMessage._texts=[raw.replace("\\m[Things]","\\c[11]")];m.startMessage();
     assert.equal(f.$gameMessage.allText(),result.replace("\\m[Things]","\\c[11]"),
         "same words and equivalent macro/color use existing cache while preserving original controls");
+    f.$gameMessage._texts=[cachedQuote];new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),cachedQuoteEs,"old full quoted cache remains usable offline");
     assert.equal(f.posts.length,0);
     const short='"Typical. Always looking out for herself."';
     const n=fixture(1,{responses:{[short]:'"Típico. Siempre pensando en sí misma."'}});await wait(25);

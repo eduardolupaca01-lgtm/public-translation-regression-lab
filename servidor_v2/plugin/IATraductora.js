@@ -6989,6 +6989,17 @@ function r42NoticeProject(raw,win,request,forced){
     if(inputFormActive()||identityDrawDepth||win&&(win._iaNameSurface||win._iaOwnSurface))return null;
     var plan=r42NoticePlan(raw,!!forced);
     if(!plan)return null;
+    // Legacy ordinary quoted messages use a complete-line cache key.
+    // Prefer a validated complete translation when present; if the new
+    // fragment is still missing, keep the existing whole-line request alive.
+    // Never submit formatted notices or controls through this fallback.
+    var plainQuote=/^[ \t]*"[^"\r\n\\\x1b<>※【】\[\]{}$@#]+"[ \t]*$/;
+    var legacyQuote=!forced&&win&&typeof Window_Message!=="undefined"&&
+        win instanceof Window_Message&&plainQuote.test(raw)&&displaySource(raw,"message")==="en";
+    if(legacyQuote){
+        var whole=readyText("en",raw);
+        if(typeof whole==="string"&&plainQuote.test(whole)&&validTranslation("en",raw,whole,true))return null;
+    }
     var missing=false;
     plan.plans.forEach(function(line){
         var waiting=false;
@@ -7008,6 +7019,7 @@ function r42NoticeProject(raw,win,request,forced){
         // Never move icon/color/hotkey markers or draw a half-ready line.
         if(!waiting)plan.lines[line.index]=rendered;
     });
+    if(legacyQuote&&missing&&request)firstViewRequest("en",raw);
     var out=plan.lines.join("");
     if(out!==raw)r42Stats.notices++;
     return {text:out,missing:missing};
