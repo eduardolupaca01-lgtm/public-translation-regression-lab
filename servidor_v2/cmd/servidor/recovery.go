@@ -11,6 +11,10 @@ import(
 )
 
 func RecoverGame(gameEXE string)error{
+ if fingerprint,matched,vxErr:=detectVXAce(gameEXE);matched{
+  if vxErr!=nil{return vxErr}
+  return recoverVXAce(fingerprint)
+ }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{return recoverHalva(packed)}
