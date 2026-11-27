@@ -178,6 +178,14 @@ func iaFriendlyInstall(code string)string{
         return "Windows no permite inspeccionar la carpeta de destino."
     case "IA_DESTINO_AJENO_NO_MODIFICADO","IA_DESTINO_EXISTENTE_NO_SOBRESCRITO":
         return "Ya hay una carpeta distinta en el destino. No se ha sobrescrito."
+    case "IA_VXACE_REPLACE_SHARING_WIN32_32","IA_VXACE_REPLACE_LOCKED_WIN32_33":
+        return "El archivo VX Ace está abierto o bloqueado. Cierra el juego y sus lanzadores. Se conserva el respaldo; no borres los archivos."
+    case "IA_VXACE_REPLACE_ACCESS_DENIED_WIN32_5":
+        return "Windows negó el reemplazo de VX Ace. Cierra el juego y comprueba que la copia sea escribible. Se conserva el respaldo."
+    case "IA_VXACE_RECURSO_CAMBIO_DURANTE_REEMPLAZO","IA_VXACE_REPLACE_TEMP_SHA_INVALIDO":
+        return "El archivo cambió o no coincide con su SHA. Se detuvo el reemplazo; conserva el respaldo."
+    case "IA_VXACE_REPLACE_ATTR_RESTORE_FAILED":
+        return "Windows no permitió restaurar el atributo del archivo. Conserva el respaldo y usa Recuperar inicio RPG antes de reintentar."
     case "IA_PUBLICACION_CAMBIO_NOMBRE_FALLIDO":
         return "Windows no permitió publicar los modelos. Se conservaron para reintentar."
     case "IA_ESCRITURA_BLOQUEADA","IA_ETAPA_ESCRITURA_BLOQUEADA":

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Windows candidate acceptance on generated resources + desktop Ruby, not RGSS3."""
-import argparse, ctypes, hashlib, json, os, re, shutil, sqlite3, subprocess, tempfile, time
+import argparse, ctypes, hashlib, json, os, re, shutil, sqlite3, stat, subprocess, tempfile, time
 from contextlib import closing
 from pathlib import Path
 
@@ -174,7 +174,12 @@ def main():
             original=hash_file(target)
             save_sha=hash_file(save)
             game_exe=game/"Game.exe"
+            if mode=="packed":
+                os.chmod(target,stat.S_IREAD)
+                assert not target.stat().st_mode&stat.S_IWRITE,"IA_VXACE_READONLY_FIXTURE_INVALID"
             run([a.servidor,"--game",game_exe],timeout=budget)
+            if mode=="packed":
+                assert not target.stat().st_mode&stat.S_IWRITE,"IA_VXACE_READONLY_FLAG_LOST_INSTALL"
             assert hash_file(target)!=original,"IA_VXACE_INSTALL_NO_CHANGE"
             installed=hash_file(target)
             plugin=game/"IA Traductora"/".local"/"Rpg"/"engine"/"vxace"/"IATraductoraVXACE.rb"
@@ -191,6 +196,10 @@ def main():
             run([a.servidor,"--recover","--game",game_exe],timeout=budget)
             assert hash_file(target)==original and hash_file(save)==save_sha,"IA_VXACE_RECOVERY_HASH"
             assert cache_rows(cache)==rows,"IA_VXACE_RECOVERY_LOST_CACHE"
+            if mode=="packed":
+                assert not target.stat().st_mode&stat.S_IWRITE,"IA_VXACE_READONLY_FLAG_LOST_RECOVERY"
+                os.chmod(target,stat.S_IREAD|stat.S_IWRITE) # Only disposable QA fixture.
+                print("IA_VXACE_READONLY_PACKED_INSTALL_RECOVERY_PASS",flush=True)
             # This is a generated fixture, never a player's game. Verify the
             # actual executable is deletable, only after all restoration,
             # persistence and clean-exit checks. Do not ignore permission errors.

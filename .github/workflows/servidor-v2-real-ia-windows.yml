@@ -1,4 +1,4 @@
-name: Servidor R35 candidate - MV SOLData native loader and real OPUS
+name: Servidor R36 candidate - VX Ace verified Windows replacement and real OPUS
 on:
   push:
     branches:
@@ -417,20 +417,20 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-R35-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-R36-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-R35-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
-          'Servidor R35 candidato: MV SOLData experimental mediante cargador nativo, MV/MZ/VX Ace y OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-R36-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          'Servidor R36 candidato: reemplazo Windows VX Ace verificado, MV SOLData experimental, MV/MZ y OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Copy-Item -LiteralPath "servidor_v2/LICENSE-BROTLI.txt" -Destination (Join-Path $dir "LICENSE-BROTLI.txt")
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-R35-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-R36-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error

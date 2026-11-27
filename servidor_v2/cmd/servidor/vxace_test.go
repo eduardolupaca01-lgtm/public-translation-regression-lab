@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func vxacePEFixture() []byte {
@@ -193,4 +194,45 @@ func TestVXAceRecoveryAfterPreparedJournal(t *testing.T) {
 			if err!=nil||!ok||got.Status!="RESTORED"{t.Fatalf("receipt: %+v %v",got,err)}
 		})
 	}
+}
+
+func TestVXAceReplacementRetriesAndRefusesChangedTarget(t *testing.T){
+	for _,change:=range []bool{false,true}{
+		t.Run(map[bool]string{false:"transient",true:"changed"}[change],func(t *testing.T){
+			dir:=t.TempDir()
+			src,dst:=filepath.Join(dir,"prepared"),filepath.Join(dir,"Game.rgss3a")
+			before,after:=[]byte("original archive"),[]byte("patched archive")
+			if e:=os.WriteFile(src,after,0600);e!=nil{t.Fatal(e)}
+			if e:=os.WriteFile(dst,before,0600);e!=nil{t.Fatal(e)}
+			move,sleep:=vxaceMoveReplacement,vxaceReplacementSleep
+			t.Cleanup(func(){vxaceMoveReplacement=move;vxaceReplacementSleep=sleep})
+			calls:=0
+			vxaceMoveReplacement=func(s,d string,info os.FileInfo)error{
+				calls++
+				if calls==1{return os.ErrPermission}
+				return move(s,d,info)
+			}
+			vxaceReplacementSleep=func(time.Duration){
+				if change{
+					if e:=os.WriteFile(dst,[]byte("external modification"),0600);e!=nil{t.Fatal(e)}
+				}
+			}
+			e:=vxaceAtomicReplaceFrom(src,dst,hash(after),hash(before))
+			raw,readErr:=os.ReadFile(dst);if readErr!=nil{t.Fatal(readErr)}
+			if change{
+				if e==nil||e.Error()!="IA_VXACE_RECURSO_CAMBIO_DURANTE_REEMPLAZO"||calls!=1||string(raw)!="external modification"{t.Fatalf("changed target overwritten: %v %d",e,calls)}
+			}else if e!=nil||calls!=2||string(raw)!=string(after){t.Fatalf("retry failed: %v %d",e,calls)}
+			got,_:=os.ReadFile(src);if string(got)!=string(after){t.Fatal("verified source changed")}
+		})
+	}
+}
+
+func TestVXAceReplacementRejectsBadPreparedHash(t *testing.T){
+	dir:=t.TempDir()
+	src,dst:=filepath.Join(dir,"prepared"),filepath.Join(dir,"Game.rgss3a")
+	if e:=os.WriteFile(src,[]byte("corrupted prepared"),0600);e!=nil{t.Fatal(e)}
+	if e:=os.WriteFile(dst,[]byte("original"),0600);e!=nil{t.Fatal(e)}
+	e:=vxaceAtomicReplaceFrom(src,dst,hash([]byte("approved prepared")),hash([]byte("original")))
+	if e==nil||e.Error()!="IA_VXACE_REPLACE_TEMP_SHA_INVALIDO"{t.Fatalf("unexpected error: %v",e)}
+	got,_:=os.ReadFile(dst);if string(got)!="original"{t.Fatal("original changed")}
 }

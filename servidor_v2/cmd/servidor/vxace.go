@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 )
 
 const (
@@ -430,15 +432,52 @@ func vxaceCopyFileNew(source, destination string) error {
 	return nil
 }
 
-func vxaceAtomicReplaceFrom(source, destination string) error {
+// Each replacement has already been journaled with both exact SHA-256
+// values. Never delete the old resource, truncate it in place, or rename
+// it out of the way as a fallback. Recheck after staging and before retries.
+var vxaceMoveReplacement = vxaceReplaceOnce
+var vxaceReplacementSleep = time.Sleep
+
+func vxaceSameReplaceFile(a,b os.FileInfo) bool {
+	return a != nil && b != nil && a.Mode().IsRegular() && b.Mode().IsRegular() &&
+		os.SameFile(a,b) && a.Size()==b.Size() && a.ModTime().Equal(b.ModTime())
+}
+
+func vxaceVerifiedReplaceFile(filename, expected string) (os.FileInfo,error) {
+	st,err:=os.Lstat(filename)
+	if err!=nil || !st.Mode().IsRegular() || st.Mode()&os.ModeSymlink!=0 {
+		return nil,errors.New("IA_VXACE_REPLACE_TARGET_UNSAFE")
+	}
+	actual,err:=digestFile(filename)
+	if err!=nil {return nil,errors.New("IA_VXACE_REPLACE_HASH_NO_VERIFICADO")}
+	after,err:=os.Lstat(filename)
+	if err!=nil || actual!=expected || !vxaceSameReplaceFile(st,after) {
+		return nil,errors.New("IA_VXACE_RECURSO_CAMBIO_DURANTE_REEMPLAZO")
+	}
+	return after,nil
+}
+
+func vxaceReplacementError(err error) error {
+	// Public diagnostics expose only a numeric OS status, not user paths.
+	if strings.HasPrefix(err.Error(),"IA_VXACE_") {return err}
+	var errno syscall.Errno
+	if errors.As(err,&errno) {
+		switch errno {
+		case 5:return errors.New("IA_VXACE_REPLACE_ACCESS_DENIED_WIN32_5")
+		case 32:return errors.New("IA_VXACE_REPLACE_SHARING_WIN32_32")
+		case 33:return errors.New("IA_VXACE_REPLACE_LOCKED_WIN32_33")
+		default:return fmt.Errorf("IA_VXACE_REPLACE_ATOMIC_OS_%d",uint64(errno))
+		}
+	}
+	return errors.New("IA_VXACE_REPLACE_ATOMIC_FAILED")
+}
+
+func vxaceAtomicReplaceFrom(source, destination, sourceSHA, destinationSHA string) error {
 	if !ordinary(source) {
 		return errors.New("IA_VXACE_REPLACE_SOURCE_INVALID")
 	}
-	if st, err := os.Lstat(destination); err == nil && (st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular()) {
-		return errors.New("IA_VXACE_REPLACE_TARGET_UNSAFE")
-	} else if err != nil && !os.IsNotExist(err) {
-		return errors.New("IA_VXACE_REPLACE_TARGET_INSPECT_FAILED")
-	}
+	if err:=vxaceNoSymlinkAncestors(filepath.Dir(destination));err!=nil{return err}
+	if !ordinary(destination) {return errors.New("IA_VXACE_REPLACE_TARGET_UNSAFE")}
 	tmp, err := os.CreateTemp(filepath.Dir(destination), ".ia-vxace-replace-")
 	if err != nil {
 		return errors.New("IA_VXACE_REPLACE_TEMP_FAILED")
@@ -451,8 +490,8 @@ func vxaceAtomicReplaceFrom(source, destination string) error {
 		return errors.New("IA_VXACE_REPLACE_SOURCE_UNREADABLE")
 	}
 	_, copyErr := io.CopyBuffer(tmp, input, make([]byte, 256*1024))
-	_ = input.Close()
-	if copyErr != nil {
+	inputErr := input.Close()
+	if copyErr != nil || inputErr != nil {
 		_ = tmp.Close()
 		return errors.New("IA_VXACE_REPLACE_COPY_FAILED")
 	}
@@ -463,10 +502,25 @@ func vxaceAtomicReplaceFrom(source, destination string) error {
 	if err = tmp.Close(); err != nil {
 		return errors.New("IA_VXACE_REPLACE_CLOSE_FAILED")
 	}
-	if err = os.Rename(tmpName, destination); err != nil {
-		return errors.New("IA_VXACE_REPLACE_ATOMIC_FAILED")
+	prepared,err:=vxaceVerifiedReplaceFile(tmpName,sourceSHA)
+	if err!=nil{return errors.New("IA_VXACE_REPLACE_TEMP_SHA_INVALIDO")}
+	// Retry transient file-sharing failures only; never ask Windows to
+	// bypass ACLs, terminate the game, or defer a replacement to reboot.
+	// Rehash the current target on each attempt, since a concurrent writer
+	// must not be overwritten. Do not repeat the large archive construction.
+	for attempt:=0;attempt<6;attempt++{
+		original,e:=vxaceVerifiedReplaceFile(destination,destinationSHA)
+		if e!=nil{return e}
+		check,e:=os.Lstat(tmpName)
+		if e!=nil||!vxaceSameReplaceFile(prepared,check){
+			return errors.New("IA_VXACE_REPLACE_TEMP_SHA_INVALIDO")
+		}
+		err=vxaceMoveReplacement(tmpName,destination,original)
+		if err==nil{return nil}
+		if !iaIsTransientRename(err)||attempt==5{return vxaceReplacementError(err)}
+		vxaceReplacementSleep(time.Duration(100*(1<<attempt))*time.Millisecond)
 	}
-	return nil
+	return errors.New("IA_VXACE_REPLACE_ATOMIC_FAILED")
 }
 
 func vxaceReadReceipt(filename string) (vxaceReceipt, bool, error) {
@@ -656,7 +710,7 @@ func installVXAce(fp vxaceFingerprint, pkg *packageReader) error {
 	if err != nil || latestSHA != currentSHA {
 		return errors.New("IA_VXACE_RECURSO_CAMBIO_DURANTE_INSTALACION")
 	}
-	if err = vxaceAtomicReplaceFrom(output, target); err != nil { return err }
+	if err = vxaceAtomicReplaceFrom(output, target, outputSHA, currentSHA); err != nil { return err }
 	installedSHA, err := digestFile(target)
 	if err != nil || installedSHA != outputSHA {
 		// Never overwrite unknown bytes; retain the PREPARED journal for recovery.
@@ -731,7 +785,7 @@ func recoverVXAce(fp vxaceFingerprint) error {
 	if currentSHA != receipt.AfterSHA || (receipt.Status != "INSTALLED" && receipt.Status != "PREPARED") {
 		return errors.New("IA_VXACE_RECURSO_MODIFICADO_NO_RESTAURADO")
 	}
-	if err = vxaceAtomicReplaceFrom(backup, target); err != nil {
+	if err = vxaceAtomicReplaceFrom(backup, target, receipt.BeforeSHA, currentSHA); err != nil {
 		return err
 	}
 	restoredSHA, err := digestFile(target)
