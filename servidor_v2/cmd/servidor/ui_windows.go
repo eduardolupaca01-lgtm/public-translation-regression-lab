@@ -334,7 +334,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                         iaSet(ui.status,iaFriendlyInstall(code))
                     }else{
                         iaLog("[IA_EXE_NO_COMPATIBLE] "+code)
-                        iaSet(ui.status,"Selecciona un EXE de una copia de RPG Maker MV o MZ.")
+                        iaSet(ui.status,"Selecciona Game.exe de una copia de RPG Maker MV, MZ o VX Ace.")
                     }
                 }else{
                     ui.gameFile=file;iaSet(ui.input,file)
