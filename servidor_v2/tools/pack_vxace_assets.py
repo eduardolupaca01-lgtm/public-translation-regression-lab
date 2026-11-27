@@ -7,7 +7,7 @@ from pathlib import Path
 HELPER_NAME = "vxace-helper.exe"
 PLUGIN_NAME = "vxace/IATraductoraVXACE.rb"
 PLUGIN_MARKER = b"# IA_TRADUCTORA_VXACE_RGSS3_OWNER_V1"
-PLUGIN_BUILD = b"VXACE-RGSS3-20261126-B"
+PLUGIN_BUILD = b"VXACE-RGSS3-20261126-C"
 
 
 def validated_assets(helper: Path, plugin: Path) -> dict[str, Path]:

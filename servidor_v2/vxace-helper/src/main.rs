@@ -553,8 +553,119 @@ fn parse_arg(args: &[String], name: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("IA_VXACE_ARG_MISSING_{name}"))
 }
 
+
+const RUNTIME_BUILD: &str = "VXACE-RGSS3-20261126-C";
+const SIDECAR: &str = "IA Traductora/.local/Rpg";
+fn safe_runtime_file(root: &Path, relative: &str, maximum: u64) -> Result<PathBuf, String> {
+    let mut file = root.to_owned();
+    for component in Path::new(relative).components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err(fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"));
+        };
+        file.push(part);
+        let meta = file.symlink_metadata().map_err(|_| fail("IA_VXACE_RUNTIME_NO_VERIFICADO"))?;
+        if meta.file_type().is_symlink() {
+            return Err(fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 {
+                return Err(fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"));
+            }
+        }
+    }
+    if !ordinary(&file, maximum) ||
+        !file.canonicalize().map_err(|_| fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"))?.starts_with(root) {
+        return Err(fail("IA_VXACE_RUNTIME_NO_VERIFICADO"));
+    }
+    Ok(file)
+}
+
+fn runtime_manifest(root: &Path, relative: &str) -> Result<serde_json::Value, String> {
+    let path = safe_runtime_file(root, relative, 8192)?;
+    let raw = read_bounded(&path, 8192)?;
+    serde_json::from_slice(&raw).map_err(|_| fail("IA_VXACE_RUNTIME_MANIFIESTO_INVALIDO"))
+}
+
+fn verified_worker(root: &Path, current_helper: &Path) -> Result<PathBuf, String> {
+    let layout = validate_game_root(root)?;
+    let root = &layout.root;
+    let owner = runtime_manifest(root, "IA Traductora/owner-v1.json")?;
+    let receipt = runtime_manifest(root, "IA Traductora/install/vxace-receipt.json")?;
+    if owner["schema"] != "ia-traductora-owner-v1" ||
+        owner["product"] != "SERVIDOR-IA-TRADUCTORA" ||
+        owner["vxace_plugin_build"] != RUNTIME_BUILD ||
+        receipt["schema"] != "ia-traductora-vxace-install-v1" ||
+        receipt["status"] != "INSTALLED" || receipt["build"] != RUNTIME_BUILD {
+        return Err(fail("IA_VXACE_RUNTIME_PROPIEDAD_INVALIDA"));
+    }
+    let worker = safe_runtime_file(root, &format!("{SIDECAR}/engine/IATraductora.exe"), 450 * 1024 * 1024)?;
+    let helper = safe_runtime_file(root, &format!("{SIDECAR}/engine/vxace-helper.exe"), 128 * 1024 * 1024)?;
+    let plugin = safe_runtime_file(root, &format!("{SIDECAR}/engine/vxace/IATraductoraVXACE.rb"), MAX_PLUGIN_BYTES)?;
+    if current_helper.canonicalize().map_err(|_| fail("IA_VXACE_HELPER_RUTA_INVALIDA"))? !=
+        helper.canonicalize().map_err(|_| fail("IA_VXACE_HELPER_RUTA_INVALIDA"))? {
+        return Err(fail("IA_VXACE_HELPER_RUTA_INVALIDA"));
+    }
+    for (file, owner_key, receipt_key) in [
+        (&worker, "worker_sha256", "worker_sha256"),
+        (&helper, "vxace_helper_sha256", "helper_sha256"),
+        (&plugin, "vxace_plugin_sha256", "plugin_sha256"),
+    ] {
+        let digest = sha256_file(file)?;
+        if owner[owner_key].as_str() != Some(digest.as_str()) ||
+            receipt[receipt_key].as_str() != Some(digest.as_str()) {
+            return Err(fail("IA_VXACE_RUNTIME_SHA_INVALIDO"));
+        }
+    }
+    let (relative, mode, limit) = if layout.archive.is_some() {
+        ("Game.rgss3a", "rgss3a", MAX_ARCHIVE_BYTES)
+    } else {
+        ("Data/Scripts.rvdata2", "loose", MAX_SCRIPT_BYTES)
+    };
+    let installed = safe_runtime_file(root, relative, limit)?;
+    if receipt["target_rel"] != relative || receipt["mode"] != mode ||
+        receipt["after_sha256"].as_str() != Some(sha256_file(&installed)?.as_str()) {
+        return Err(fail("IA_VXACE_RUNTIME_RECURSO_MODIFICADO"));
+    }
+    Ok(worker)
+}
+
+fn launch_worker(args: &[String]) -> Result<serde_json::Value, String> {
+    // The caller supplies only the game process ID; the executable, resource
+    // paths and child arguments are derived from the verified installation.
+    let parent = args.get(2).and_then(|s| s.parse::<u32>().ok()).filter(|p| *p > 0)
+        .ok_or_else(|| fail("IA_VXACE_PARENT_INVALIDO"))?;
+    if args.len() != 3 || args[1] != "--parent-pid" {
+        return Err(fail("IA_VXACE_PARENT_INVALIDO"));
+    }
+    let root = env::current_dir().map_err(|_| fail("IA_VXACE_JUEGO_NO_VALIDO"))?
+        .canonicalize().map_err(|_| fail("IA_VXACE_JUEGO_NO_VALIDO"))?;
+    let helper = env::current_exe().map_err(|_| fail("IA_VXACE_HELPER_RUTA_INVALIDA"))?;
+    let worker = verified_worker(&root, &helper)?;
+    let mut command = std::process::Command::new(worker);
+    command.current_dir(&root).arg("--game-root").arg(&root)
+        .arg("--parent-pid").arg(parent.to_string())
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let child = command.spawn().map_err(|_| fail("IA_VXACE_WORKER_NO_INICIA"))?;
+    Ok(json!({"schema":"ia-vxace-launch-v1","pid":child.id()}))
+}
+
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("launch-worker") {
+        match launch_worker(&args) {
+            Ok(report) => println!("{}", report),
+            Err(code) => { eprintln!("{code}"); std::process::exit(2); }
+        }
+        return;
+    }
     if args.first().map(String::as_str) != Some("install") {
         eprintln!("IA_VXACE_COMMAND_INVALID");
         std::process::exit(2);
