@@ -82,7 +82,7 @@ func iaCheckEngine(root string,pkg *packageReader)error{
  if helper:=pkg.manifest.Files["vxace-helper.exe"];helper!="" {
   owner,err:=iaReadOwner(filepath.Join(root,"owner-v1.json"))
   if err!=nil||owner.VXACEHelperSHA!=helper||
-   owner.VXACEPluginSHA!=pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"]||
+   owner.VXACEPluginSHA!=pkg.manifest.Files["vxace/IATraductoraVXACE.rb"]||
    owner.VXACEPluginBuild!=vxacePluginBuildID {
    return errors.New("IA_VXACE_PROPIEDAD_NO_VERIFICADA")
   }
@@ -180,11 +180,11 @@ func iaCopyVerifiedStage(stage,folder string,pkg *packageReader)error{
  if helper:=pkg.manifest.Files["vxace-helper.exe"];helper!="" {
   owner,readErr:=iaReadOwner(own)
   if readErr!=nil{return readErr}
-  wantPlugin:=pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"]
+  wantPlugin:=pkg.manifest.Files["vxace/IATraductoraVXACE.rb"]
   if owner.VXACEHelperSHA!=""&&(owner.VXACEHelperSHA!=helper||owner.VXACEPluginSHA!=wantPlugin) {
    return errors.New("IA_VXACE_PROPIEDAD_NO_VERIFICADA")
   }
-  owner.Product="TENSHIXGAME-SERVIDOR"
+  owner.Product="SERVIDOR-IA-TRADUCTORA"
   owner.VXACEHelperSHA=helper
   owner.VXACEPluginSHA=wantPlugin
   owner.VXACEPluginBuild=vxacePluginBuildID
@@ -239,9 +239,9 @@ func iaPrepareStage(game string,pkg *packageReader)(string,error){
   }
  }
  own:=ownerManifest{Schema:ownerSchema,WorkerSHA:pkg.manifest.Files["IATraductora.exe"],
-  PluginSHA:pkg.manifest.Files["IATraductora.js"],Product:"TENSHIXGAME-SERVIDOR",
+  PluginSHA:pkg.manifest.Files["IATraductora.js"],Product:"SERVIDOR-IA-TRADUCTORA",
   VXACEHelperSHA:pkg.manifest.Files["vxace-helper.exe"],
-  VXACEPluginSHA:pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"]}
+  VXACEPluginSHA:pkg.manifest.Files["vxace/IATraductoraVXACE.rb"]}
  if own.VXACEHelperSHA!=""{own.VXACEPluginBuild=vxacePluginBuildID}
  bytes,_:=json.MarshalIndent(own,"","  ")
  if err=createNew(filepath.Join(stage,"owner-v1.json"),bytes);err!=nil{return "",errors.New("IA_ETAPA_NO_SE_PUEDE_MARCAR")}

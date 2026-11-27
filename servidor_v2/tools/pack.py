@@ -4,6 +4,11 @@ from __future__ import annotations
 import argparse,hashlib,json,struct,zipfile
 from pathlib import Path
 
+if __package__:
+ from .pack_vxace_assets import validated_assets
+else:
+ from pack_vxace_assets import validated_assets
+
 SCHEMA="ia-traductora-package-v1"
 MAGIC=b"SERVIDOR2ZIPSHA1"
 assert len(MAGIC)==16
@@ -15,12 +20,19 @@ def digest(file:Path):
  with file.open("rb") as stream:
   for block in iter(lambda:stream.read(1024*1024),b""):h.update(block)
  return h.hexdigest()
-def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path):
+def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path,*,vxace_helper=None,vxace_plugin=None):
  if not executable.is_file() or not worker.is_file() or not plugin.is_file():
   raise RuntimeError("IA_ARCHIVOS_DE_COMPILACION_INCOMPLETOS")
  if out.resolve() in {executable.resolve(),worker.resolve(),plugin.resolve()}:
   raise RuntimeError("IA_NO_REEMPLAZAR_ORIGINALES")
  files={"IATraductora.exe":worker,"IATraductora.js":plugin}
+ if (vxace_helper is None)!=(vxace_plugin is None):
+  raise ValueError("IA_VXACE_PAQUETE_INCOMPLETO")
+ if vxace_helper is not None:
+  assets=validated_assets(vxace_helper,vxace_plugin)
+  if out.resolve() in {asset.resolve() for asset in assets.values()}:
+   raise ValueError("IA_NO_REEMPLAZAR_ORIGINALES")
+  files.update(assets)
  for lang in MODELS:
   for filename in SUFFIX:
    source=models/lang/filename
@@ -51,5 +63,7 @@ def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path):
 if __name__=="__main__":
  a=argparse.ArgumentParser()
  for arg in ("bootstrap","worker","plugin","models","out"):a.add_argument("--"+arg,type=Path,required=True)
+ a.add_argument('--vxace-helper',type=Path)
+ a.add_argument('--vxace-plugin',type=Path)
  args=a.parse_args()
- build(args.bootstrap,args.worker,args.plugin,args.models,args.out)
+ build(args.bootstrap,args.worker,args.plugin,args.models,args.out,vxace_helper=args.vxace_helper,vxace_plugin=args.vxace_plugin)

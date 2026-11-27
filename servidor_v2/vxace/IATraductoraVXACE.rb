@@ -1,13 +1,18 @@
-# TENSHIXGAME_VXACE_RGSS3_OWNER_V1
+# encoding: UTF-8
+# IA_TRADUCTORA_VXACE_RGSS3_OWNER_V1
 # Ruby 1.9.2 / RGSS3 runtime adapter. No subtitle windows are created.
-require 'json'
-require 'socket'
-require 'timeout'
-require 'digest/sha2'
+begin
+  require 'json'
+  require 'socket'
+  require 'timeout'
+  require 'digest/sha2'
+rescue LoadError
+  # RGSS3 distributions can omit the standard library. Do not break startup.
+end
 
-module TenshixgameVXACELive
-  PLUGIN_BUILD = 'VXACE-RGSS3-20261126-A'
-  PLUGIN_MARKER = '# TENSHIXGAME_VXACE_RGSS3_OWNER_V1'
+module IATraductoraVXACE
+  PLUGIN_BUILD = 'VXACE-RGSS3-20261126-B'
+  PLUGIN_MARKER = '# IA_TRADUCTORA_VXACE_RGSS3_OWNER_V1'
   PLUGIN_NAME = 'IA Traductora RGSS3'
   SIDECAR = File.join('IA Traductora', '.local', 'Rpg')
   WORKER_RELATIVE = File.join(SIDECAR, 'engine', 'IATraductora.exe')
@@ -73,14 +78,14 @@ module TenshixgameVXACELive
       raise 'VX Ace owner manifest missing' unless ordinary_file?(path, 4096)
       data = JSON.parse(File.open(path, 'rb') { |f| f.read })
       raise 'VX Ace owner schema invalid' unless data['schema'] == 'ia-traductora-owner-v1'
-      raise 'VX Ace owner product invalid' unless data['product'] == 'TENSHIXGAME-SERVIDOR'
+      raise 'VX Ace owner product invalid' unless data['product'] == 'SERVIDOR-IA-TRADUCTORA'
       raise 'VX Ace owner build invalid' unless data['vxace_plugin_build'] == PLUGIN_BUILD
       worker_hash = Digest::SHA256.file(@worker).hexdigest
       raise 'V95 worker hash mismatch' unless worker_hash == data['worker_sha256']
       helper_path = sidecar_path(File.join(SIDECAR, 'engine', 'vxace-helper.exe'))
       helper_hash = Digest::SHA256.file(helper_path).hexdigest
       raise 'VX Ace helper hash mismatch' unless helper_hash == data['vxace_helper_sha256']
-      plugin_path = sidecar_path(File.join(SIDECAR, 'engine', 'vxace', 'TenshixgameVXACELive.rb'))
+      plugin_path = sidecar_path(File.join(SIDECAR, 'engine', 'vxace', 'IATraductoraVXACE.rb'))
       plugin_hash = Digest::SHA256.file(plugin_path).hexdigest
       raise 'VX Ace plugin hash mismatch' unless plugin_hash == data['vxace_plugin_sha256']
       data
@@ -147,6 +152,10 @@ module TenshixgameVXACELive
     def start_worker
       return if @started
       @started = true
+      unless defined?(JSON) && defined?(TCPSocket) && defined?(Timeout) && defined?(Digest::SHA256)
+        @status = 'Bibliotecas RGSS3 no disponibles'
+        return
+      end
       @status = 'Verificando V95'
       root = game_root
       @sidecar = sidecar_path(SIDECAR)
@@ -186,6 +195,7 @@ module TenshixgameVXACELive
     def ensure_bridge
       return true if @bridge && worker_ready?(@bridge)
       start_worker unless @started
+      return false unless @worker_pid.to_i > 0
       deadline = Time.now.to_i + MAX_WAIT_SECONDS
       while Time.now.to_i <= deadline
         descriptor = read_bridge
@@ -256,7 +266,8 @@ module TenshixgameVXACELive
           slice.each_with_index do |entry, offset|
             index = entry[0]
             original = entry[1]
-            translated = translations[offset]
+            item = translations[offset]
+            translated = item.is_a?(Hash) ? item['translated'] : nil
             if translated.is_a?(String) && !translated.strip.empty? && translated != original
               value = translated.strip
               results[index] = value
@@ -338,14 +349,14 @@ end
 class Game_Message
   alias_method :ia_vxace_original_add, :add
   def add(text)
-    value = TenshixgameVXACELive.translate(text)
+    value = IATraductoraVXACE.translate(text)
     ia_vxace_original_add(value)
   end
 
   if method_defined?(:choices=)
     alias_method :ia_vxace_original_choices_set, :choices=
     def choices=(value)
-      translated = value.is_a?(Array) ? TenshixgameVXACELive.translate_with_controls_batch(value) : value
+      translated = value.is_a?(Array) ? IATraductoraVXACE.translate_with_controls_batch(value) : value
       ia_vxace_original_choices_set(translated)
     end
   end
@@ -356,14 +367,14 @@ end
 class Window_Base
   alias_method :ia_vxace_original_draw_text, :draw_text
   def draw_text(*args)
-    unless TenshixgameVXACELive.name_input_active?
+    unless IATraductoraVXACE.name_input_active?
       index = nil
       index = 0 if args[0].is_a?(String)
       index = 1 if index.nil? && args[1].is_a?(String)
       index = 4 if index.nil? && args[4].is_a?(String)
       if index
         copy = args.dup
-        copy[index] = TenshixgameVXACELive.translate(copy[index])
+        copy[index] = IATraductoraVXACE.translate(copy[index])
         return ia_vxace_original_draw_text(*copy)
       end
     end
@@ -382,11 +393,11 @@ class Window_TenshixgameVXACEDiagnostics < Window_Base
 
   def refresh
     contents.clear
-    contents.draw_text(0, 0, contents.width, 24, 'TENSHIXGAME RPG - VX Ace')
-    contents.draw_text(0, 24, contents.width, 24, 'Estado: ' + TenshixgameVXACELive.status.to_s)
-    contents.draw_text(0, 48, contents.width, 24, 'Solicitudes: ' + TenshixgameVXACELive.requests.to_s)
-    contents.draw_text(0, 72, contents.width, 24, 'Traducidas: ' + TenshixgameVXACELive.translated.to_s)
-    contents.draw_text(0, 96, contents.width, 24, 'Fallidas: ' + TenshixgameVXACELive.failures.to_s)
+    contents.draw_text(0, 0, contents.width, 24, 'IA Traductora - VX Ace')
+    contents.draw_text(0, 24, contents.width, 24, 'Estado: ' + IATraductoraVXACE.status.to_s)
+    contents.draw_text(0, 48, contents.width, 24, 'Solicitudes: ' + IATraductoraVXACE.requests.to_s)
+    contents.draw_text(0, 72, contents.width, 24, 'Traducidas: ' + IATraductoraVXACE.translated.to_s)
+    contents.draw_text(0, 96, contents.width, 24, 'Fallidas: ' + IATraductoraVXACE.failures.to_s)
   end
 end
 
@@ -401,7 +412,7 @@ class Scene_Map
   def update
     ia_vxace_original_update
     if Input.trigger?(:F10)
-      TenshixgameVXACELive.toggle_diagnostics(@ia_vxace_diagnostics)
+      IATraductoraVXACE.toggle_diagnostics(@ia_vxace_diagnostics)
     end
   end
 
@@ -414,4 +425,4 @@ class Scene_Map
   end
 end
 
-TenshixgameVXACELive.start
+IATraductoraVXACE.start

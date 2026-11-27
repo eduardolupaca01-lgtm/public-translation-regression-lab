@@ -102,11 +102,11 @@ func readPackage(filename string)(*packageReader,error){
  // VX Ace support is optional for old MV/MZ packages, but the helper and
  // Ruby runtime must arrive together; never accept a half-packaged adapter.
  helperPresent:=files["vxace-helper.exe"]!=nil
- pluginPresent:=files["vxace/TenshixgameVXACELive.rb"]!=nil
+ pluginPresent:=files["vxace/IATraductoraVXACE.rb"]!=nil
  if helperPresent!=pluginPresent{return nil,errors.New("IA_VXACE_PAQUETE_INCOMPLETO")}
  if helperPresent{
   if len(manifest.Files["vxace-helper.exe"])!=64||
-     len(manifest.Files["vxace/TenshixgameVXACELive.rb"])!=64{
+     len(manifest.Files["vxace/IATraductoraVXACE.rb"])!=64{
    return nil,errors.New("IA_VXACE_MANIFIESTO_INVALIDO")
   }
  }

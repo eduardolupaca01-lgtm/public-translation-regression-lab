@@ -1,76 +1,93 @@
 import hashlib
+import io
 import json
 from pathlib import Path
+import struct
+import sys
 import tempfile
 import unittest
 import zipfile
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.pack_vxace_assets import (
-    HELPER_NAME,
-    PLUGIN_NAME,
-    append_assets,
-    verify_assets,
-)
+from tools.pack import build, MAGIC, SCHEMA, MODELS, SUFFIX
+from tools.pack_vxace_assets import HELPER_NAME, PLUGIN_NAME, PLUGIN_MARKER, PLUGIN_BUILD
 
 
-def fake_pe_amd64() -> bytes:
+def pe_amd64():
     data = bytearray(256)
     data[:2] = b"MZ"
-    data[0x3C:0x40] = (64).to_bytes(4, "little")
+    data[60:64] = (64).to_bytes(4, "little")
     data[64:68] = b"PE\0\0"
     data[68:70] = (0x8664).to_bytes(2, "little")
-    data[64 + 24:64 + 26] = (0x20B).to_bytes(2, "little")
+    data[88:90] = (0x20b).to_bytes(2, "little")
     return bytes(data)
 
 
 class PackVXAssetsTests(unittest.TestCase):
-    def test_adds_owned_helper_and_plugin_without_losing_bootstrap(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            exe = root / "Servidor.exe"
-            helper = root / "vxace-helper.exe"
-            plugin = root / "TenshixgameVXACELive.rb"
-            helper.write_bytes(fake_pe_amd64())
-            plugin.write_text(
-                "# TENSHIXGAME_VXACE_RGSS3_OWNER_V1\n"
-                "PLUGIN_BUILD = 'VXACE-RGSS3-20261126-A'\n",
-                encoding="utf-8",
-            )
-            package = root / "package.zip"
-            manifest = {"schema": "servidor-v2-package-v1", "files": {"IATraductora.exe": "a" * 64}}
-            with zipfile.ZipFile(package, "w") as archive:
-                archive.writestr("manifest.json", json.dumps(manifest))
-                archive.writestr("IATraductora.exe", b"worker")
-                archive.writestr("models/opus_ja_es/model.bin", b"model")
-            exe.write_bytes(b"MZ-BOOTSTRAP-PREFIX" + package.read_bytes())
-            result = append_assets(exe, helper, plugin)
-            self.assertEqual(result["helper_sha256"], hashlib.sha256(helper.read_bytes()).hexdigest())
-            self.assertEqual(result["plugin_sha256"], hashlib.sha256(plugin.read_bytes()).hexdigest())
-            self.assertTrue(exe.read_bytes().startswith(b"MZ-BOOTSTRAP-PREFIX"))
-            self.assertEqual(verify_assets(exe)["entry_count"], 5)
-            with zipfile.ZipFile(exe) as archive:
-                self.assertEqual(archive.read(HELPER_NAME), helper.read_bytes())
-                self.assertEqual(archive.read(PLUGIN_NAME), plugin.read_bytes())
-                self.assertEqual(archive.read("IATraductora.exe"), b"worker")
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.root = root
+        self.bootstrap = root / "bootstrap.exe"
+        self.bootstrap.write_bytes(b"MZ synthetic bootstrap")
+        self.worker = root / "worker.exe"
+        self.worker.write_bytes(b"synthetic worker; not executable")
+        self.js = root / "plugin.js"
+        self.js.write_text("synthetic", encoding="utf-8")
+        self.helper = root / "vxace-helper.exe"
+        self.helper.write_bytes(pe_amd64())
+        self.ruby = root / "runtime.rb"
+        self.ruby.write_bytes(PLUGIN_MARKER + b"\n# " + PLUGIN_BUILD + b"\n")
+        self.models = root / "models"
+        for model in MODELS:
+            directory = self.models / model
+            directory.mkdir(parents=True)
+            for name in (*SUFFIX, "OPUS_LICENSE.txt"):
+                (directory / name).write_bytes((model + name).encode())
+        self.out = root / "Servidor.exe"
 
-    def test_rejects_wrong_helper_architecture(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            exe = root / "Servidor.exe"
-            helper = root / "helper.exe"
-            plugin = root / "plugin.rb"
-            helper.write_bytes(b"MZ" + b"\0" * 200)
-            plugin.write_text(
-                "# TENSHIXGAME_VXACE_RGSS3_OWNER_V1\n"
-                "PLUGIN_BUILD = 'VXACE-RGSS3-20261126-A'\n",
-                encoding="utf-8",
-            )
-            with zipfile.ZipFile(exe, "w") as archive:
-                archive.writestr("manifest.json", json.dumps({"files": {}}))
-            with self.assertRaises(ValueError):
-                append_assets(exe, helper, plugin)
+    def pack(self, **kwargs):
+        build(self.bootstrap, self.worker, self.js, self.models, self.out, **kwargs)
+
+    def read_package(self):
+        raw = self.out.read_bytes()
+        self.assertEqual(raw[-16:], MAGIC)
+        size = struct.unpack("<Q", raw[-56:-48])[0]
+        package = raw[-56-size:-56]
+        self.assertEqual(hashlib.sha256(package).digest(), raw[-48:-16])
+        self.assertEqual(raw[:-56-size], self.bootstrap.read_bytes())
+        with zipfile.ZipFile(io.BytesIO(package)) as z:
+            manifest = json.loads(z.read("manifest.json"))
+            self.assertEqual(manifest["schema"], SCHEMA)
+            self.assertEqual(set(z.namelist()), set(manifest["files"]) | {"manifest.json"})
+            for name, digest in manifest["files"].items():
+                self.assertEqual(hashlib.sha256(z.read(name)).hexdigest(), digest)
+            return {name: z.read(name) for name in manifest["files"]}
+
+    def test_package_keeps_all_r30_entries_and_adds_both_assets(self):
+        self.pack(vxace_helper=self.helper, vxace_plugin=self.ruby)
+        files = self.read_package()
+        self.assertEqual(files[HELPER_NAME], self.helper.read_bytes())
+        self.assertEqual(files[PLUGIN_NAME], self.ruby.read_bytes())
+        self.assertEqual(files["IATraductora.exe"], self.worker.read_bytes())
+        self.assertEqual(files["IATraductora.js"], self.js.read_bytes())
+        self.assertEqual(len(files), 2 + len(MODELS) * (len(SUFFIX) + 1) + 2)
+
+    def test_legacy_mv_mz_package_is_unchanged(self):
+        self.pack()
+        files = self.read_package()
+        self.assertNotIn(HELPER_NAME, files)
+        self.assertNotIn(PLUGIN_NAME, files)
+
+    def test_half_package_and_wrong_architecture_are_rejected_before_writing(self):
+        with self.assertRaises(ValueError):
+            self.pack(vxace_helper=self.helper)
+        self.assertFalse(self.out.exists())
+        self.helper.write_bytes(b"MZ" + b"\0" * 200)
+        with self.assertRaises(ValueError):
+            self.pack(vxace_helper=self.helper, vxace_plugin=self.ruby)
+        self.assertFalse(self.out.exists())
 
 
 if __name__ == "__main__":

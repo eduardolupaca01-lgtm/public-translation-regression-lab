@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	vxacePluginBuildID = "VXACE-RGSS3-20261126-A"
+	vxacePluginBuildID = "VXACE-RGSS3-20261126-B"
 	vxaceLibraryName = "RGSS301.dll"
 	vxaceArchiveName = "Game.rgss3a"
 	vxaceMaxArchive  = int64(900 * 1024 * 1024)
@@ -455,7 +455,7 @@ func vxaceSidecarPaths(root string) (sidecar, engine, helper, plugin, worker, re
 	sidecar = filepath.Join(root, brandFolder)
 	engine = filepath.Join(sidecar, ".local", "Rpg", "engine")
 	helper = filepath.Join(engine, "vxace-helper.exe")
-	plugin = filepath.Join(engine, "vxace", "TenshixgameVXACELive.rb")
+	plugin = filepath.Join(engine, "vxace", "IATraductoraVXACE.rb")
 	worker = filepath.Join(engine, "IATraductora.exe")
 	installDir = filepath.Join(sidecar, "install", "vxace")
 	receiptFile = filepath.Join(sidecar, "install", "vxace-receipt.json")
@@ -463,7 +463,7 @@ func vxaceSidecarPaths(root string) (sidecar, engine, helper, plugin, worker, re
 }
 
 func installVXAce(fp vxaceFingerprint, pkg *packageReader) error {
-	if pkg == nil || pkg.files["vxace-helper.exe"] == nil || pkg.files["vxace/TenshixgameVXACELive.rb"] == nil {
+	if pkg == nil || pkg.files["vxace-helper.exe"] == nil || pkg.files["vxace/IATraductoraVXACE.rb"] == nil {
 		return errors.New("IA_VXACE_PAQUETE_INCOMPLETO")
 	}
 	sidecar, err := iaPrepareAndPublishSidecar(fp.Root, pkg)
@@ -482,7 +482,7 @@ func installVXAce(fp vxaceFingerprint, pkg *packageReader) error {
 		return errors.New("IA_VXACE_HELPER_SHA_INVALIDO")
 	}
 	pluginSHA, err := digestFile(plugin)
-	if err != nil || pluginSHA != pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"] {
+	if err != nil || pluginSHA != pkg.manifest.Files["vxace/IATraductoraVXACE.rb"] {
 		return errors.New("IA_VXACE_PLUGIN_SHA_INVALIDO")
 	}
 	workerSHA, err := digestFile(worker)

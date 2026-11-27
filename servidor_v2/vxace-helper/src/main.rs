@@ -22,7 +22,7 @@ const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 900 * 1024 * 1024;
 const MAX_ENTRIES: usize = 200_000;
 const PLUGIN_NAME: &str = "IA Traductora RGSS3";
-const PLUGIN_MARKER: &str = "# TENSHIXGAME_VXACE_RGSS3_OWNER_V1";
+const PLUGIN_MARKER: &str = "# IA_TRADUCTORA_VXACE_RGSS3_OWNER_V1";
 
 #[derive(Debug)]
 struct GameLayout {
@@ -235,8 +235,8 @@ fn patch_scripts(original: &[u8], plugin: &str) -> Result<(Vec<u8>, usize), Stri
         if !scripts.contents[index].contains(PLUGIN_MARKER) {
             return Err(fail("IA_VXACE_PLUGIN_AJENO"));
         }
-        scripts.contents[index] = plugin.to_owned();
-        index
+        if scripts.contents[index] != plugin { return Err(fail("IA_VXACE_PLUGIN_PREEXISTENTE_DISTINTO")); }
+        return Ok((original.to_vec(), index));
     } else {
         let main_index = scripts
             .names
@@ -263,8 +263,10 @@ fn patch_scripts(original: &[u8], plugin: &str) -> Result<(Vec<u8>, usize), Stri
     let check = load(&encoded).map_err(|_| fail("IA_VXACE_MARSHAL_WRITE_INVALIDO"))?;
     let check_scripts: Scripts =
         Base::decode_scripts(&check, check.root(), None).map_err(|_| fail("IA_VXACE_MARSHAL_WRITE_INVALIDO"))?;
-    if check_scripts.names.get(index).map(String::as_str) != Some(PLUGIN_NAME)
-        || !check_scripts.contents[index].contains(PLUGIN_MARKER)
+    if check_scripts.numbers != scripts.numbers || check_scripts.names != scripts.names
+        || check_scripts.contents != scripts.contents
+        || check_scripts.names.get(index).map(String::as_str) != Some(PLUGIN_NAME)
+        || check_scripts.contents.get(index).map(String::as_str) != Some(plugin)
     {
         return Err(fail("IA_VXACE_PLUGIN_POSTCHECK_FALLO"));
     }
@@ -327,26 +329,24 @@ fn extract_archive(
     let mut total = 0u64;
     for index in 0..count {
         let raw_path = archive.path(index).to_vec();
-        let (decoded_path, parts) = safe_archive_path(&raw_path, index)?;
+        let (decoded_path, _parts) = safe_archive_path(&raw_path, index)?;
         let duplicate = decoded_path.replace('\\', "/").to_lowercase();
         if !seen.insert(duplicate) {
             return Err(fail("IA_VXACE_ARCHIVE_DUPLICATE_PATH"));
         }
-        let mut target = unpacked.clone();
-        for part in &parts {
-            target.push(part);
-        }
-        let parent = target.parent().ok_or_else(|| fail("IA_VXACE_PATH_UNSAFE"))?;
-        fs::create_dir_all(parent).map_err(|_| fail("IA_VXACE_STAGING_FALLO"))?;
+        // Never materialize an archive-controlled path on the host filesystem.
+        let target = unpacked.join(format!("entry-{index:08}.bin"));
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&target)
             .map_err(|_| fail("IA_VXACE_STAGING_FALLO"))?;
-        let mut reader = archive
+        let reader = archive
             .read_entry(index)
             .map_err(|_| fail("IA_VXACE_ARCHIVE_READ_FALLO"))?;
-        let copied = io::copy(&mut reader, &mut output).map_err(|_| fail("IA_VXACE_ARCHIVE_READ_FALLO"))?;
+        let allowance = MAX_ENTRY_BYTES.min(MAX_TOTAL_BYTES.saturating_sub(total));
+        let copied = io::copy(&mut reader.take(allowance + 1), &mut output).map_err(|_| fail("IA_VXACE_ARCHIVE_READ_FALLO"))?;
+        if copied > allowance { return Err(fail("IA_VXACE_ARCHIVE_TOTAL_TOO_LARGE")); }
         if copied > MAX_ENTRY_BYTES {
             return Err(fail("IA_VXACE_ARCHIVE_ENTRY_TOO_LARGE"));
         }
@@ -589,7 +589,7 @@ mod tests {
     }
 
     fn make_plugin() -> String {
-        format!("{PLUGIN_MARKER}\nmodule TenshixgameVXACELive\nend\n")
+        format!("{PLUGIN_MARKER}\nmodule IATraductoraVXACE\nend\n")
     }
 
     fn make_game(root: &Path, packed: bool) -> PathBuf {
@@ -623,7 +623,7 @@ mod tests {
     fn loose_scripts_are_patched_without_touching_source() {
         let temp = tempfile::tempdir().unwrap();
         let root = make_game(&temp.path().join("game"), false);
-        let plugin = temp.path().join("plugin.rb");
+        let plugin = root.join("plugin.rb");
         fs::write(&plugin, make_plugin()).unwrap();
         let output_dir = root.join("IA Traductora/.local/Rpg/staging");
         fs::create_dir_all(&output_dir).unwrap();
@@ -645,7 +645,7 @@ mod tests {
     fn packed_archive_is_rebuilt_and_non_script_entries_are_preserved() {
         let temp = tempfile::tempdir().unwrap();
         let root = make_game(&temp.path().join("game"), true);
-        let plugin = temp.path().join("plugin.rb");
+        let plugin = root.join("plugin.rb");
         fs::write(&plugin, make_plugin()).unwrap();
         let output_dir = root.join("IA Traductora/.local/Rpg/staging");
         fs::create_dir_all(&output_dir).unwrap();

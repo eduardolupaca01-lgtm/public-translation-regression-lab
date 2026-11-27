@@ -26,7 +26,7 @@ func iaUpgradeOwnPlugin(root,content string,registry []byte,pkg *packageReader)e
  }
  // The new package may have different neural weights: reject those safely.
  for _,name:=range iaSortedFiles(pkg){
-  if name=="IATraductora.exe"||name=="vxace-helper.exe"||name=="vxace/TenshixgameVXACELive.rb"{continue}
+  if name=="IATraductora.exe"||name=="vxace-helper.exe"||name=="vxace/IATraductoraVXACE.rb"{continue}
   file:=filepath.Join(sidecar,".local","Rpg","engine",filepath.FromSlash(name))
   if !ordinary(file){return errors.New("IA_ACTUALIZACION_MODELO_FALTANTE")}
   sha,err:=digestFile(file)
