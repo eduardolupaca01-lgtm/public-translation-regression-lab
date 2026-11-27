@@ -19,7 +19,9 @@ const app=document.querySelector("#app");
 app.innerHTML='<p id="dialog"></p><button id="next">Next</button><button id="save">Save</button><input id="name" value="Please keep my name."><span class="speaker-name" id="identity">Alice</span>';
 const draw=()=>{document.querySelector("#dialog").textContent=records[at].en||records[at].jp};
 document.querySelector("#next").onclick=()=>{at=1;draw()};
-document.querySelector("#save").onclick=()=>localStorage.setItem("fixture-save",String(at));
+const readSaved=()=>{app.dataset.savedIndex=localStorage.getItem("fixture-save")??"unset"};
+document.querySelector("#save").onclick=()=>{localStorage.setItem("fixture-save",String(at));readSaved()};
+readSaved();
 draw();
 '''.encode("utf8")
 
@@ -54,9 +56,12 @@ def main():
             with request(url,"/__ia/catalog",token) as r:
                 inventory=json.load(r)
                 assert inventory["records"]==2 and len(inventory["items"])==2
-            with request(url,"/") as r:assert b"/__ia/adapter.js" in r.read()
+            with request(url,"/") as r:
+                assert b"/__ia/adapter.js" in r.read()
+                csp=r.headers["Content-Security-Policy"]
+                assert "script-src 'self';" in csp and "'unsafe-eval'" not in csp
             subprocess.run(["node",str(Path(__file__).with_name("probe_web_browser.js")),url,str(a.playwright.resolve())],
-                           check=True,timeout=320)
+                           check=True,timeout=390)
             with request(url,"/__ia/status",token) as r:assert json.load(r)["active"]
             with request(url,"/__ia/stop",token,{}) as r:assert json.load(r)["stopping"]
             assert process.wait(timeout=45)==0,"IA_WEB_PACKAGED_SHUTDOWN_FAIL"

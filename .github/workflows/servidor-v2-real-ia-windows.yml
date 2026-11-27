@@ -10,6 +10,7 @@ on:
       - "servidor_v2/tests/test_web_runtime.py"
       - "servidor_v2/tests/probe_web_real_worker.py"
       - "servidor_v2/tests/probe_web_browser.js"
+      - "servidor_v2/tests/probe_web_browser_preflight.py"
       - "servidor_v2/tests/test_vxace_real_worker.py"
       - "servidor_v2/tests/test_vxace_runtime.rb"
       - "servidor_v2/tests/test_vxace_cache_release.py"
@@ -96,6 +97,14 @@ jobs:
             go test ./cmd/servidor -run "TestMZCompressedNativeDetectionAndInstallation|TestMZDetectionAndInstallation|TestHalva" -count=1
             if ($LASTEXITCODE -ne 0) { throw "IA_R17_COMPRESSED_INSTALL_FAIL" }
           } finally { Pop-Location }
+      - name: Validar Edge y CSP con respuestas sintéticas antes de cargar OPUS
+        shell: pwsh
+        run: |
+          $deps=Join-Path $env:RUNNER_TEMP "ia-web-browser-deps"
+          npm install --prefix $deps --no-save --ignore-scripts --no-audit --no-fund playwright-core@1.52.0
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_TEST_DEPENDENCY_FAIL" }
+          python servidor_v2/tests/probe_web_browser_preflight.py --playwright (Join-Path $deps "node_modules/playwright-core")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_CSP_PREFLIGHT_FAIL" }
       - name: Bloqueo si no se dispone de origen privado cifrado
         shell: pwsh
         run: |
@@ -418,8 +427,6 @@ jobs:
         shell: pwsh
         run: |
           $deps=Join-Path $env:RUNNER_TEMP "ia-web-browser-deps"
-          npm install --prefix $deps --no-save --ignore-scripts --no-audit --no-fund playwright-core@1.52.0
-          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_TEST_DEPENDENCY_FAIL" }
           python servidor_v2/tests/probe_web_real_worker.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --playwright (Join-Path $deps "node_modules/playwright-core")
           if ($LASTEXITCODE -ne 0) { throw "IA_WEB_REAL_ACCEPTANCE_FAIL" }
       - name: Cifrar siempre la versión candidata antes de publicarla en GitHub

@@ -40,7 +40,11 @@ class WebRuntimeTests(unittest.TestCase):
     def test_virtual_html_catalog_and_real_service_contract(self):
         with self.req("/") as r:
             page=r.read();self.assertIn(b"/__ia/adapter.js",page)
-            self.assertIn("frame-ancestors 'none'",r.headers["Content-Security-Policy"])
+            csp=r.headers["Content-Security-Policy"]
+            self.assertIn("frame-ancestors 'none'",csp)
+            self.assertEqual(next(x.strip() for x in csp.split(";") if x.strip().startswith("script-src ")),
+                             "script-src 'self'")
+            self.assertNotIn("'unsafe-eval'",csp)
         with self.req("/__ia/catalog") as r:
             c=json.load(r)
         self.assertEqual(c["records"],2)

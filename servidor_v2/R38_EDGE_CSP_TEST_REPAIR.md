@@ -1,0 +1,7 @@
+# R38 — reparación del contrato Edge/CSP
+
+La ejecución 46028867888 pasó Windows y Ubuntu. La ejecución 46028867887, trabajo 140607213615, pasó compilación, carga de OPUS, VX Ace, MV, MZ, SOLData, JSONO, CTE y Halva. El paso web llegó a Edge y falló al ejecutar `page.waitForFunction`: EvalError por CSP script-src 'self'. Cifrado y publicación no se ejecutaron.
+
+Se corrige únicamente la prueba y su fixture sintético. La espera de texto se hace en Node, leyendo los nodos reales con locators. El contexto de Edge mantiene bypassCSP=false, se comprueba el encabezado en el arranque y recarga, y se verifica el guardado mediante lectura de localStorage desde el propio módulo de prueba. Se conservan los dos idiomas, el cambio de diálogo, las etiquetas, el campo de entrada, el nombre protegido, F10, recarga y caché persistente. Se alinea el timeout exterior de subprocess con las tres comprobaciones de hasta 120 s; no se prolonga ningún plazo de inferencia.
+
+Se añade una prueba anticipada del mismo contrato en Edge con respuestas controladas, claramente identificada como sintética. La aceptación posterior sigue usando el EXE instalado y OPUS real, sin mocks. No se relaja CSP, no se cambia la traducción, no se tocan los otros motores ni los recursos de los juegos. La revisión conserva el identificador R38 porque el cambio es de validación. Solo si todas las puertas pasan se publica el nuevo paquete cifrado. La compatibilidad de un juego Wails particular sigue requiriendo una prueba real.
