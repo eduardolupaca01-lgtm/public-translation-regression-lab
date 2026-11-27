@@ -7,6 +7,8 @@ const path=require("node:path");
 const vm=require("node:vm");
 const EventEmitter=require("node:events");
 const crypto=require("node:crypto");
+const r42Notice=require("./r42_notice_contract.js");
+r42Notice.selfTest();
 
 function fixture(translationDelay=0,options={}){
     const posts=[],batches=[],jsonParseSizes=options.jsonParseSizes||[],state=options.fsState||{files:{},dirs:{}};
@@ -896,6 +898,24 @@ async function testR42BattleLogAndFormattedNotices(mz){
     }while(Date.now()<deadline);
     assert.equal(log.drawn[log.drawn.length-1],used);
     assert.deepEqual(log._lines,raw);
+    // The exact release-gate shape combines all three markers. It was not
+    // previously rendered as one message in this synthetic fixture.
+    const combined=r42Notice.RAW;
+    const expectedCombined='※"Cierra la puerta de madera." 【M】';
+    assert.ok(qa.r42NoticePlan(combined,false));
+    f.$gameMessage._texts=[combined];
+    const cold=new c.Window_Message();
+    const combinedDeadline=Date.now()+3000;
+    // A single window and original event. Wait for the same native
+    // first-view gate that the installed game uses.
+    while(cold.updateWait()&&Date.now()<combinedDeadline)await wait(20);
+    assert.ok(Date.now()<combinedDeadline,"combined notice gate did not resolve");
+    cold.startMessage();
+    assert.equal(cold.originalStarts,1);
+    assert.equal(cold._textState.text,expectedCombined);
+    assert.equal(f.$gameMessage._texts[0],combined);
+    assert.ok(r42Notice.inspect(cold._textState.text,f.$gameMessage._texts[0]).ok);
+    assert.ok(f.posts.some(p=>p.text===r42Notice.BODY&&p.source==="en"));
     const bad='"$gameVariables.setValue(3, 7)"';popup.drawTextEx(bad);
     assert.equal(popup.drawn[popup.drawn.length-1],bad);
     log.drawTextEx("Unknown Identity attacks!");

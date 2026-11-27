@@ -6,6 +6,7 @@ const path=require("node:path");
 const vm=require("node:vm");
 const assert=require("node:assert/strict");
 const cp=require("node:child_process");
+const r42Notice=require("./r42_notice_contract.js");
 
 const game=path.resolve(process.argv[2]||"");
 const wrapped=path.join(game,"www");
@@ -344,14 +345,30 @@ async function run(){
     console.log("IA_R41_REAL_OPUS_QUEST_TXT_NATIVE_JOURNAL_PASS "+(isMZ?"MZ":"MV"));
     // Fresh native quote/hotkey route. The worker must translate the
     // inner prose, while the original formatting and _texts survive.
-    const formattedNotice='※"Please close the wooden door." 【M】';
-    await until(()=>{
-        gameMessage._texts=[formattedNotice];
-        const w=new Window_Message();w.startMessage();
-        return /cerr/i.test(w.paintedText)&&/puerta/i.test(w.paintedText)&&
-            w.paintedText.indexOf('※"')===0&&w.paintedText.endsWith('" 【M】')&&
-            gameMessage._texts[0]===formattedNotice;
-    },120000,"IA_R42_REAL_OPUS_NOTICE_FORMAT_TIMEOUT");
+    const formattedNotice=r42Notice.RAW;
+    const beforeNoticeWindows=scene.windows.length;
+    let noticeResult=r42Notice.inspect("",formattedNotice);
+    // Keep the existing readiness budget. Stop waiting once the native
+    // renderer has actually changed the sentence; evaluate semantics and
+    // exact envelope separately instead of disguising a failed predicate
+    // as a connection timeout.
+    try{
+        await until(()=>{
+            gameMessage._texts=[formattedNotice];
+            const w=new Window_Message();w.startMessage();
+            noticeResult=r42Notice.inspect(w.paintedText,gameMessage._texts[0]);
+            assert.equal(gameMessage._texts[0],formattedNotice,"IA_R42_NOTICE_NATIVE_SOURCE_CHANGED");
+            assert.equal(w.starts,1,"IA_R42_NOTICE_NATIVE_RESTARTED");
+            assert.equal(scene.windows.length,beforeNoticeWindows,"IA_R42_NOTICE_EXTRA_WINDOW");
+            return typeof w.paintedText==="string"&&w.paintedText!==formattedNotice;
+        },120000,"IA_R42_REAL_OPUS_NOTICE_UNCHANGED_TIMEOUT");
+    }catch(error){
+        console.log("IA_R42_NOTICE_CHECK "+JSON.stringify(noticeResult));throw error;
+    }
+    console.log("IA_R42_NOTICE_CHECK "+JSON.stringify(noticeResult));
+    assert.ok(noticeResult.envelope,"IA_R42_NOTICE_NATIVE_FORMAT_CHANGED");
+    assert.ok(noticeResult.semantic,"IA_R42_NOTICE_REAL_OPUS_SEMANTIC_FAIL");
+    assert.ok(noticeResult.ok,"IA_R42_NOTICE_CONTRACT_FAIL");
     console.log("IA_R42_REAL_OPUS_NOTICE_QUOTES_HOTKEY_PASS "+(isMZ?"MZ":"MV"));
     const preloaded=new Window_Message();
     gameMessage._texts=[csvMessage];preloaded.startMessage();
