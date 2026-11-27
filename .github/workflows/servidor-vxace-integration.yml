@@ -48,6 +48,10 @@ jobs:
           ruby -c servidor_v2/vxace/IATraductoraVXACE.rb
           ruby servidor_v2/tests/test_vxace_runtime.rb --mock
           ruby servidor_v2/tests/test_vxace_presentation.rb
+      - name: RPG Maker XP native presentation contract (synthetic desktop Ruby)
+        run: |
+          ruby -c servidor_v2/rpgxp/IATraductoraXP.rb
+          ruby servidor_v2/tests/test_rpgxp_runtime.rb
       - name: Servidor Go regression, including VX Ace journal
         working-directory: servidor_v2
         run: go test -v ./...
