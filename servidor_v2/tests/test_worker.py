@@ -477,4 +477,64 @@ class HalvaNativeWorkerTests(unittest.TestCase):
             packed.write_bytes(b"restored original")
             with self.assertRaises(ValueError):ia.Service(root,engine,neural=FakeNeural(),halva_content=runtime)
 
+class VXAceWorkerTests(unittest.TestCase):
+    def make_game(self,packed=False):
+        temporary=tempfile.TemporaryDirectory(prefix="IA VX Ace 日本語 ")
+        self.addCleanup(temporary.cleanup)
+        root=Path(temporary.name)
+        (root/"Game.exe").write_bytes(b"MZ synthetic VX Ace")
+        (root/"RGSS301.dll").write_bytes(b"RGSS301 synthetic runtime")
+        (root/"Game.ini").write_text(
+            "[Game]\nLibrary=RGSS301.dll\nScripts=Data\\Scripts.rvdata2\nTitle=VX Ace fixture\n",
+            encoding="utf-8",
+        )
+        if packed:
+            (root/"Game.rgss3a").write_bytes(b"RGSSAD\x00\x03"+b"\x00"*16)
+        else:
+            data=root/"Data"
+            data.mkdir()
+            for name in ("Scripts.rvdata2","System.rvdata2","MapInfos.rvdata2"):
+                (data/name).write_bytes(b"\x04\x08\x00\x00")
+        return root
+
+    def test_loose_vxace_game_root_is_accepted(self):
+        root=self.make_game()
+        self.assertEqual(ia.vxace_game_root(root),(root.resolve(),root.resolve()))
+
+    def test_packed_vxace_game_root_is_accepted_for_native_archive_preflight(self):
+        root=self.make_game(packed=True)
+        self.assertEqual(ia.vxace_game_root(root),(root.resolve(),root.resolve()))
+
+    def test_vxace_service_uses_existing_game_local_memory_and_bridge(self):
+        root=self.make_game()
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        service=ia.Service(root,engine,neural=FakeNeural())
+        self.addCleanup(service.close)
+        self.assertTrue(service.vxace)
+        self.assertEqual(service.game,root.resolve())
+        self.assertEqual(service.content,root.resolve())
+        self.assertEqual(service.translate("ja","おはようございます。"),"Buenos días")
+        expected=root/"IA Traductora"/".local"/"Rpg"/"cache"/"translation-memory-v2.sqlite3"
+        self.assertTrue(expected.is_file())
+        bridge=ia.publish(service,24123)
+        self.assertEqual(bridge.resolve(strict=True).parent,
+                         (root/"IA Traductora"/".local"/"Rpg").resolve(strict=True))
+        descriptor=json.loads(bridge.read_text(encoding="utf-8"))
+        self.assertEqual(descriptor["schema"],ia.SCHEMA)
+        self.assertEqual(len(descriptor["token"]),64)
+        self.assertFalse((root/"Data"/"IATraductora"/"bridge.json").exists())
+
+    def test_vxace_rejects_non_rgss3a_and_incomplete_loose_data(self):
+        root=self.make_game(packed=True)
+        (root/"Game.rgss3a").write_bytes(b"not an RGSS3A archive")
+        with self.assertRaises(ValueError) as error:
+            ia.vxace_game_root(root)
+        self.assertEqual(str(error.exception),"IA_VXACE_RGSS3A_INVALIDO")
+        root=self.make_game()
+        (root/"Data"/"MapInfos.rvdata2").unlink()
+        with self.assertRaises(ValueError) as error:
+            ia.vxace_game_root(root)
+        self.assertEqual(str(error.exception),"IA_VXACE_DATA_INCOMPLETA")
+
 if __name__=="__main__":unittest.main()
