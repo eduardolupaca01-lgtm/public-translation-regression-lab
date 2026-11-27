@@ -16,19 +16,21 @@ module RPGXPProseContract
     {:changed=>false,:royal=>false,:hear=>false,:negated=>false,:ok=>false}
   end
   def self.self_test!
-    ['Escúchame, poderoso rey!','Escúcheme, gran rey.',
+    ['Escúchame, poderoso rey!','Escúchame, gran rey.','Escúchame, rey poderoso.','Escúcheme, gran rey.',
      'Óyeme, rey poderoso.','Oídme, poderoso rey.',
      'Oiga mi voz, poderoso monarca.','Escucha mi voz, majestuoso rey.',
      'Escuchadme, gran rey.'].each do |value|
       raise 'valid Spanish hearing command rejected' unless inspect_translation(value)[:ok]
     end
     [SOURCE,'','Mighty king!','El rey es poderoso.',
-     'Mata al rey poderoso.','Escúchame, poderoso soldado.',
+     'Mata al rey poderoso.','El poderoso rey llegó.','Escúchame, poderoso soldado.',
      'No me escuches, rey poderoso.','No escuches, poderoso rey.'].each do |value|
       raise 'wrong or untranslated meaning accepted' if inspect_translation(value)[:ok]
     end
     # Demonstrate the prior false-negative without weakening the assertion.
-    raise 'old checker unexpectedly accepts accented verb' if 'Escúchame, poderoso rey!' =~ /escuch|oye|oiga|o.d|o.r/i
+    raise 'old checker unexpectedly accepts accented verb' if 'Escúchame, rey poderoso.' =~ /escuch|oye|oiga|o.d|o.r/i
+    # The old wildcard can also match "o r" across adjacent words.
+    raise 'old wildcard false positive not reproduced' unless 'El poderoso rey llegó.' =~ /escuch|oye|oiga|o.d|o.r/i
     puts 'IA_RPGXP_EXPANDED_PROSE_SEMANTIC_CONTRACT_PASS'
   end
 end
