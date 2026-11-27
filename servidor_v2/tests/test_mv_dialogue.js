@@ -7,6 +7,8 @@ const path=require("node:path");
 const vm=require("node:vm");
 const EventEmitter=require("node:events");
 const crypto=require("node:crypto");
+const r42Notice=require("./r42_notice_contract.js");
+r42Notice.selfTest();
 
 function fixture(translationDelay=0,options={}){
     const posts=[],batches=[],jsonParseSizes=options.jsonParseSizes||[],state=options.fsState||{files:{},dirs:{}};
@@ -821,6 +823,173 @@ async function testR4P2NoStaleLateOverlayAndNoArtificialWait(){
     assert.equal(m._iaLateTicket,null);
     assert.equal(m.originalStarts,1);assert.equal(m.updates,1);
 }
+async function testR42BattleLogAndFormattedNotices(mz){
+    const root=path.join("/tmp","servidor-r42-"+(mz?"mz":"mv"));
+    const content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const state={files:{},dirs:{[data]:true}};
+    const quote='"Please open the wooden gate."';
+    const notice="※\\c[2]Remember the hotkeys.\\c[0] 【M】\n\\I[17] Please check the menu.";
+    const skill="Flash Assault";
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(data,"Map001.json")]=JSON.stringify({events:[null,{pages:[{list:[
+        {code:401,parameters:[quote]},{code:401,parameters:[notice]}]}]}]});
+    const responses={"Please open the wooden gate.":"Abre la puerta de madera.",
+        "Remember the hotkeys.":"Recuerda los atajos.","Please check the menu.":"Consulta el menú.",
+        [skill]:"Asalto relámpago","Please close the wooden door.":"Cierra la puerta de madera."};
+    const f=fixture(5,{root,mz,fsState:state,batch:true,testHooks:true,nativePaint:true,responses,configure(c){
+        c.Window_Message.prototype.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
+        c.$dataActors=[null,{name:"Mira"}];c.$dataEnemies=[null,{name:"Training Golem"}];
+        c.$dataSkills=[null,{name:skill}];
+        c.$gameTroop={members:()=>[{name:()=>"Training Golem A"}]};
+        function Window_BattleLog(){this._lines=[];this.drawn=[];}
+        Window_BattleLog.prototype=Object.create(c.Window_Base.prototype);
+        Window_BattleLog.prototype.constructor=Window_BattleLog;
+        Window_BattleLog.prototype.drawTextEx=function(value){this.drawn.push(value);};
+        Window_BattleLog.prototype.addText=function(value){this._lines.push(value);this.drawTextEx(value);};
+        c.Window_BattleLog=Window_BattleLog;c.window.Window_BattleLog=Window_BattleLog;
+        function Window_Notification(){this.drawn=[];}
+        Window_Notification.prototype=Object.create(c.Window_Base.prototype);
+        Window_Notification.prototype.constructor=Window_Notification;
+        Window_Notification.prototype.drawTextEx=function(value){this.drawn.push(value);};
+        c.Window_Notification=Window_Notification;c.window.Window_Notification=Window_Notification;
+    }});
+    new f.context.Scene_Title().start();
+    const c=f.context,qa=c.window.__IA_TRADUCTORA_TEST__,log=new c.Window_BattleLog();
+    // A notice marker does not make a Japanese name instruction English.
+    // Keep the existing native name-setup regression in the suite unchanged.
+    for(const raw of ["※日本語の案内です。","“日本語の案内です。”","※日本語の案内です。\nPlease check the menu."]){
+        assert.equal(qa.r42NoticePlan(raw,false),null,"Japanese/mixed prose must keep the legacy message pipeline");
+        assert.equal(qa.r42NoticePlan(raw,true),null,"custom notice windows must not bypass Japanese handling");
+    }
+    assert.equal(qa.r42NoticePlan("“We are here.”",false),null,"recognized smart quotes retain the legacy full-line path");
+    assert.ok(qa.r42NoticePlan(quote,false),"English quote envelope remains enabled");
+    assert.ok(qa.r42NoticePlan(notice,false),"English formatted notice remains enabled");
+    const raw=["Training Golem A attacks!","dealt \\c[2]69\\c[0] to Mira damage!",
+        "Dealt 46 damage to Training Golem A!","Mira attacks!","Mira took 92 damage!"];
+    raw.forEach(v=>log.addText(v));
+    assert.deepEqual(log._lines,raw,"combat history is original");
+    assert.deepEqual(log.drawn,["Training Golem A ataca!","Infligió \\c[2]69\\c[0] de daño a Mira!",
+        "Infligió 46 de daño a Training Golem A!","Mira ataca!","Mira recibió 92 de daño!"]);
+    const deadline=Date.now()+12000;
+    while(Date.now()<deadline&&(!qa.done()||!["Please open the wooden gate.","Remember the hotkeys.","Please check the menu."].every(v=>f.posts.some(p=>p.text===v))))await wait(25);
+    assert.ok(qa.done(),"inventory did not finish");
+    for(const v of ["Please open the wooden gate.","Remember the hotkeys.","Please check the menu."])assert.ok(qa.has("en",v),"missing formatted unit "+v);
+    const expected='"Abre la puerta de madera."';
+    let box;
+    do{
+        f.$gameMessage._texts=[quote];box=new c.Window_Message();box.startMessage();
+        if(box._textState.text===expected)break;
+        await wait(25);
+    }while(Date.now()<deadline);
+    assert.equal(box._textState.text,expected);assert.equal(f.$gameMessage._texts[0],quote);
+    const popup=new c.Window_Notification();
+    const target="※\\c[2]Recuerda los atajos.\\c[0] 【M】\n\\I[17] Consulta el menú.";
+    do{
+        popup.drawTextEx(notice);
+        if(popup.drawn[popup.drawn.length-1]===target)break;
+        await wait(25);
+    }while(Date.now()<deadline);
+    assert.equal(popup.drawn[popup.drawn.length-1],target);
+    const use="Training Golem Aused \\I[17] Flash Assault!";
+    const used="Training Golem A usó \\I[17] Asalto relámpago!";
+    do{
+        log.drawTextEx(use);
+        if(log.drawn[log.drawn.length-1]===used)break;
+        await wait(25);
+    }while(Date.now()<deadline);
+    assert.equal(log.drawn[log.drawn.length-1],used);
+    assert.deepEqual(log._lines,raw);
+    // The exact release-gate shape combines all three markers. It was not
+    // previously rendered as one message in this synthetic fixture.
+    const combined=r42Notice.RAW;
+    const expectedCombined='※"Cierra la puerta de madera." 【M】';
+    assert.ok(qa.r42NoticePlan(combined,false));
+    f.$gameMessage._texts=[combined];
+    const cold=new c.Window_Message();
+    const combinedDeadline=Date.now()+3000;
+    // A single window and original event. Wait for the same native
+    // first-view gate that the installed game uses.
+    assert.equal(cold.updateWait(),true,"cold combined notice must wait before native paint");
+    assert.equal(cold.originalStarts,0);
+    while(cold.updateWait()&&Date.now()<combinedDeadline)await wait(20);
+    assert.ok(Date.now()<combinedDeadline,"combined notice gate did not resolve");
+    cold.startMessage();
+    assert.equal(cold.originalStarts,1);
+    assert.equal(cold._textState.text,expectedCombined);
+    assert.equal(f.$gameMessage._texts[0],combined);
+    assert.ok(r42Notice.inspect(cold._textState.text,f.$gameMessage._texts[0]).ok);
+    assert.ok(f.posts.some(p=>p.text===r42Notice.BODY&&p.source==="en"));
+    const bad='"$gameVariables.setValue(3, 7)"';popup.drawTextEx(bad);
+    assert.equal(popup.drawn[popup.drawn.length-1],bad);
+    log.drawTextEx("Unknown Identity attacks!");
+    assert.equal(log.drawn[log.drawn.length-1],"Unknown Identity attacks!");
+    c.SceneManager._scene=new c.Scene_Name();
+    popup.drawTextEx(quote);assert.equal(popup.drawn[popup.drawn.length-1],quote);
+    assert.ok(!f.posts.some(p=>/Training Golem A|Mira|\\[cI]|【M】|※|gameVariables/.test(p.text)));
+    assert.ok(qa.r42Stats.battle>=6);
+    console.log("IA_R42_BATTLE_LOG_NOTICE_QUOTES_NATIVE_PASS "+(mz?"MZ":"MV"));
+}
+
+async function testR41PlainQuestTxtAndLongNativeJournal(mz){
+    const root=path.join("/tmp","servidor-quest-txt-"+(mz?"mz":"mv"));
+    const content=mz?root:path.join(root,"www"),data=path.join(content,"data");
+    const quests=path.join(content,"quest"),nested=path.join(quests,"chapter");
+    const state={files:{},dirs:{[data]:true,[quests]:true,[nested]:true}};
+    const body="Find the missing key.",floor="Broken Floor",routine="Morning Routine",door="Please open the window.";
+    const colored="\\c[6]"+body+"\\I[17]\\c[0]";
+    const textFile="\uFEFFTitle: "+floor+"\r\n- "+colored+"\r\n- "+routine+"\r\n"+
+        "Condition: $gameSwitches.value(7)\r\nScript: Never execute this code.\r\n"+
+        "const value = 'Never scan this instruction';\r\n"+
+        "image: hero.png\r\n";
+    state.files[path.join(data,"System.json")]=JSON.stringify({locale:"en_US",startMapId:1});
+    state.files[path.join(quests,"story.txt")]=textFile;
+    state.files[path.join(nested,"日本語.txt")]="Objective: "+door+"\n";
+    state.files[path.join(quests,"binary.txt")]="invalid\0bytes";
+    state.files[path.join(data,"unrelated.txt")]="Never scan this unrelated file.";
+    const originalFiles=Object.assign({},state.files);
+    const responses={[body]:"Encuentra la llave perdida.",[floor]:"Suelo roto",
+        [routine]:"Rutina matutina",[door]:"Por favor, abre la ventana."};
+    const f=fixture(5,{root,mz,fsState:state,batch:true,testHooks:true,nativePaint:true,responses});
+    new f.context.Scene_Title().start();
+    const qa=f.context.window.__IA_TRADUCTORA_TEST__;
+    const deadline=Date.now()+10000;
+    while(Date.now()<deadline&&(!qa.done()||![body,floor,routine,door].every(v=>f.posts.some(p=>p.text===v))))await wait(25);
+    assert.ok(qa.done(),"quest TXT scan must finish");
+    const stats=qa.questTxt();
+    assert.equal(stats.detected,true);assert.equal(stats.files,2);assert.equal(stats.total,3);
+    assert.equal(stats.omitted,1);assert.equal(stats.fields,4);
+    for(const v of [body,floor,routine,door])assert.ok(qa.has("en",v),"missing quest TXT inventory: "+v);
+    assert.ok(!f.posts.some(p=>/Never|gameSwitches|hero\.png|\\[cCI]/.test(p.text)));
+    const header="\\c[2]Affection: \\c[0]12|\\c[3]Progress: \\c[0]0";
+    const stage="Stage 1(2): "+floor;
+    const raw=["Mira",header,stage].concat(Array(55).fill("- "+colored+" (6 AM, 20 AP)"),["- "+routine,"- "+door]).join("\n");
+    assert.ok(raw.length>1800,"fixture must exceed normal dialogue limit");
+    let projected;
+    while(Date.now()<deadline){
+        projected=qa.questTxtProject(raw);
+        if(projected&&!projected.missing&&projected.text.indexOf("Encuentra")>=0)break;
+        await wait(25);
+    }
+    assert.ok(projected&&!projected.missing,"quest segments did not resolve");
+    const expected=["Mira","\\c[2]Afinidad: \\c[0]12|\\c[3]Progreso: \\c[0]0",
+        "Etapa 1(2): Suelo roto"].concat(Array(55).fill("- \\c[6]Encuentra la llave perdida.\\I[17]\\c[0] (6 AM, 20 AP)"),
+        ["- Rutina matutina","- Por favor, abre la ventana."]).join("\n");
+    assert.equal(projected.text,expected,"quest formatting, identity, counters and time must survive");
+    const c=f.context,win=new c.Window_Base();
+    win.initialize.apply(win,mz?[new c.Rectangle(0,0,900,600)]:[0,0,900,600]);
+    win.drawTextEx(raw,0,0);
+    assert.equal(win.lastTextEx,expected,"actual native draw must see the translated block");
+    f.$gameMessage._texts=raw.split("\n");
+    const before=JSON.stringify(f.$gameMessage._texts);
+    const message=new c.Window_Message();message.startMessage();
+    assert.equal(message.originalStarts,1,"native message must not restart");
+    assert.equal(JSON.stringify(f.$gameMessage._texts),before,"quest must not mutate message state");
+    assert.ok(message._textState.text.includes("Encuentra la llave perdida.")&&message._textState.text.includes("6 AM"));
+    assert.equal(qa.questTxtProject("Mira"),null,"unrecognized identity stays untouched");
+    for(const [p,v] of Object.entries(originalFiles))assert.equal(state.files[p],v,"source file changed");
+    console.log("IA_R41_QUEST_TXT_LONG_NATIVE_CONTROLS_READ_ONLY_PASS "+(mz?"MZ":"MV"));
+}
+
 async function testR4P2QuestMetadataAndVisibleRefresh(){
     const root=path.join("/tmp","servidor-qa-juego-日本語","www","data");
     const state={files:{},dirs:{[root]:true}};
@@ -937,12 +1106,19 @@ async function testR4P4ShortTextAndMacroAlias(){
     const result="¿Escritura \\m[Things]antigua\\c[0]? ¡Absurdo!";
     const folder=path.join("/tmp","servidor-qa-juego-日本語","IA Traductora",".local","Rpg","cache");
     const journal=path.join(folder,"translations-ja-en-es-v2.jsonl");
-    const state={files:{[journal]:JSON.stringify({schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true})+"\n"},dirs:{[folder]:true}};
+    const cachedQuote='"We are ready."';
+    const cachedQuoteEs='"Estamos listos."';
+    const state={files:{[journal]:[
+        {schema:"ia-traductora-cache-v2",source:"en",original:raw,translated:result,composed:true},
+        {schema:"ia-traductora-cache-v2",source:"en",original:cachedQuote,translated:cachedQuoteEs,composed:false}
+    ].map(v=>JSON.stringify(v)).join("\n")+"\n"},dirs:{[folder]:true}};
     const f=fixture(1,{plugins,fsState:state,disconnected:true});await wait(40);
     const m=new f.context.Window_Message();
     f.$gameMessage._texts=[raw.replace("\\m[Things]","\\c[11]")];m.startMessage();
     assert.equal(f.$gameMessage.allText(),result.replace("\\m[Things]","\\c[11]"),
         "same words and equivalent macro/color use existing cache while preserving original controls");
+    f.$gameMessage._texts=[cachedQuote];new f.context.Window_Message().startMessage();
+    assert.equal(f.$gameMessage.allText(),cachedQuoteEs,"old full quoted cache remains usable offline");
     assert.equal(f.posts.length,0);
     const short='"Typical. Always looking out for herself."';
     const n=fixture(1,{responses:{[short]:'"Típico. Siempre pensando en sí misma."'}});await wait(25);
@@ -2233,8 +2409,13 @@ async function testInventoryHasNoFortyThousandTextCeiling(){
     const inspect=f.context.window.__IA_TRADUCTORA_TEST__;
     assert.ok(inspect,"opt-in inventory test probe must be installed");
     const deadline=Date.now()+45000;
-    while(!inspect.done()&&Date.now()<deadline)await wait(10);
-    assert.ok(inspect.done(),"full inventory must finish without a candidate-count cutoff");
+    let heartbeats=0;
+    const heartbeat=setInterval(()=>heartbeats++,1);
+    try{
+        while(!inspect.done()&&Date.now()<deadline)await wait(10);
+    }finally{clearInterval(heartbeat);}
+    assert.ok(inspect.done(),"full inventory must finish without a candidate-count cutoff; inventoried="+inspect.inventorySize());
+    assert.ok(heartbeats>2,"large unique inventory must yield to the event loop");
     assert.ok(inspect.inventorySize()>40000,
         "the inventory must exceed the former 40,000-text ceiling");
     assert.ok(inspect.has("en",lastText),
@@ -2805,7 +2986,7 @@ async function testR20CteLargeInventoryAndPhysicalF10(){
     assert.equal(typeof onKey,"function");
     let prevented=0,stopped=0;
     const ev={key:"F10",preventDefault(){prevented++;},stopImmediatePropagation(){stopped++;}};
-    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R30-20261126"));
+    onKey(ev);assert.equal(overlay.style.display,"block");assert.ok(overlay.textContent.includes("RPG-MVMZ-R42-20261127"));
     onKey({...ev,repeat:true});assert.equal(overlay.style.display,"block");
     onKey({...ev,shiftKey:true});assert.equal(overlay.style.display,"block");
     onKey(ev);assert.equal(overlay.style.display,"none");assert.equal(prevented,2);assert.equal(stopped,2);
@@ -2914,6 +3095,50 @@ async function testR19CteNativeChoicesAndCatalogs(){
     assert.equal(JSON.stringify(Object.entries(state.files).filter(([name])=>name.startsWith(languages))),snapshots);
     c.$gameMessage.clear();win.active=false;for(let i=0;i<12;i++)win.update();assert.equal(win.starts,1);
 }
+async function testR35SolDataNativeInventory(){
+    const sol=require("./soldata_fixture.js"),root=path.join("/tmp","servidor-qa-sol-日本語"),
+        content=path.join(root,"www"),data=path.join(content,"data"),js=path.join(content,"js"),plugins=path.join(js,"plugins");
+    const state={files:{},dirs:{[data]:true,[js]:true,[plugins]:true}},calls=[];
+    for(const n of ["rpg_core","rpg_managers","rpg_objects","rpg_scenes","rpg_windows"])
+        state.files[path.join(js,n+".js")]="// synthetic MV";
+    const originals={};
+    for(const n of Object.keys(sol.docs).concat(sol.excluded)){
+        const physical=n.endsWith(".json")?n.replace(/\.json$/,".soldata"):n;
+        // ASCII mock bytes have the same opaque size as the binary CI fixture.
+        const p=path.join(data,physical);originals[p]="x".repeat(32);state.files[p]=originals[p];
+    }
+    state.files[path.join(data,"message_data.json")]=JSON.stringify(sol.docs["message_data.json"]);
+    const missing=new Set(["Map369.json"]);
+    const f=fixture(1,{root,fsState:state,testHooks:true,batch:true,configure(c){
+        c.XMLHttpRequest=sol.loader(calls,missing);
+        c.$gameMap={mapId:()=>369};c.$dataMap=null;
+    }});
+    const c=f.context,qa=c.window.__IA_TRADUCTORA_TEST__;
+    new c.Scene_Title().start();
+    const until=async predicate=>{
+        const end=Date.now()+12000;
+        while(Date.now()<end){if(predicate())return;await wait(20);}
+        assert.fail("SOLData contract timeout");
+    };
+    await until(()=>qa.done());
+    const info=qa.soldata();
+    assert.equal(info.detected,true);
+    assert.equal(info.total,10);assert.equal(info.read,9);assert.equal(info.unavailable,1);
+    assert.ok(qa.limited(),"unavailable map must not be called complete");
+    assert.ok(calls.includes("Map369.json")&&calls.includes("Quests.json")&&calls.includes("Achievements.json"));
+    assert.ok(!calls.includes("message_data.json")&&!calls.includes("Test_Actors.json")&&!calls.includes("MapInfos.json"));
+    for(const text of ["The lantern is on the table.","Open the wooden gate.","Good morning.","Find the ancient key.","Please open the window.","Thank you for your help.","Please wait here."])
+        assert.ok(qa.has("en",text),"missing typed source: "+text);
+    assert.ok(!qa.has("en","Never execute this script")&&!qa.has("en","Do not translate this image name")&&!qa.has("en","Alice"));
+    c.$dataMap=sol.docs["Map369.json"];qa.solCollectLive();
+    await until(()=>qa.soldata().unavailable===0);
+    assert.ok(qa.has("ja","橋を渡ってください。"));assert.equal(qa.soldata().live,1);
+    assert.equal(qa.limited(),false);
+    for(const [p,value] of Object.entries(originals))assert.equal(state.files[p],value);
+    assert.equal(state.files[path.join(data,"System.json")],undefined);
+    console.log("IA_SOLDATA_NATIVE_INVENTORY_TYPED_FIELDS_LIVE_FALLBACK_PASS");
+}
+
 async function testR17CompressedNativeMZ(){
     const root=path.join("/tmp","servidor-qa-por-日本語"),data=path.join(root,"data"),js=path.join(root,"js"),pluginsDir=path.join(js,"plugins");
     const state={files:{},dirs:{[data]:true,[js]:true,[pluginsDir]:true}};
@@ -3977,6 +4202,7 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     await testR21CteNativeContextFirstPresentation();
     await testR20CteLargeInventoryAndPhysicalF10();
     await testR19CteNativeChoicesAndCatalogs();
+    await testR35SolDataNativeInventory();
     await testR17CompressedNativeMZ();
     await testR16HexChoicesAndChauPopup();
     await testR15NativeLocaleAndFallback();
@@ -4020,6 +4246,10 @@ async function testR26CustomPixiAndPluginCanvasSurfaces(){
     await testR4EnglishFormatContextAndStaleCache();
     await testR4InkAndCsvReadOnlyPreload();
     await testR4P2NoStaleLateOverlayAndNoArtificialWait();
+    await testR42BattleLogAndFormattedNotices(false);
+    await testR42BattleLogAndFormattedNotices(true);
+    await testR41PlainQuestTxtAndLongNativeJournal(false);
+    await testR41PlainQuestTxtAndLongNativeJournal(true);
     await testR4P2QuestMetadataAndVisibleRefresh();
     await testR4P2PriorityCommonAndInkChoice();
     await testR4P3NativeSafetyAndNames();

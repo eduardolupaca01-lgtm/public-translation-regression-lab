@@ -8,7 +8,7 @@
 (function () {
 "use strict";
 var BRAND="IA Traductora";
-var BUILD_ID="RPG-MVMZ-R30-20261126"; // also checked against the installed package SHA
+var BUILD_ID="RPG-MVMZ-R42-20261127"; // also checked against the installed package SHA
 if(typeof Utils==="undefined" || !Utils.isNwjs || !Utils.isNwjs()) return;
 var ENGINE_ID=Utils.RPGMAKER_NAME||"MV",isMZ=ENGINE_ID==="MZ";
 if(ENGINE_ID!=="MV"&&!isMZ)return;
@@ -20,7 +20,27 @@ try{
 }catch(_){return;}
 if(typeof Map!=="function"||typeof Promise!=="function")return;
 var game="",content="",sidecar="",worker="",descriptorFile="",startupFile="";
-var porCompressed=false,halvaMode=false;
+var porCompressed=false,halvaMode=false,solData=false;
+var solStats={total:0,read:0,unavailable:0,excluded:0,live:0,done:false};
+var solPending=new Map(),solSources=new Map();
+var SOL_LIMIT=32*1024*1024;
+function soldataAt(folder){
+    if(isMZ)return false;
+    var js=path.join(folder,"js"),data=path.join(folder,"data");
+    if(ordinary(path.join(data,"System.json")))return false;
+    if(!directoryUnder(folder,js)||!directoryUnder(folder,data)||
+       !directoryUnder(folder,path.join(js,"plugins")))return false;
+    if(!["rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"].every(function(n){
+        return regularUnder(js,path.join(js,n),8*1024*1024);
+    }))return false;
+    return ["System","Actors","CommonEvents","MapInfos"].every(function(n){
+        var file=path.join(data,n+".soldata");
+        try{
+            var size=fs.lstatSync(file).size;
+            return regularUnder(data,file,SOL_LIMIT)&&size>=16&&size%16===0;
+        }catch(_){return false;}
+    });
+}
 var remNative={detected:false,images:false,configured:false,spanish:new Set(),fallback:new Map()};
 var state={connected:false,status:"Comprobando instalación",phase:"INICIO",requested:0,received:0,shown:0,errors:0,qualityRejected:0};
 var r26PixiStats={detected:0,rendered:0,requested:0,late:0,rewrapped:0,errors:0};
@@ -160,6 +180,7 @@ function halvaPersistentRoot(found){
 function initPaths(){
     var found=resolveMVGame(),persistent=halvaPersistentRoot(found);
     halvaMode=!!persistent;game=persistent||found.root;content=found.content;porCompressed=porCompressedAt(content);
+    solData=!halvaMode&&soldataAt(content);
     sidecar=path.join(game,"IA Traductora");
     worker=path.join(sidecar,".local","Rpg","engine","IATraductora.exe");
     descriptorFile=halvaMode?path.join(sidecar,".local","Rpg","bridge.json"):path.join(content,"data","IATraductora","bridge.json");
@@ -902,6 +923,7 @@ function languageFor(s){
     if(isJapanese(s))return "ja";
     if(actorNames[s])return null;
     if(r25ClearlySpanish(s)&&!r25DeclaredEnglish(s))return null;
+    if(typeof r42Units!=="undefined"&&r42Units&&r42Units.has(s))return r42Units.get(s);
     if(r22Authored.has(s)&&(!isMZ||!externalTables()&&!remNative.detected&&!cte.enabled))return "en";
     if((typeof questTexts!=="undefined"&&questTexts.has(s))||
        (typeof discovered!=="undefined"&&discovered.has("en\u0000"+s)))return "en";
@@ -1834,8 +1856,11 @@ function projectSurface(win,text){
     var external=iavraDisplayValue(text,true);if(external!==null)return external;
     if(typeof Window_Message!=="undefined"&&win instanceof Window_Message)
         return projectMessageSurface(win,text);
+    var sol=solProjected(text);if(sol!==null)return sol;
+    var txt=questTxtProject(text,win,true);if(txt)return txt.text;
     if(questSurface(win,text))return questDraw(win,text);
     if(isAmbientSurface(win,text))return projectCaption(text);
+    var formatted=r42NativeSurface(win,text,true);if(formatted!==null)return formatted;
     return text;
 }
 // Intercept the author's final conversion before word-wrap, even when a
@@ -2331,7 +2356,9 @@ function nativeDisplayProjection(text,context,bitmap){
     if(tsvExcluded(text))return null;
     var named=csvNameReady(text);if(named!==null)return named;
     var known=csvKnownReady(text);if(known!==null)return known;
-    var source=displaySource(text,context||"surface");if(!source)return null;
+    var txt=questTxtProject(text,bitmap&&bitmap._iaOwnerWindow,true);if(txt)return txt.text;
+    var formatted=r42NativeSurface(bitmap&&bitmap._iaOwnerWindow,text,true);if(formatted!==null)return formatted;
+    var source=(solData?solSources.get(text):null)||displaySource(text,context||"surface");if(!source)return null;
     var ready=readyText(source,text);
     if(typeof ready==="string"&&ready!==text&&validTranslation(source,text,ready,true))return ready;
     var owner=bitmap&&bitmap._iaOwnerWindow,key=source+"\u0000"+text;
@@ -3082,14 +3109,19 @@ function hookNativeSurface(){
                 }
                 try{
                     if(typeof args[0]==="string"&&!identityDrawDepth&&!this._iaOwnSurface){
-                        if(!identity&&statusPresentationScope())args[0]=statusRenderValue(args[0]);
+                        var txt=!identity&&!statusPresentationScope()?questTxtProject(args[0],this,true):null;
+                        var formatted=!txt&&!identity&&!statusPresentationScope()&&!questSurface(this,args[0])&&!isAmbientSurface(this,args[0])?
+                            r42NativeSurface(this,args[0],true):null;
+                        if(txt)args[0]=txt.text;
+                        else if(formatted!==null)args[0]=formatted;
+                        else if(!identity&&statusPresentationScope())args[0]=statusRenderValue(args[0]);
                         else if(!identity&&questSurface(this,args[0]))args[0]=questDraw(this,args[0]);
                         else if(!identity&&isAmbientSurface(this,args[0]))args[0]=projectCaption(args[0]);
                         else {var bookLabel=!identity?questCachedLabel(args[0]):null;
                             if(bookLabel===null&&csvWindowEligible(this))bookLabel=csvProjectDisplay(args[0],csvWindowChoice(this),true);
                             if(bookLabel===null&&!identity)bookLabel=nativeDisplayProjection(args[0],csvWindowChoice(this)?"choice":"surface",this.contents);
                             args[0]=bookLabel!==null?bookLabel:translatedNativeLabel(args[0],identity);}
-                        if(!identity&&!statusPresentationScope()&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
+                        if(!txt&&formatted===null&&!identity&&!statusPresentationScope()&&!isQuestWindow(this)&&typeof Window_Message!=="undefined"&&!(this instanceof Window_Message)&&
                            !(typeof Scene_Name!=="undefined"&&typeof SceneManager!=="undefined"&&SceneManager._scene instanceof Scene_Name)&&
                            languageFor(args[0])==="en"){
                             var cachedEnglish=readyText("en",args[0]);
@@ -3585,7 +3617,7 @@ function hookNativeSurface(){
             return withQuestGlyphs(bitmap,args[0],function(){return measure.apply(bitmap,args);});
         };
     }
-    hookPixiTextSurface();
+    hookPixiTextSurface();hookR42CustomWindows();
 }
 
 function readyIndependentLines(source,text){
@@ -4023,6 +4055,8 @@ function choiceDisplay(win,raw,requestMissing){
     return null;
 }
 function firstViewMissing(win,raw,choice){
+    var txt=!choice?questTxtProject(raw,win,true):null;
+    if(txt)return txt.missing;
     if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||remNativeSpanishText(raw)||csvExecutableSyntax(raw))return false;
     if(choice){hexChoiceRemember(raw,true);var hex=hexChoiceRead(raw,true);if(hex)return hex.waiting;}
     var remFallback=remNativeFallback(raw);
@@ -4067,6 +4101,8 @@ function firstViewMissing(win,raw,choice){
             raw=value;
         }
     }
+    var formatted=!choice?r42NoticeProject(raw,win,true,false):null;
+    if(formatted)return formatted.missing;
     var source=displaySource(raw,choice?"choice":"message");if(!source)return false;
     if(readyText(source,raw)!==null||(tableStats.root&&csvKnownReady(raw)!==null))return false;
     if(rejectedKeys.get(source+"\u0000"+raw)===Infinity)return false;
@@ -5728,6 +5764,13 @@ function hookMessages(){
                     }
                     source=null;
                 }
+                if(!scripted&&!entries.length&&!externalEntry&&!projection&&!(tsv.detected&&tsvRef(keys))){
+                    var txt=questTxtProject(text,this,true)||r42NoticeProject(text,this,true,false);
+                    if(txt){
+                        source=null;
+                        if(txt.text!==text)projection={message:$gameMessage,raw:rawText,text:txt.text,used:false,questTxt:true};
+                    }
+                }
                 if(source){
                     var old=readyText(source,text);
                     if(old===null&&tableStats.root)old=csvKnownReady(text);
@@ -5759,7 +5802,7 @@ function hookMessages(){
         finally{tsvProjection=previousProjection;bindNativeMessageBitmap(this);}
         if(projection&&projection.used){
             if(projection.iavra){if(projection.translated){state.shown++;iavra.shown++;}}
-            else{state.shown++;if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
+            else{state.shown++;if(projection.questTxt){}else if(projection.scripted)scriptStats.shown++;else tsv.shown++;}
         }
         if(tsv.detected)try{tsvLateTicket(this);}catch(_){state.errors++;}
         if(this._iaLateTicket)try{snapshotMessage(this,this._iaLateTicket);}catch(_){hideLate(this);}
@@ -6598,6 +6641,478 @@ var questLabels={"Quest":"Misión","Quests":"Misiones","Objectives":"Objetivos",
     "Training Quests":"Misiones de entrenamiento","Wizard Quests":"Misiones de mago","Shaman Quests":"Misiones de chamán",
     "Weakness Quests":"Misiones de debilidades","From":"De","Location":"Ubicación","Level":"Nivel",
     "Castle":"Castillo","Forest":"Bosque","Village":"Aldea","Town":"Pueblo","Close":"Cerrar","Journal":"Diario"};
+// R41: read-only plain mission text sources. Unknown TXT grammars are
+// not executable data or a reason to rewrite a game's database. Only
+// verified display lines and a narrowly identified progress journal can
+// use this adapter; the original renderer and state stay with the game.
+var questTxtRoots=[],questTxtKnown=new Set(),questTxtUnits=new Map();
+var questTxtStats={detected:false,files:0,total:0,omitted:0,lines:0,fields:0,ignored:0,done:false,limited:false};
+var QUEST_TXT_FILE=2*1024*1024,QUEST_TXT_TOTAL=32*1024*1024,QUEST_TXT_ENTRIES=4096;
+var questTxtFixed={"Affection":"Afinidad","Progress":"Progreso","Stage":"Etapa","Optional":"Opcional",
+    "Title":"Título","Description":"Descripción","Objective":"Objetivo","Objectives":"Objetivos",
+    "Reward":"Recompensa","Rewards":"Recompensas","Hint":"Pista","Task":"Tarea","Tasks":"Tareas",
+    "Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miércoles","Thursday":"Jueves",
+    "Friday":"Viernes","Saturday":"Sábado","Sunday":"Domingo"};
+var questTxtControl=/(?:\\|\x1b)(?:[Cc]\[(?:\d{1,3}|#[0-9a-fA-F]{6,8})\]|(?:[IiVvNnPp]|[Ff][Ss]|[Pp][XxYy])\[\d{1,6}\]|[{}]|[Gg](?![A-Za-z]))|<\/?wordwrap>/gi;
+// Preserve numbers, times, points, counters and punctuation between fields.
+var questTxtToken=/(?:\\|\x1b)(?:[Cc]\[(?:\d{1,3}|#[0-9a-fA-F]{6,8})\]|(?:[IiVvNnPp]|[Ff][Ss]|[Pp][XxYy])\[\d{1,6}\]|[{}]|[Gg](?![A-Za-z]))|<\/?wordwrap>|\b\d{1,2}(?::\d{2})?[ \t]*(?:AM|PM)\b|\b\d+(?:[.,]\d+)?[ \t]+AP\b|\d+(?:[.,]\d+)?|\|/gi;
+function detectQuestTxt(){
+    var seen=new Set();
+    [content,game].forEach(function(base){
+        if(!base)return;
+        [path.join(base,"quest"),path.join(base,"data","quest")].forEach(function(dir){
+            if(!directoryUnder(base,dir))return;
+            try{
+                var resolved=fs.realpathSync(dir);
+                if(!seen.has(resolved)){seen.add(resolved);questTxtRoots.push({base:base,dir:dir});}
+            }catch(_){}
+        });
+    });
+    questTxtStats.detected=questTxtRoots.length>0;
+}
+function questTxtPlain(raw){return raw.replace(questTxtControl,"");}
+function questTxtKey(raw){
+    return questTxtPlain(raw).replace(/^[ \t]*(?:[-\u2022–—][ \t]+)?/,"").replace(/[ \t\u00a0]+/g," ").trim();
+}
+function questTxtSafeLine(raw){
+    if(typeof raw!=="string"||!raw.trim()||raw.length>1800||actorNames[raw]||
+       remNativeSpanishText(raw)||externalLocalizationReference(raw)||tsvExcluded(raw)||
+       csvExecutableSyntax(raw))return false;
+    var plain=questTxtPlain(raw).trim();
+    if(!plain||/[\\\x1b<>{}=$@\x00-\x08\x0b\x0c\x0e-\x1f\uFFFD]/.test(plain)||
+       /^\s*(?:\/\/|#|;|\[|(?:if|else|return|function|var|let|const|class|while|for|import|export)\b)/i.test(plain)||
+       /^(?:id|key|switch|variable|condition|script|code|eval|formula|event|mapid|questid|icon|image|audio|filename|name|speaker|actor)\s*:/i.test(plain)||
+       /(?:https?:|file:|data:|[A-Za-z0-9_./-]+\.(?:txt|png|jpe?g|webp|ogg|mp3|wav|js|json|csv|tsv|exe|dll)\b)/i.test(plain))return false;
+    return true;
+}
+function questTxtSource(text){
+    if(!questTxtSafeLine(text)||r25ClearlySpanish(text)||actorNames[text])return null;
+    if(questTxtUnits.has(text))return questTxtUnits.get(text);
+    var source=languageFor(text)||displaySource(text,"inventory");
+    if(source)return source;
+    // Only typed quest prose, not arbitrary capitalized names or identifiers.
+    var words=text.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g)||[];
+    if(words.length<2||/[^\x20-\x7e\u2018\u2019\u201c\u201d\u2013\u2014\u2026]/.test(text))return null;
+    return /\b(?:quest|objective|reward|task|stage|progress|affection|optional|work|working|routine|morning|evening|night|sleep|sleeping|breakfast|lunch|dinner|cook|cooking|barn|farm|floor|broken|plank|bath|massage|laundry|room|shop|sell|sells|buy|check|visit|meet|deliver|collect|repair|complete|help|find|open|close|wait|reach|unlock|return|bring|finish|search|talk|speak|take|give|use|door|window|garden|bridge)\b/i.test(text)?"en":null;
+}
+function questTxtPlan(raw){
+    if(!questTxtSafeLine(raw))return null;
+    var parts=[],at=0,m;
+    // Use a fresh RegExp: languageFor and protectedParts may use their own
+    // stateful regexes while we are walking this line.
+    var re=new RegExp(questTxtToken.source,"gi");
+    function literal(s){if(s)parts.push({raw:s});}
+    function prose(value){
+        if(!value)return;
+        var head=(value.match(/^[ \t\u00a0\-–—\u2022(),:;]*/)||[""])[0];
+        var tail=(value.slice(head.length).match(/[ \t\u00a0(),:;]*$/)||[""])[0];
+        var body=value.slice(head.length,value.length-tail.length);
+        if(!body){literal(value);return;}
+        var fixed=Object.prototype.hasOwnProperty.call(questTxtFixed,body)?questTxtFixed[body]:null;
+        if(fixed===null&&Object.prototype.hasOwnProperty.call(questLabels,body))fixed=questLabels[body];
+        if(actorNames[body]||r25ClearlySpanish(body)){literal(value);return;}
+        // A known person-color span is an identity, never a translation unit.
+        var previous=parts.length?parts[parts.length-1].raw:"";
+        if(previous&&protectedPerson(previous,body)!==null){literal(value);return;}
+        var source=fixed===null?questTxtSource(body):null;
+        if(!source&&fixed===null){literal(value);return;}
+        parts.push({raw:value,head:head,tail:tail,body:body,source:source,fixed:fixed});
+    }
+    while((m=re.exec(raw))!==null){
+        prose(raw.slice(at,m.index));literal(m[0]);at=re.lastIndex;
+    }
+    prose(raw.slice(at));
+    return parts.some(function(p){return p.source||p.fixed!==undefined;})?parts:null;
+}
+function questTxtRemember(raw){
+    var parts=questTxtPlan(raw);
+    if(!parts)return false;
+    var key=questTxtKey(raw);
+    if(!questTxtKnown.has(key)){questTxtKnown.add(key);questTxtStats.lines++;}
+    parts.forEach(function(p){
+        if(!p.source||questTxtUnits.has(p.body))return;
+        questTxtUnits.set(p.body,p.source);
+        if(!questTexts.has(p.body)){questTexts.set(p.body,p.source);questStats.fields++;}
+        questTxtStats.fields++;
+        addPrefetch(p.body,false,p.source);
+    });
+    return true;
+}
+function questTxtFileText(raw,done){
+    if(typeof raw!=="string"||raw.length>QUEST_TXT_FILE||/[\x00\uFFFD]/.test(raw)){
+        done(false);return;
+    }
+    var lines=raw.replace(/^\uFEFF/,"").split(/\r\n|\r|\n/),at=0;
+    function slice(){
+        var started=Date.now(),worked=0;
+        while(at<lines.length&&worked++<128&&Date.now()-started<7){
+            var line=lines[at++].trim();
+            if(!line)continue;
+            // Explicit display fields may be stored without their metadata
+            // prefix at presentation time. Never interpret other key/value
+            // fields or evaluate a TXT as JavaScript.
+            var field=/^(?:Title|Description|Objectives?|Rewards?|Hint|Tasks?|Text)\s*:\s*(.+)$/i.exec(line);
+            if(field)line=field[1];
+            else if(/^[A-Za-z_][A-Za-z0-9_ -]{0,40}\s*:/.test(line)&&
+                !/^(?:Affection|Progress|Stage)\s*:/i.test(line)){
+                questTxtStats.ignored++;continue;
+            }
+            if(!questTxtRemember(line))questTxtStats.ignored++;
+        }
+        nextPrefetch();
+        if(at<lines.length)setTimeout(slice,0);else done(true);
+    }
+    slice();
+}
+function scanQuestTxt(done){
+    if(!questTxtStats.detected||questTxtStats.done){done();return;}
+    var dirs=questTxtRoots.map(function(r){return {base:r.base,dir:r.dir,depth:0};});
+    var files=[],seen=0,bytes=0,dirAt=0,fileAt=0;
+    function omit(limited){
+        questTxtStats.omitted++;scanStats.skipped++;
+        if(limited){questTxtStats.limited=true;scanStats.limited=true;}
+    }
+    function discover(){
+        if(dirAt>=dirs.length){readNext();return;}
+        var root=dirs[dirAt++];
+        if(!directoryUnder(root.base,root.dir)){omit(false);setTimeout(discover,0);return;}
+        fs.readdir(root.dir,function(err,names){
+            if(err||!Array.isArray(names)){omit(false);setTimeout(discover,0);return;}
+            names.sort().forEach(function(name){
+                if(seen>=QUEST_TXT_ENTRIES){
+                    if(!questTxtStats.limited)omit(true);
+                    return;
+                }
+                seen++;
+                if(typeof name!=="string"||!name||name==="."||name===".."||/[\\/:]/.test(name))return;
+                var file=path.join(root.dir,name),info;
+                try{info=fs.lstatSync(file);}catch(_){omit(false);return;}
+                if(info.isSymbolicLink()){omit(false);return;}
+                if(info.isDirectory()){
+                    if(root.depth<3&&directoryUnder(root.base,file))dirs.push({base:root.base,dir:file,depth:root.depth+1});
+                    else omit(true);
+                    return;
+                }
+                if(!/\.txt$/i.test(name))return;
+                questTxtStats.total++;scanStats.totalFiles++;
+                if(!regularUnder(root.dir,file,QUEST_TXT_FILE)||bytes+info.size>QUEST_TXT_TOTAL){omit(true);return;}
+                bytes+=info.size;files.push({base:root.dir,file:file});
+            });
+            setTimeout(discover,0);
+        });
+    }
+    function readNext(){
+        if(fileAt>=files.length){questTxtStats.done=true;done();return;}
+        var task=files[fileAt++];
+        if(!regularUnder(task.base,task.file,QUEST_TXT_FILE)){omit(false);setTimeout(readNext,0);return;}
+        fs.readFile(task.file,"utf8",function(err,raw){
+            if(err){omit(false);setTimeout(readNext,0);return;}
+            questTxtFileText(raw,function(ok){
+                if(ok){questTxtStats.files++;scanStats.files++;}else omit(false);
+                setTimeout(readNext,0);
+            });
+        });
+    }
+    discover();
+}
+function questTxtProject(raw,win,request){
+    if(!questTxtStats.detected||cte.enabled||inputFormActive()||identityDrawDepth||
+       win&&(win._iaNameSurface||win._iaOwnSurface)||typeof raw!=="string"||!raw.trim()||
+       raw.length>32768||actorNames[raw]||remNativeSpanishText(raw)||
+       externalLocalizationReference(raw)||tsvRef(raw)||csvExecutableSyntax(raw))return null;
+    var pieces=raw.split(/(\r\n|\r|\n|<br\s*\/?>)/i);
+    if(pieces.length>1023)return null;
+    var plain=questTxtPlain(raw);
+    // A runtime-generated progress journal may contain changing counters,
+    // so it cannot be identified by an exact whole-message cache key.
+    var structured=/\bAffection\s*:/i.test(plain)&&/\bProgress\s*:/i.test(plain)&&
+        /\bStage\s+\d/i.test(plain)&&/(?:^|\n|<br\s*\/?>)[ \t]*[-\u2022–—][ \t]+/i.test(plain);
+    var scoped=win&&isQuestWindow(win),recognized=false,missing=false;
+    for(var i=0;i<pieces.length;i+=2){
+        var line=pieces[i],key=questTxtKey(line),known=questTxtKnown.has(key)||questTxtUnits.has(key);
+        var header=/^(?:Affection|Progress)\s*:|^Stage\s+\d|^\(Optional\)$/i.test(key);
+        var bullet=/^[ \t]*[-\u2022–—][ \t]+/.test(questTxtPlain(line));
+        if(!known&&!(structured&&(header||bullet))&&!(scoped&&header))continue;
+        var parts=questTxtPlan(line);
+        if(!parts)continue;
+        recognized=true;
+        if(request)questTxtRemember(line);
+        var lineMissing=false,rendered=parts.map(function(p){
+            if(p.fixed!==undefined&&p.fixed!==null)return p.head+p.fixed+p.tail;
+            if(!p.source)return p.raw;
+            var value=readyText(p.source,p.body);
+            if(typeof value==="string"&&value!==p.body&&validTranslation(p.source,p.body,value,true))
+                return p.head+value+p.tail;
+            var permanent=rejectedKeys.get(p.source+"\u0000"+p.body)===Infinity;
+            if(!permanent){
+                missing=true;lineMissing=true;
+                if(request){
+                    if(scoped&&typeof win.refresh==="function")queueQuest(win,p.source,p.body);
+                    else firstViewRequest(p.source,p.body);
+                }
+            }
+            return p.raw;
+        }).join("");
+        // A pending line keeps its original layout until its own pieces are
+        // ready. Other completed lines are never blocked by this one.
+        if(!lineMissing)pieces[i]=rendered;
+    }
+    return recognized?{text:pieces.join(""),missing:missing}:null;
+}
+function questTxtLabel(){
+    return "TXT misiones: "+questTxtStats.files+"/"+questTxtStats.total+
+        " · Textos: "+questTxtStats.fields+" · Om.: "+questTxtStats.omitted;
+}
+
+// R42: local presentation of proven battle templates and formatted notices.
+// Keep names, HP amounts, native escape codes and gameplay state intact.
+// Unknown executable controls or unrecognized battle identities fail open.
+var r42Units=new Map(),r42Windows=new Set();
+var r42Stats={battle:0,notices:0,units:0};
+var r42WindowPattern=/^Window_(?:Battle(?:Log|Message|ActionLog|Notification)|Notification|Notice|Toast|Popup|Tips?)(?:[A-Za-z0-9_]*)$/;
+var r42BattlePattern=/^Window_Battle(?:Log|Message|ActionLog|Notification)(?:[A-Za-z0-9_]*)$/;
+var r42Token=/(?:\\|\x1b)(?:(?:c\[(?:\d{1,3}|#[0-9a-f]{6,8})\]|(?:i|v|n|p|fs|px|py)\[\d{1,6}\])|[{}!.,|^<>$]|g(?![a-z]))|<\/?wordwrap>|【[A-Za-z0-9_+\- ]{1,16}】|\[(?:[A-Z0-9]|F(?:[1-9]|1[0-2])|Esc|Enter|Space|Shift|Ctrl|Alt)\]|[※"“”]/gi;
+function r42BattleScope(win){
+    return !!win&&((typeof Window_BattleLog!=="undefined"&&win instanceof Window_BattleLog)||hasNativeClass(win,r42BattlePattern));
+}
+function r42NoticeScope(win){
+    return !!win&&!r42BattleScope(win)&&hasNativeClass(win,r42WindowPattern);
+}
+function r42Safe(raw){
+    return typeof raw==="string"&&raw.trim()&&raw.length<=1800&&
+        !actorNames[raw]&&!remNativeSpanishText(raw)&&!externalLocalizationReference(raw)&&
+        !tsvRef(raw)&&!tsvExcluded(raw)&&!csvExecutableSyntax(raw)&&
+        !/(?:\\|\x1b)(?:js|eval|script)(?:\b|\[)|<script\b/i.test(raw);
+}
+function r42Identity(raw){
+    if(typeof raw!=="string")return false;
+    var name=raw.replace(/(?:\\|\x1b)c\[(?:\d{1,3}|#[0-9a-f]{6,8})\]/gi,"").trim();
+    if(!name||name.length>120||/[\\\x1b<>{}\r\n]/.test(name))return false;
+    if(actorNames[name])return true;
+    var rows=[typeof $dataActors!=="undefined"?$dataActors:null,typeof $dataEnemies!=="undefined"?$dataEnemies:null];
+    for(var i=0;i<rows.length;i++){
+        if(Array.isArray(rows[i])&&rows[i].some(function(v){return v&&v.name===name;}))return true;
+    }
+    var groups=[typeof $gameParty!=="undefined"?$gameParty:null,typeof $gameTroop!=="undefined"?$gameTroop:null];
+    for(var j=0;j<groups.length;j++){
+        try{
+            var members=groups[j]&&typeof groups[j].members==="function"?groups[j].members():[];
+            if(Array.isArray(members)&&members.some(function(v){return v&&typeof v.name==="function"&&v.name()===name;}))return true;
+        }catch(_){}
+    }
+    return false;
+}
+function r42TypedSkill(raw){
+    var body=raw.replace(/(?:\\|\x1b)(?:i\[\d{1,6}\]|c\[(?:\d{1,3}|#[0-9a-f]{6,8})\])/gi,"").trim();
+    if(!body||body.length>180||r42Identity(body))return false;
+    var lists=[typeof $dataSkills!=="undefined"?$dataSkills:null,typeof $dataItems!=="undefined"?$dataItems:null];
+    return lists.some(function(rows){return Array.isArray(rows)&&rows.some(function(v){return v&&v.name===body;});});
+}
+function r42NoticeSource(body,typed){
+    if(!r42Safe(body)||r42Identity(body)||r25ClearlySpanish(body))return null;
+    if(/[\\\x1b<>{}=$@#\x00-\x1f]/.test(body)||
+       /^\s*(?:\/\/|(?:var|let|const|function|import|export|return)\b)/i.test(body)||
+       /(?:https?:|file:|[A-Za-z0-9_./-]+\.(?:js|json|exe|dll|png|ogg|mp3|txt)\b)/i.test(body))return null;
+    var src=languageFor(body)||displaySource(body,"surface");
+    if(src)return src==="en"?"en":null;
+    var normalized=body.replace(/[\u2018\u2019]/g,"'").replace(/[\u2010-\u2015]/g,"-").replace(/\u2026/g,"...");
+    if(/[^\x20-\x7e]/.test(normalized))return null;
+    var words=normalized.match(/[A-Za-z]+(?:['-][A-Za-z]+)*/g)||[];
+    if(words.length<2)return null;
+    if(r25NativeEnglishEvidence(normalized)||
+       /\b(?:controls?|hotkeys?|keyboard|movement|speed|gameplay|remembering|tips|notification|notice|assault|flash|damage|critical|attack|press|button|screen|smoother|refer|tutorial)\b/i.test(normalized))return "en";
+    if(typed&&(r22EnglishLocale||(typeof $dataSystem!=="undefined"&&$dataSystem&&/^en(?:[_-]|$)/i.test($dataSystem.locale||""))))return "en";
+    return null;
+}
+var r42Fixed={"Tips":"Consejos","tips":"consejos","Hotkeys":"Atajos","hotkeys":"atajos",
+    "Controls":"Controles","controls":"controles","Notice":"Aviso","Notification":"Notificación"};
+function r42NoticePlan(raw,forced){
+    // R42 is an English display adapter. Japanese and mixed-language text
+    // must keep the previous name-reading, fixed-notice and cache pipeline.
+    // In particular, the Japanese surname instructions also contain ※.
+    if(!r42Safe(raw)||cte.enabled||isJapanese(raw))return null;
+    // Ordinary dialogue keeps the previous adapters. Opt in only for
+    // a paired quote envelope, explicit notice/key glyphs or native UI.
+    var plain=visibleProse(raw).trim();
+    var explicit=/[※]|【[A-Za-z0-9_+\- ]{1,16}】/.test(raw);
+    var marked=explicit||
+        /(?:^|\r?\n)[ \t]*(?:"[^"\r\n]+"|“[^”\r\n]+”)[ \t]*(?=\r?\n|$)/.test(plain);
+    if(!forced&&!marked)return null;
+    // Ordinary smart-quoted English dialogue already has a complete-line
+    // source/cache contract (R4). Do not divert that recognized prose into
+    // fragments. R42 still handles straight-quoted envelopes, explicit
+    // notices, and smart-quoted text the existing detector cannot recognize.
+    if(!forced&&!explicit&&raw.indexOf('"')<0&&/[“”]/.test(plain)&&
+        displaySource(raw,"message")==="en")return null;
+    var lines=raw.split(/(\r?\n)/),plans=[],units=0;
+    for(var i=0;i<lines.length;i+=2){
+        var line=lines[i],parts=[],at=0,m,unsafe=false;
+        var re=new RegExp(r42Token.source,"gi");
+        function literal(s){if(s)parts.push({raw:s});}
+        function prose(value){
+            if(!value)return;
+            if(/[\\\x1b<>{}=$@#\x00-\x08\x0b\x0c\x0e-\x1f]/.test(value)){unsafe=true;return;}
+            var lead=(value.match(/^[ \t\u00a0]*/)||[""])[0];
+            var tail=(value.slice(lead.length).match(/[ \t\u00a0]*$/)||[""])[0];
+            var body=value.slice(lead.length,value.length-tail.length);
+            if(!body||r42Identity(body)||r25ClearlySpanish(body)){literal(value);return;}
+            var fixed=Object.prototype.hasOwnProperty.call(r42Fixed,body)?r42Fixed[body]:null;
+            var source=fixed===null?r42NoticeSource(body,forced):null;
+            if(fixed===null&&!source){literal(value);return;}
+            units++;
+            parts.push({raw:value,lead:lead,tail:tail,body:body,source:source,fixed:fixed});
+        }
+        while((m=re.exec(line))!==null){
+            prose(line.slice(at,m.index));literal(m[0]);at=re.lastIndex;
+        }
+        prose(line.slice(at));
+        if(unsafe)return null;
+        plans.push({index:i,parts:parts});
+    }
+    return units?{lines:lines,plans:plans}:null;
+}
+function r42RememberUnit(part,priority){
+    if(!part.source)return;
+    if(!r42Units.has(part.body)){
+        if(r42Units.size>=50000)return;
+        r42Units.set(part.body,part.source);r42Stats.units++;
+    }
+    addPrefetch(part.body,priority,part.source);
+}
+function r42NoticeRemember(raw,priority){
+    var plan=r42NoticePlan(raw,false);
+    if(!plan)return false;
+    plan.plans.forEach(function(line){line.parts.forEach(function(p){r42RememberUnit(p,priority);});});
+    return true;
+}
+function r42NoticeProject(raw,win,request,forced){
+    if(inputFormActive()||identityDrawDepth||win&&(win._iaNameSurface||win._iaOwnSurface))return null;
+    var plan=r42NoticePlan(raw,!!forced);
+    if(!plan)return null;
+    // Legacy ordinary quoted messages use a complete-line cache key.
+    // Prefer a validated complete translation when present; if the new
+    // fragment is still missing, keep the existing whole-line request alive.
+    // Never submit formatted notices or controls through this fallback.
+    var plainQuote=/^[ \t]*"[^"\r\n\\\x1b<>※【】\[\]{}$@#]+"[ \t]*$/;
+    var legacyQuote=!forced&&win&&typeof Window_Message!=="undefined"&&
+        win instanceof Window_Message&&plainQuote.test(raw)&&displaySource(raw,"message")==="en";
+    if(legacyQuote){
+        var whole=readyText("en",raw);
+        if(typeof whole==="string"&&plainQuote.test(whole)&&validTranslation("en",raw,whole,true))return null;
+    }
+    var missing=false;
+    plan.plans.forEach(function(line){
+        var waiting=false;
+        var rendered=line.parts.map(function(p){
+            if(p.fixed!==undefined&&p.fixed!==null)return p.lead+p.fixed+p.tail;
+            if(!p.source)return p.raw;
+            if(request)r42RememberUnit(p,true);
+            var value=readyText(p.source,p.body);
+            if(typeof value==="string"&&validTranslation(p.source,p.body,value,true)&&
+               !/[\\\x1b<>{}"“”※【】\r\n]/.test(value))return p.lead+value+p.tail;
+            if(rejectedKeys.get(p.source+"\u0000"+p.body)!==Infinity){
+                missing=true;waiting=true;
+                if(request)firstViewRequest(p.source,p.body);
+            }
+            return p.raw;
+        }).join("");
+        // Never move icon/color/hotkey markers or draw a half-ready line.
+        if(!waiting)plan.lines[line.index]=rendered;
+    });
+    if(legacyQuote&&missing&&request)firstViewRequest("en",raw);
+    var out=plan.lines.join("");
+    if(out!==raw)r42Stats.notices++;
+    return {text:out,missing:missing};
+}
+var r42Color="(?:\\\\|\\x1b)c\\[(?:\\d{1,3}|#[0-9a-f]{6,8})\\]";
+var r42Amount="((?:"+r42Color+")*\\d+(?:[.,]\\d+)?(?:"+r42Color+")*)";
+function r42BattleProject(raw,win,request){
+    if(!r42BattleScope(win)||inputFormActive()||identityDrawDepth||win._iaOwnSurface||win._iaNameSurface||
+       !r42Safe(raw)||cte.enabled)return null;
+    var lead=(raw.match(/^[ \t]*/)||[""])[0],tail=(raw.slice(lead.length).match(/[ \t]*$/)||[""])[0];
+    var body=raw.slice(lead.length,raw.length-tail.length),m,out=null;
+    var exact={"Critical Hit!":"¡Golpe crítico!","Critical hit!":"¡Golpe crítico!","Miss!":"¡Fallo!",
+        "Missed!":"¡Falló!","No damage!":"¡Sin daño!","Counterattack!":"¡Contraataque!"};
+    if(Object.prototype.hasOwnProperty.call(exact,body))out=exact[body];
+    if(out===null){
+        m=/^(.+?)\s+attacks([!.])$/i.exec(body);
+        if(m&&r42Identity(m[1]))out=m[1]+" ataca"+m[2];
+    }
+    if(out===null){
+        m=new RegExp("^dealt\\s+"+r42Amount+"\\s+to\\s+(.+?)\\s+damage([!.])$","i").exec(body);
+        if(m&&r42Identity(m[2]))out="Infligió "+m[1]+" de daño a "+m[2]+m[3];
+    }
+    if(out===null){
+        m=new RegExp("^dealt\\s+"+r42Amount+"\\s+damage\\s+to\\s+(.+?)([!.])$","i").exec(body);
+        if(m&&r42Identity(m[2]))out="Infligió "+m[1]+" de daño a "+m[2]+m[3];
+    }
+    if(out===null){
+        m=new RegExp("^(.+?)\\s+(?:took|takes|received)\\s+"+r42Amount+"\\s+damage([!.])$","i").exec(body);
+        if(m&&r42Identity(m[1]))out=m[1]+" recibió "+m[2]+" de daño"+m[3];
+    }
+    if(out===null){
+        m=new RegExp("^(.+?)\\s+dealt\\s+"+r42Amount+"\\s+damage\\s+to\\s+(.+?)([!.])$","i").exec(body);
+        if(m&&r42Identity(m[1])&&r42Identity(m[3]))out=m[1]+" infligió "+m[2]+" de daño a "+m[3]+m[4];
+    }
+    if(out===null){
+        m=/^(.+?)\s*(used|uses)\s+(.+?)([!.])$/i.exec(body);
+        if(m&&r42Identity(m[1])){
+            var skill=m[3],translated=r42TypedSkill(skill)?r42NoticeProject(skill,win,request,true):null;
+            out=m[1]+(m[2].toLowerCase()==="used"?" usó ":" usa ")+(translated?translated.text:skill)+m[4];
+        }
+    }
+    if(out===null){
+        m=/^(.+?)\s+(missed|dodged the attack|was defeated|evaded the attack)([!.])$/i.exec(body);
+        var verbs={"missed":"falló","dodged the attack":"esquivó el ataque","was defeated":"fue derrotado","evaded the attack":"evadió el ataque"};
+        if(m&&r42Identity(m[1]))out=m[1]+" "+verbs[m[2].toLowerCase()]+m[3];
+    }
+    if(out===null)return null;
+    out=lead+out+tail;
+    if(numbersIn(raw)!==numbersIn(out)||csvControlSignature(raw)!==csvControlSignature(out))return null;
+    r42Stats.battle++;
+    return out;
+}
+function r42NativeSurface(win,raw,request){
+    if(r42BattleScope(win)){
+        var battle=r42BattleProject(raw,win,request);
+        if(battle!==null)return battle;
+        // Never ask OPUS to guess names or damage values in an unknown
+        // battle template. Leave the original to the existing native log.
+        return typeof raw==="string"?raw:null;
+    }
+    var notice=r42NoticeProject(raw,win,request,r42NoticeScope(win));
+    return notice?notice.text:null;
+}
+function hookR42CustomWindows(){
+    var classes=[];
+    if(typeof Window_BattleLog!=="undefined")classes.push(Window_BattleLog);
+    if(typeof window!=="undefined")Object.getOwnPropertyNames(window).forEach(function(k){
+        if(!r42WindowPattern.test(k))return;
+        var d=Object.getOwnPropertyDescriptor(window,k);
+        if(d&&typeof d.value==="function")classes.push(d.value);
+    });
+    classes.forEach(function(C){
+        var p=C&&C.prototype;
+        if(!p||r42Windows.has(p))return;
+        r42Windows.add(p);
+        // The base renderer already translates inherited draw calls.
+        // Wrap only actual overrides to support custom window renderers.
+        ["drawText","drawTextEx"].forEach(function(method){
+            if(!Object.prototype.hasOwnProperty.call(p,method)||typeof p[method]!=="function")return;
+            var native=p[method];
+            p[method]=function(){
+                if(surfaceDepth||inputFormActive()||identityDrawDepth||this._iaOwnSurface||this._iaNameSurface||isAmbientWindow(this))
+                    return native.apply(this,arguments);
+                var args=Array.prototype.slice.call(arguments);
+                try{var value=r42NativeSurface(this,args[0],true);if(value!==null)args[0]=value;}catch(_){state.errors++;}
+                surfaceDepth++;r24GlyphDepth++;
+                try{return native.apply(this,args);}finally{r24GlyphDepth--;surfaceDepth--;}
+            };
+        });
+        if(!isAmbientWindow(p))hookSurfaceConversion(p,true);
+    });
+}
+
 function questSource(text){
     if(typeof text!=="string"||!text.trim()||text.length>1800||actorNames[text])return null;
     return questTexts.get(text)||languageFor(text)||null;
@@ -7465,6 +7980,9 @@ function scanLocaleCsv(raw,done){
     slice();
 }
 function scanExtraSources(dataDir,done){
+    scanQuestTxt(function(){scanOtherExtraSources(dataDir,done);});
+}
+function scanOtherExtraSources(dataDir,done){
     var tasks=[],inkDir=path.join(dataDir,"ink"),localeDir=path.join(dataDir,"localization");
     var hudDir=path.join(dataDir,"plugin"),hudFile=path.join(hudDir,"UltraHUD.json");
     if(ultraHudEnabled()&&directoryUnder(dataDir,hudDir)&&regularUnder(hudDir,hudFile,2*1024*1024))
@@ -7569,9 +8087,10 @@ function scanCommands(list,priority){
                 cmd=list[++i];
             }
             // Same exact group and component fragments used by native rendering.
-            if(parts.length)r22Remember(parts.join("\n"),priority,"message");
+            var special=parts.length&&r42NoticeRemember(parts.join("\n"),priority);
+            if(parts.length&&!special)r22Remember(parts.join("\n"),priority,"message");
             for(var j=0;j<parts.length;j++){
-                r22Remember(parts[j],priority,"message");
+                if(!special&&!r42NoticeRemember(parts[j],priority))r22Remember(parts[j],priority,"message");
                 var caption=captionEnvelope(parts[j]);
                 if(caption)addPrefetch(caption.body,priority,captionSource(caption.body));
             }
@@ -7731,7 +8250,10 @@ function scanCommonEventsChunked(data,done){
                 var entry=deferred[deferredAt++];
                 priorityCommon(entry[0],entry[1]);worked++;
             }
-            while(at<data.length&&worked<12&&Date.now()-started<7){
+            // Keep the time budget for rendering/input, but allow more cheap
+            // events per slice. A 12-row cap imposed thousands of timer turns
+            // on Windows even when the actual work took less than 7 ms.
+            while(at<data.length&&worked<128&&Date.now()-started<7){
                 var row=data[at++];
                 if(row&&typeof row==="object")scanCommands(row.list,false);
                 worked++;
@@ -7744,6 +8266,210 @@ function scanCommonEventsChunked(data,done){
     }
     slice();
 }
+// SOLData compatibility: use the same logical JSON URL used by the game's
+// own DataManager. The translator neither reads an encryption key nor tries
+// to decode .soldata itself. All JSON stays in memory.
+var solOrder=["System.json","Actors.json","CommonEvents.json","Items.json","Weapons.json",
+    "Armors.json","Skills.json","States.json","Classes.json","Enemies.json","Troops.json",
+    "Quests.json","Achievements.json","message_data.json","news_source.json"];
+function solAllowed(name){return solOrder.indexOf(name)>=0||/^Map\d{3,6}\.json$/.test(name);}
+function solValid(name,doc){
+    if(name==="System.json")return !!doc&&typeof doc==="object"&&!Array.isArray(doc)&&integer(doc.startMapId)&&doc.startMapId>0;
+    if(/^Map\d{3,6}\.json$/.test(name))return !!doc&&Array.isArray(doc.events);
+    return Array.isArray(doc);
+}
+function solReadLogical(dataDir,name,done){
+    var physical=path.join(dataDir,name.replace(/\.json$/,".soldata"));
+    var plain=path.join(dataDir,name),settled=false,timer=null,xhr=null;
+    function finish(raw){
+        if(settled)return;
+        settled=true;if(timer!==null)clearTimeout(timer);
+        if(typeof raw!=="string"||!raw||raw.length>SOL_LIMIT){done(null);return;}
+        if(name==="CommonEvents.json"){
+            parseJsonArrayChunked(raw,function(doc){done(solValid(name,doc)?doc:null);});
+            return;
+        }
+        try{
+            var doc=JSON.parse(raw.replace(/^\uFEFF/,""));
+            done(solValid(name,doc)?doc:null);
+        }catch(_){done(null);}
+    }
+    if(!solAllowed(name)){finish(null);return;}
+    // These two observed auxiliary resources can be normal local JSON.
+    if(/^(?:message_data|news_source)\.json$/.test(name)&&regularUnder(dataDir,plain,SOL_LIMIT)){
+        fs.readFile(plain,"utf8",function(err,raw){finish(err?null:raw);});
+        return;
+    }
+    if(!regularUnder(dataDir,physical,SOL_LIMIT)||typeof XMLHttpRequest!=="function"){
+        finish(null);return;
+    }
+    try{
+        xhr=new XMLHttpRequest();
+        xhr.open("GET","data/"+name,true);
+        if(typeof xhr.overrideMimeType==="function")xhr.overrideMimeType("application/json");
+        xhr.onload=function(){
+            try{finish(xhr.status===0||xhr.status>=200&&xhr.status<300?xhr.responseText:null);}
+            catch(_){finish(null);}
+        };
+        xhr.onerror=xhr.ontimeout=xhr.onabort=function(){finish(null);};
+        xhr.onprogress=function(e){
+            if(e&&e.loaded>SOL_LIMIT){finish(null);try{xhr.abort();}catch(_){}}
+        };
+        // Explicit timer works even for older NW.js local-file XHRs.
+        timer=setTimeout(function(){finish(null);try{xhr.abort();}catch(_){}},5000);
+        xhr.send();
+    }catch(_){finish(null);}
+}
+function solRemember(value,quest){
+    if(typeof value!=="string"||!value.trim()||value.length>1800||actorNames[value]||
+       csvExecutableSyntax(value)||/^(?:https?:|file:|[./\\]|[A-Za-z0-9_./-]+\.(?:json|soldata|png|jpg|ogg|js)$)/i.test(value)||
+       /(?:\\|\x1b)(?:js|eval|script)\b|<script\b/i.test(value))return;
+    var source=languageFor(value)||displaySource(value,"surface")||
+        (r25ClearlySpanish(value)?null:r22EnglishSource(value,"message"));
+    if(!source&&/^[A-Za-z][A-Za-z0-9 .,'!?-]{0,79}$/.test(value)&&!r25ClearlySpanish(value))source="en";
+    if(!source)return;
+    solSources.set(value,source);
+    if(quest)registerQuestText(value);
+    addPrefetch(value,false,source);
+}
+function solExtra(name,doc,done){
+    // Typed display fields only. Never translate quest IDs, scripts, image
+    // paths, conditions, numeric step progress, reward IDs or speaker names.
+    var at=0;
+    if(name==="message_data.json")doc.forEach(function(row){
+        if(row&&typeof row.name==="string"&&row.name.length<=100)actorNames[row.name]=true;
+    });
+    function slice(){
+        var started=Date.now(),worked=0;
+        try{
+            while(at<doc.length&&worked++<128&&Date.now()-started<7){
+                var row=doc[at++];
+                if(name==="news_source.json"){solRemember(row,false);continue;}
+                if(!row||typeof row!=="object")continue;
+                if(name==="Quests.json"){
+                    questStats.records++;
+                    [row.name,row.desc,row.description].forEach(function(v){solRemember(v,true);});
+                    if(Array.isArray(row.steps))row.steps.forEach(function(step){
+                        if(Array.isArray(step))solRemember(step[0],true);
+                    });
+                    if(Array.isArray(row.rewards))row.rewards.forEach(function(reward){
+                        if(Array.isArray(reward)&&reward[0]==="custom")solRemember(reward[2],true);
+                    });
+                }else if(name==="Achievements.json"){
+                    ["name","description","lockedName","lockedDescription"].forEach(function(k){solRemember(row[k],false);});
+                }else if(name==="message_data.json"&&Array.isArray(row.messages)){
+                    row.messages.forEach(function(v){solRemember(v,false);});
+                }
+            }
+        }catch(_){state.errors++;}
+        if(at<doc.length){setTimeout(slice,0);return;}
+        done();
+    }
+    slice();
+}
+function solScanDoc(name,doc,done){
+    if(!solValid(name,doc)){done(false);return;}
+    try{
+        if(/^(?:Quests|Achievements|message_data|news_source)\.json$/.test(name)){
+            solExtra(name,doc,function(){done(true);});return;
+        }
+        if(name==="System.json")initialMapFile="Map"+("000"+doc.startMapId).slice(-Math.max(3,String(doc.startMapId).length))+".json";
+        scanDatabase(name,doc);
+        if(name==="CommonEvents.json"){
+            scanCommonEventsChunked(doc,function(){done(true);});return;
+        }
+        done(true);
+    }catch(_){done(false);}
+}
+function solMark(name,live){
+    solStats.read++;scanStats.files++;
+    if(live){solStats.live++;scanStats.skipped=Math.max(0,scanStats.skipped-1);}
+    solPending.delete(name);solStats.unavailable=solPending.size;
+    scanStats.limited=solPending.size>0;
+}
+function startSolScan(dataDir){
+    fs.readdir(dataDir,function(err,names){
+        if(err||!Array.isArray(names)){
+            scanStats.skipped++;scanStats.limited=true;scanStats.done=true;solStats.done=true;return;
+        }
+        var list=[],seen=new Set();
+        names.forEach(function(n){
+            if(typeof n!=="string")return;
+            var logical=/\.soldata$/.test(n)?n.slice(0,-8)+".json":
+                /^(?:message_data|news_source)\.json$/.test(n)?n:null;
+            if(!logical)return;
+            if(!solAllowed(logical)){if(/\.soldata$/.test(n))solStats.excluded++;return;}
+            if(!seen.has(logical)){seen.add(logical);list.push(logical);}
+        });
+        list.sort(function(a,b){
+            var i=solOrder.indexOf(a),j=solOrder.indexOf(b);
+            return (i<0?99:i)-(j<0?99:j)||a.localeCompare(b);
+        });
+        solStats.total=list.length;scanStats.totalFiles=list.length;
+        var at=0;
+        function next(){
+            if(at>=list.length){
+                solStats.done=true;
+                scanStats.limited=solPending.size>0;
+                scanQuestParameters(function(){scanExtraSources(dataDir,function(){scanStats.done=true;nextPrefetch();});});
+                return;
+            }
+            var name=list[at++];
+            solReadLogical(dataDir,name,function(doc){
+                solScanDoc(name,doc,function(ok){
+                    if(ok){
+                        solMark(name,false);
+                        if(name==="System.json"&&initialMapFile){
+                            var index=list.indexOf(initialMapFile);
+                            if(index>=at){list.splice(index,1);list.splice(at,0,initialMapFile);}
+                        }
+                    }else{
+                        solPending.set(name,true);solStats.unavailable=solPending.size;
+                        scanStats.skipped++;scanStats.limited=true;
+                    }
+                    nextPrefetch();setTimeout(next,0);
+                });
+            });
+        }
+        next();
+    });
+}
+// If the game's native route differs from XHR, recover already loaded
+// objects without calling DataManager.loadDataFile or changing globals,
+// map load state, event execution or saves.
+var solLiveBusy=false;
+function solCollectLive(){
+    if(!solData||!solStats.done||solLiveBusy||!solPending.size||typeof window==="undefined")return;
+    var entries=Array.from(solPending.keys());
+    for(var i=0;i<entries.length;i++){
+        var name=entries[i],doc=null;
+        if(/^Map\d{3,6}\.json$/.test(name)){
+            if(typeof $gameMap!=="undefined"&&$gameMap&&typeof $gameMap.mapId==="function"&&
+               Number(name.slice(3,-5))===$gameMap.mapId()&&typeof $dataMap!=="undefined")doc=$dataMap;
+        }else if(name==="message_data.json")doc=window.$gameDhoomMessageData;
+        else if(name!=="Achievements.json"&&name!=="news_source.json")doc=window["$data"+name.slice(0,-5)];
+        if(!solValid(name,doc))continue;
+        solLiveBusy=true;
+        (function(logical,value){
+            solScanDoc(logical,value,function(ok){
+                if(ok)solMark(logical,true);
+                solLiveBusy=false;nextPrefetch();
+            });
+        })(name,doc);
+        return;
+    }
+}
+function solLabel(){
+    return "SOLData: "+solStats.read+"/"+solStats.total+" legibles · "+solStats.unavailable+" pendientes · "+solStats.excluded+" no textuales/prueba";
+}
+function solProjected(raw){
+    if(!solData||typeof raw!=="string"||actorNames[raw]||inputFormActive()||identityDrawDepth)return null;
+    var source=solSources.get(raw);if(!source)return null;
+    var ready=readyText(source,raw);
+    if(ready!==null)return ready;
+    firstViewRequest(source,raw);return null;
+}
+
 function startFullScan(){
     if(cte.enabled){startCteScan();return;}
     if(scanStarted||!content||(externalTables()&&!cacheReadDone)||(iavra.detected&&!iavra.done))return;
@@ -7757,6 +8483,7 @@ function startFullScan(){
         var relative=path.relative(content,fs.realpathSync(dataDir));
         if(relative!=="data")throw Error("unexpected MV data path");
     }catch(_){scanStats.skipped++;scanStats.done=true;return;}
+    if(solData){startSolScan(dataDir);return;}
     fs.readdir(dataDir,function(error,names){
         if(error){scanStats.skipped++;scanStats.done=true;return;}
         var order=["System.json","Actors.json","CommonEvents.json","Items.json",
@@ -8075,13 +8802,13 @@ function cteHudRefresh(){
         "Solicitudes: "+state.requested+" · Recibidas: "+state.received+" · Mostradas: "+state.shown,
         "Caché: "+diskStats.loaded+" cargadas · "+diskStats.saved+" guardadas",
         "Archivos: "+scanStats.files+"/"+scanStats.totalFiles+" · Omitidos: "+scanStats.skipped,
-        cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos":"Interfaz MV/MZ · memoria OPUS",
+        cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.conflicts+" conflictos":solData?solLabel():"Interfaz MV/MZ · memoria OPUS",
         cte.enabled?"Idioma: "+cte.locale.status+" · Contexto: "+cte.contextHits+" · TextState: "+cte.textStates:"Etiquetas y diálogos nativos",
         "Textos listos: "+scanStats.ready+"/"+discovered.size+" · Fallos: "+scanStats.rejected,
         "Errores: "+state.errors+" · Avisos CTE: "+cte.errors,
         "DTextPicture: "+(pluginEnabled(/^DTextPicture$/i)?"activo":"no detectado")+" · Render: "+r24DTextStats.pictures+" · Traducidos: "+r24DTextStats.redraws,
         "Saltos nativos: "+r25FlowStats.breaks+" · MV: "+r25FlowStats.mv+" · MZ: "+r25FlowStats.mz,
-        "QA caché: "+diskStats.rejected+" · F10: cerrar"
+        questTxtStats.detected?questTxtLabel():"QA caché: "+diskStats.rejected+" · F10: cerrar"
     ].join("\n");
 }
 function cteHudToggle(){
@@ -8168,12 +8895,13 @@ function setupHud(){
             "RSP: "+r27RspStats.rendered+" repintados · "+r27RspStats.requested+" solicitudes · "+r27RspStats.skipped+" omitidos",
             "NPC: "+r28PartyTalkStats.rendered+" burbujas traducidas · "+r28PartyTalkStats.lines+" líneas detectadas",
             "QA: "+state.qualityRejected+"   Caché revisada: "+diskStats.rejected,
-            "Errores: "+state.errors+"   "+(scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
+            "Errores: "+state.errors+"   "+(solData?solLabel():scanStats.skipped?"Archivos omitidos por seguridad":scanStats.done?"Inventario terminado":"Inventario en curso"),
             cte.enabled?"CTE: "+cte.paired+" pares · "+cte.missing+" pendientes · "+cte.errors+" avisos":
             iavra.detected?(iavra.por?"JSONO externo: ":"JSON externo: ")+iavra.files+" archivos · "+iavra.strings+" textos · "+iavra.shown+" mostrados":
             tsv.detected?"TSV: "+tsv.rows+" · Om.: "+tsv.skippedRows+" · Mostr.: "+tsv.shown+" · Redib.: "+tsv.late:
             tableStats.root?"CSV: "+tableStats.rootFiles+"/"+tableStats.rootTotal+" · Om.: "+tableStats.rootSkipped+" · Opc.: "+csvUiStats.choices:
             (scriptProfile||enabledTextPicture())?"Textos especiales: "+scriptStats.shown+" · Inventario: "+authoredDisplay.size:
+            questTxtStats.detected?questTxtLabel():
             "Misiones: "+questStats.records+" · Redib.: "+lateStats.shown+" · NPC: "+ambientStats.shown+"/"+ambientStats.requested+" · C:"+String(ambientStats.factory||0)
         ];
         for(var i=0;i<lines.length;i++){
@@ -8215,7 +8943,7 @@ function setupHud(){
 try{
     // Keep F10 accessible even if detection or worker startup fails.
     state.phase="F10";try{hookCteHud();}catch(_){state.errors++;}setupHud();
-    state.phase="RUTA";initPaths();detectRootCsv();detectTsv();detectIavraLocalization();detectRemNative();detectCte();
+    state.phase="RUTA";initPaths();detectQuestTxt();detectRootCsv();detectTsv();detectIavraLocalization();detectRemNative();detectCte();
     try{hookCteHud();}catch(_){state.errors++;}
     // Load verified translations asynchronously before map boot; never
     // hold the game's event loop waiting for a cache or neural result.
@@ -8240,7 +8968,7 @@ try{
     state.phase="CONEXION";loadIavraCatalogs(function(){startFullScan();nextPrefetch();});startFullScan();refreshConnection();setInterval(function(){
         if(!state.connected||Date.now()-lastStatusProbe>=4500)refreshConnection();
         // Independent of title, menu, map or a closed F10 panel.
-        if(runtimeActivated)try{startFullScan();collectMapText();}catch(_){state.errors++;}
+        if(runtimeActivated)try{startFullScan();collectMapText();solCollectLive();}catch(_){state.errors++;}
         queueFlush();nextPrefetch();
         try{cteHudRefresh();}catch(_){state.errors++;}
     },750);
@@ -8257,6 +8985,11 @@ if(typeof window!=="undefined"&&window.__IA_TRADUCTORA_TEST_HOOKS__===true){
         has:function(source,text){return discovered.has(source+"\u0000"+text);},
         done:function(){return scanStats.done;},
         limited:function(){return scanStats.limited;},
+        soldata:function(){return {detected:solData,total:solStats.total,read:solStats.read,unavailable:solStats.unavailable,excluded:solStats.excluded,live:solStats.live,done:solStats.done};},
+        solCollectLive:solCollectLive,
+        questTxt:function(){return {detected:questTxtStats.detected,files:questTxtStats.files,total:questTxtStats.total,omitted:questTxtStats.omitted,lines:questTxtStats.lines,fields:questTxtStats.fields,ignored:questTxtStats.ignored,done:questTxtStats.done};},
+        questTxtProject:function(raw){return questTxtProject(raw,null,true);},
+        r42Stats:r42Stats,r42NoticePlan:r42NoticePlan,
         r22MessageBreak:r22MessageBreak,r22EnglishSource:r22EnglishSource,r22CommandValue:r22CommandValue,
         r24DTextProject:r24DTextProject,r24FragmentNoise:r24FragmentNoise,
         displaySource:displaySource,r25ClearlySpanish:r25ClearlySpanish,

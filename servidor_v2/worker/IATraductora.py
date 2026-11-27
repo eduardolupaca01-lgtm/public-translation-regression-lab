@@ -2,13 +2,16 @@
 """IA Traductora, motor neuronal independiente. Sólo 127.0.0.1, sin nube."""
 from __future__ import annotations
 import argparse, hashlib, json, os, secrets, sys, threading, time
-import re, sqlite3, unicodedata
+import configparser
+import re, sqlite3, unicodedata, stat
 from pathlib import Path
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCHEMA="ia-traductora-bridge-v1"
 MAX_TEXT=1800
+# Conservative signed 32-bit seek boundary, shared with Go and Rust.
+VXACE_MAX_ARCHIVE_BYTES=2*1024*1024*1024-1
 MODELS={"ja":"opus_ja_es","en":"opus_en_es"}
 CACHE_SCHEMA=2
 
@@ -446,6 +449,29 @@ def por_compressed_database(content: Path) -> bool:
     except (OSError,ValueError,UnicodeError,TypeError,RecursionError):
         return False
 
+def soldata_database(content:Path)->bool:
+    """Recognize the observed MV layout; never interpret the opaque bytes."""
+    js=content/"js"
+    data=content/"data"
+    try:
+        for folder in (content,js,js/"plugins",data):
+            if folder.is_symlink() or not folder.is_dir():
+                return False
+        for name in ("rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"):
+            file=js/name
+            if file.is_symlink() or not file.is_file() or not 0<file.stat().st_size<=8*1024*1024:
+                return False
+        for name in ("System","Actors","CommonEvents","MapInfos"):
+            file=data/(name+".soldata")
+            if file.is_symlink() or not file.is_file():
+                return False
+            size=file.stat().st_size
+            if not 16<=size<=32*1024*1024 or size%16:
+                return False
+        return True
+    except OSError:
+        return False
+
 def game_root(exe_root:Path)->tuple[Path,Path]:
     if exe_root.is_symlink():raise ValueError("IA_JUEGO_NO_VALIDO")
     root=exe_root.resolve(strict=True)
@@ -462,10 +488,13 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
         if not ordinary(js/"plugins.js"):continue
         plain=ordinary(folder/"data"/"System.json")
         if not plain:
-            if not mz:continue
-            if not por_compressed_database(folder):
-                if (folder/"data"/"System.jsono").exists():invalid_compressed=True
-                continue
+            if mv:
+                if not soldata_database(folder):continue
+            elif mz:
+                if not por_compressed_database(folder):
+                    if (folder/"data"/"System.jsono").exists():invalid_compressed=True
+                    continue
+            else:continue
         if mz:
             if any(not ordinary(js/n) for n in ("rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js")):
                 raise ValueError("IA_RPG_RUTAS_AMBIGUAS")
@@ -477,6 +506,87 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
         if invalid_compressed:raise ValueError("IA_RPG_MZ_COMPRIMIDO_NO_VALIDO")
         raise ValueError("IA_SOLAMENTE_RPG_MV_MZ")
     return root,layouts[0]
+
+def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
+    """Validate a VX Ace root without executing the game or extracting its archive."""
+    candidate=Path(exe_root)
+    if candidate.is_symlink():
+        raise ValueError("IA_VXACE_JUEGO_NO_VALIDO")
+    root=candidate.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("IA_VXACE_JUEGO_NO_VALIDO")
+
+    def ordinary(file,limit):
+        if file.is_symlink() or not file.is_file():
+            return False
+        try:
+            size=file.stat().st_size
+        except OSError:
+            return False
+        return 0<size<=limit
+
+    ini=root/"Game.ini"
+    game_exe=root/"Game.exe"
+    if not ordinary(ini,64*1024) or not ordinary(game_exe,64*1024*1024):
+        raise ValueError("IA_VXACE_RUNTIME_NO_VERIFICADO")
+    try:
+        parser=configparser.ConfigParser(interpolation=None,strict=True)
+        parser.optionxform=str.lower
+        raw=ini.read_bytes()
+        try:
+            decoded=raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            decoded=raw.decode("cp932",errors="replace")
+        parser.read_string(decoded)
+        sections=[name for name in parser.sections() if name.casefold()=="game"]
+        if len(sections)!=1:
+            raise ValueError("IA_VXACE_GAME_INI_INVALIDO")
+        library=parser.get(sections[0],"Library",fallback="")
+        scripts=parser.get(sections[0],"Scripts",fallback="Data\\Scripts.rvdata2")
+    except (OSError,UnicodeError,configparser.Error) as exc:
+        raise ValueError("IA_VXACE_GAME_INI_INVALIDO") from exc
+    library=library.replace("\\","/").removeprefix("./")
+    parts=library.split("/")
+    if (len(parts) not in (1,2) or parts[-1].casefold() not in ("rgss300.dll","rgss301.dll")
+            or (len(parts)==2 and parts[0].casefold()!="system")):
+        raise ValueError("IA_VXACE_GAME_INI_INVALIDO")
+    if len(parts)==2 and ((root/parts[0]).is_symlink() or not (root/parts[0]).is_dir()):
+        raise ValueError("IA_VXACE_RUNTIME_NO_VERIFICADO")
+    if not ordinary(root.joinpath(*parts),64*1024*1024):
+        raise ValueError("IA_VXACE_RUNTIME_NO_VERIFICADO")
+    for name in ("Game.rgssad","Game.rgss2a"):
+        other=root/name
+        if other.is_symlink() or other.exists():
+            raise ValueError("IA_VXACE_ARCHIVO_DE_OTRO_MOTOR")
+    normalized=scripts.replace("\\","/").removeprefix("./").casefold()
+    if normalized!="data/scripts.rvdata2":
+        raise ValueError("IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO")
+
+    archive=root/"Game.rgss3a"
+    if archive.is_symlink() or archive.exists():
+        if archive.is_symlink() or not ordinary(archive,VXACE_MAX_ARCHIVE_BYTES):
+            raise ValueError("IA_VXACE_RGSS3A_INVALIDO")
+        with archive.open("rb") as stream:
+            header=stream.read(8)
+        if header!=b"RGSSAD\x00\x03":
+            raise ValueError("IA_VXACE_RGSS3A_INVALIDO")
+        # The native archive helper performs the authoritative entry-table,
+        # path and Scripts.rvdata2 validation before installation.
+        return root,root
+
+    data=root/"Data"
+    if data.is_symlink() or not data.is_dir():
+        raise ValueError("IA_VXACE_DATA_NO_DISPONIBLE")
+    for name in ("Scripts.rvdata2","System.rvdata2","MapInfos.rvdata2"):
+        file=data/name
+        limit=512*1024*1024 if name=="Scripts.rvdata2" else 128*1024*1024
+        if not ordinary(file,limit):
+            raise ValueError("IA_VXACE_DATA_INCOMPLETA")
+        with file.open("rb") as stream:
+            if stream.read(2)!=b"\x04\x08":
+                raise ValueError("IA_VXACE_MARSHAL_INVALIDO")
+    return root,root
+
 
 def verified_halva_runtime(game:Path, runtime:Path):
     # Only a declared, owned installation; the launcher may provide an
@@ -511,11 +621,39 @@ def verified_halva_runtime(game:Path, runtime:Path):
     return root,content
 
 class Service:
-    def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None):
+    def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None,web_mode=False):
         self.halva=halva_content is not None
-        self.game,self.content=verified_halva_runtime(game,halva_content) if self.halva else game_root(game)
+        self.vxace=False
+        self.web=web_mode
+        if web_mode:
+            if self.halva:raise ValueError("IA_WEB_ARGUMENTOS_INVALIDOS")
+            from web_runtime import web_profile
+            self.game,_,_=web_profile(game)
+            self.content=self.game
+        elif self.halva:
+            self.game,self.content=verified_halva_runtime(game,halva_content)
+        else:
+            try:
+                self.game,self.content=game_root(game)
+            except ValueError as original:
+                # An ambiguous or damaged JS engine is not a VX Ace fallback.
+                if str(original)!="IA_SOLAMENTE_RPG_MV_MZ":
+                    raise
+                try:
+                    self.game,self.content=vxace_game_root(game)
+                    self.vxace=True
+                except (ValueError,OSError) as vxace_error:
+                    candidate=Path(game)
+                    if ((candidate/"Game.ini").is_file() and
+                        any((candidate/name).exists() for name in
+                            ("RGSS300.dll","RGSS301.dll","System/RGSS300.dll",
+                             "System/RGSS301.dll","Game.rgss3a","Data/Scripts.rvdata2"))):
+                        raise vxace_error
+                    raise original
         engine=engine.resolve(strict=True)
         if engine.is_symlink() or not engine.is_relative_to(self.game):
+            raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
+        if web_mode and engine!=self.game/"IA Traductora"/".local"/"Rpg"/"engine":
             raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
         self.engine=engine
         self.neural=neural if neural is not None else NeuralOPUS(engine)
@@ -614,6 +752,9 @@ def make_handler(service:Service):
     class Handler(BaseHTTPRequestHandler):
         server_version="IATraductora/1"
         sys_version=""
+        # VX Ace drains its HTTP threads before closing the persistent memory.
+        # Bound stalled local clients so shutdown cannot wait forever for input.
+        timeout=10 if getattr(service,"vxace",False) else None
         def log_message(self,*_):pass
         def send(self,status,obj):
             body=json.dumps(obj,ensure_ascii=False).encode("utf8")
@@ -658,7 +799,7 @@ def make_handler(service:Service):
     return Handler
 
 def publish(service,port):
-    folder=service.game/"IA Traductora"/".local"/"Rpg" if getattr(service,"halva",False) else service.content/"data"/"IATraductora"
+    folder=service.game/"IA Traductora"/".local"/"Rpg" if (getattr(service,"halva",False) or getattr(service,"vxace",False)) else service.content/"data"/"IATraductora"
     folder.mkdir(exist_ok=True,mode=0o700)
     if folder.is_symlink() or not folder.resolve().is_relative_to(service.game):
         raise RuntimeError("IA_PUENTE_INSEGURO")
@@ -675,6 +816,191 @@ def publish(service,port):
     finally:
         if tmp.exists():tmp.unlink()
     return dest
+
+
+# RGSS3 embeds Ruby 1.9.2 without the desktop Ruby socket/JSON libraries.
+# Its core-only client uses a bounded, game-local spool. The same Service
+# (quality gate, inference lock, models and SQLite memory) answers HTTP and IPC.
+VXACE_IPC_SCHEMA = "IA-VXACE-SESSION-1"
+VXACE_IPC_REQUEST = "IA-VXACE-REQUEST-1"
+VXACE_IPC_RESPONSE = "IA-VXACE-RESPONSE-1"
+VXACE_IPC_MAX = 96 * 1024
+_VXACE_ID = re.compile(r"[0-9a-f]{16}\Z")
+_VXACE_TOKEN = re.compile(r"[0-9a-f]{64}\Z")
+
+def _ipc_regular(path, limit):
+    try:
+        info = path.lstat()
+        return (stat.S_ISREG(info.st_mode)
+                and not (getattr(info, "st_file_attributes", 0) & 0x400)
+                and 0 < info.st_size <= limit)
+    except OSError:
+        return False
+
+def _ipc_directory(path, root):
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode)
+            or getattr(info, "st_file_attributes", 0) & 0x400
+            or not path.resolve(strict=True).is_relative_to(root)):
+        raise RuntimeError("IA_VXACE_IPC_RUTA_INVALIDA")
+    return path
+
+def _ipc_atomic(path, data):
+    tmp = path.parent / (".ia-" + secrets.token_hex(16) + ".tmp")
+    try:
+        with tmp.open("xb") as stream:
+            stream.write(data)
+            stream.flush()
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+class VXAceFileBridge:
+    """One authenticated session per worker; no arbitrary paths or commands."""
+    def __init__(self, service, parent_pid):
+        if not service.vxace or parent_pid <= 0 or not _VXACE_TOKEN.fullmatch(service.token):
+            raise ValueError("IA_VXACE_IPC_SESION_INVALIDA")
+        self.service = service
+        self.parent_pid = parent_pid
+        self.stop = threading.Event()
+        root = service.game
+        folder = root
+        for part in ("IA Traductora", ".local", "Rpg"):
+            folder = _ipc_directory(folder / part, root)
+        self.descriptor = folder / "vxace-session.txt"
+        self.lock_path = folder / "vxace-worker.lock"
+        if self.lock_path.exists() and not _ipc_regular(self.lock_path, 1):
+            raise RuntimeError("IA_VXACE_IPC_LOCK_INVALIDO")
+        if self.lock_path.is_symlink():
+            raise RuntimeError("IA_VXACE_IPC_LOCK_INVALIDO")
+        self.lock = self.lock_path.open("a+b")
+        self.thread = None
+        self.session = None
+        try:
+            self.lock.seek(0, 2)
+            if self.lock.tell() == 0:
+                self.lock.write(b"\0")
+                self.lock.flush()
+            self.lock.seek(0)
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(self.lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            base = folder / "vxace-ipc"
+            base.mkdir(exist_ok=True)
+            _ipc_directory(base, root)
+            session = base / service.token
+            session.mkdir()
+            self.session = _ipc_directory(session, root)
+            if self.descriptor.is_symlink() or (
+                    self.descriptor.exists() and not _ipc_regular(self.descriptor, 512)):
+                raise RuntimeError("IA_VXACE_IPC_DESCRIPTOR_INVALIDO")
+            descriptor = ("%s\n%s\n%d\n%d\n" % (
+                VXACE_IPC_SCHEMA, service.token, os.getpid(), parent_pid)).encode("ascii")
+            _ipc_atomic(self.descriptor, descriptor)
+        except Exception:
+            self.lock.close()
+            if self.session is not None:
+                try: self.session.rmdir()
+                except OSError: pass
+            raise
+
+    def process_once(self):
+        # Session names are minted by the worker, never taken from a request.
+        _ipc_directory(self.session, self.service.game)
+        handled = 0
+        with os.scandir(self.session) as entries:
+            for entry in entries:
+                if handled >= 8 or self.stop.is_set():
+                    break
+                if not entry.name.endswith(".req"):
+                    continue
+                request_id = entry.name[:-4]
+                if not _VXACE_ID.fullmatch(request_id):
+                    continue
+                request = self.session / entry.name
+                response = self.session / (request_id + ".res")
+                if not _ipc_regular(request, VXACE_IPC_MAX) or response.exists() or response.is_symlink():
+                    continue
+                handled += 1
+                try:
+                    with request.open("rb") as stream:
+                        raw = stream.read(VXACE_IPC_MAX + 1)
+                    request.unlink()
+                    if len(raw) > VXACE_IPC_MAX:
+                        continue
+                    lines = raw.decode("ascii").splitlines()
+                    if (not 4 <= len(lines) <= 9 or lines[0] != VXACE_IPC_REQUEST
+                            or not secrets.compare_digest(lines[1], self.service.token)
+                            or lines[2] not in MODELS):
+                        continue
+                    lang = lines[2]
+                    texts = []
+                    for item in lines[3:]:
+                        if not re.fullmatch(r"(?:[0-9a-f]{2})+", item):
+                            raise ValueError("IA_VXACE_IPC_TEXTO_INVALIDO")
+                        texts.append(bytes.fromhex(item).decode("utf-8"))
+                    if any(not 0 < len(text) <= MAX_TEXT for text in texts):
+                        continue
+                    try:
+                        result = self.service.translate_batch(lang, texts)
+                        values = [
+                            row["translated"].encode("utf-8").hex()
+                            if isinstance(row.get("translated"), str) else "-"
+                            for row in result
+                        ]
+                    except Exception:
+                        values = ["-"] * len(texts)
+                    answer = ("\n".join([VXACE_IPC_RESPONSE, self.service.token,
+                                          request_id] + values) + "\n").encode("ascii")
+                    if len(answer) <= VXACE_IPC_MAX and not self.stop.is_set():
+                        _ipc_atomic(response, answer)
+                except (OSError, UnicodeError, ValueError):
+                    continue
+        return handled
+
+    def start(self):
+        def serve():
+            while not self.stop.is_set():
+                try:
+                    self.process_once()
+                except (OSError, RuntimeError):
+                    return
+                self.stop.wait(0.04)
+        self.thread = threading.Thread(target=serve, name="IA-VXACE-IPC", daemon=True)
+        self.thread.start()
+
+    def stop_serving(self):
+        self.stop.set()
+        if self.thread is not None and self.thread.ident is not None:
+            # No more IPC requests can enter the shared translation memory.
+            self.thread.join()
+
+    def close(self):
+        self.stop_serving()
+        try:
+            if _ipc_regular(self.descriptor, 512):
+                fields = self.descriptor.read_text("ascii").splitlines()
+                if len(fields) == 4 and fields[1] == self.service.token:
+                    self.descriptor.unlink()
+        except (OSError, ValueError):
+            pass
+        try:
+            _ipc_directory(self.session, self.service.game)
+            # Only files with our strict request/response names; never recurse.
+            for entry in self.session.iterdir():
+                if (entry.suffix in (".req", ".res") and _VXACE_ID.fullmatch(entry.stem)
+                        and _ipc_regular(entry, VXACE_IPC_MAX)):
+                    entry.unlink()
+            self.session.rmdir()
+        except (OSError, RuntimeError):
+            pass
+        finally:
+            self.lock.close()
+
 
 def monitor_game_lifetime(http, parent_pid):
     """Follow the real Windows process HANDLE so PID reuse is harmless."""
@@ -699,19 +1025,44 @@ def monitor_game_lifetime(http, parent_pid):
             kernel.CloseHandle(handle)
     threading.Thread(target=watch, daemon=True, name="IA-Game-Lifetime").start()
 
-def run(service,parent_pid=0):
+def run(service,parent_pid=0,diagnostic_file=None):
     http=ThreadingHTTPServer(("127.0.0.1",0),make_handler(service))
-    dest=publish(service,http.server_port)
+    if service.vxace:
+        # ThreadingHTTPServer normally abandons daemon request handlers.
+        # Keep them joinable here, so a final translation cannot race SQLite close.
+        http.daemon_threads=False
+        http.block_on_close=True
+    dest=None
+    ipc=None
     try:
+        if service.vxace and parent_pid > 0:
+            ipc=VXAceFileBridge(service,parent_pid)
+            ipc.start()
+        dest=publish(service,http.server_port)
         monitor_game_lifetime(http,parent_pid)
+        if service.vxace and ipc is not None:
+            write_startup_code(diagnostic_file,"IA_VXACE_SESSION_READY")
         http.serve_forever(poll_interval=0.5)
     finally:
-        http.server_close()
-        service.close()
+        # Drain both transports, close SQLite, then withdraw session ownership.
+        # A removed VX Ace descriptor must not announce completion while the
+        # persistent database is still open. Keep the IPC lock until cleanup.
         try:
-            state=json.loads(dest.read_text("utf8"))
-            if state.get("token")==service.token:dest.unlink()
-        except (OSError,ValueError):pass
+            try:
+                if ipc is not None:ipc.stop_serving()
+            finally:
+                try:
+                    http.server_close()
+                finally:
+                    service.close()
+        finally:
+            try:
+                if dest is not None:
+                    state=json.loads(dest.read_text("utf8"))
+                    if state.get("token")==service.token:dest.unlink()
+            except (OSError,ValueError):pass
+            finally:
+                if ipc is not None:ipc.close()
 
 def safe_startup_code(error):
     # Neither a raw exception, a model path nor game dialogue may leave
@@ -719,10 +1070,18 @@ def safe_startup_code(error):
     raw = str(error).lower()
     # Enumerate safe startup categories; never expose a raw path or game text.
     allowed={"IA_JUEGO_NO_VALIDO","IA_GAME_ROOT_FALTANTE","IA_SOLAMENTE_RPG_MV_MZ",
+             "IA_VXACE_JUEGO_NO_VALIDO","IA_VXACE_GAME_INI_INVALIDO","IA_VXACE_RUNTIME_NO_VERIFICADO",
+             "IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO","IA_VXACE_RGSS3A_INVALIDO",
+             "IA_VXACE_DATA_NO_DISPONIBLE","IA_VXACE_DATA_INCOMPLETA",
+             "IA_VXACE_MARSHAL_INVALIDO","IA_VXACE_ARCHIVO_DE_OTRO_MOTOR",
+             "IA_VXACE_IPC_SESION_INVALIDA","IA_VXACE_IPC_RUTA_INVALIDA",
+             "IA_VXACE_IPC_LOCK_INVALIDO","IA_VXACE_IPC_DESCRIPTOR_INVALIDO",
              "IA_RPG_RUTAS_AMBIGUAS","IA_RPG_MZ_COMPRIMIDO_NO_VALIDO",
              "IA_MOTOR_FUERA_DEL_JUEGO","IA_MODELO_INCOMPLETO",
              "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO",
-             "IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA","IA_HALVA_INSTALACION_NO_VERIFICADA"}
+             "IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA","IA_HALVA_INSTALACION_NO_VERIFICADA",
+             "IA_WEB_ARGUMENTOS_INVALIDOS","IA_WEB_RUTA_INVALIDA","IA_WEB_INDEX_INVALIDO",
+             "IA_WEB_MODULO_NO_ADMITIDO","IA_WEB_RECURSOS_INCOMPLETOS","IA_WEB_PUERTO_OCUPADO"}
     if str(error) in allowed:return str(error)
     if isinstance(error,sqlite3.Error):return "IA_CACHE_PERSISTENTE_INACCESIBLE"
     if "version" in raw and ("model" in raw or "binary" in raw):
@@ -759,8 +1118,9 @@ def write_startup_code(filename, code):
         file = Path(filename)
         if file.is_symlink() or not file.parent.is_dir():
             return
-        file.write_text(json.dumps({"schema": "ia-traductora-startup-v1", "code": code})+"\n",
-                        encoding="utf8")
+        if file.exists() and not _ipc_regular(file,1024):
+            return
+        _ipc_atomic(file,(json.dumps({"schema": "ia-traductora-startup-v1", "code": code})+"\n").encode("utf8"))
     except OSError:
         pass
 
@@ -768,6 +1128,9 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument("--game-root",type=Path)
     p.add_argument("--halva-content",type=Path)
+    p.add_argument("--web-root",type=Path)
+    p.add_argument("--web-port",type=int,default=8765)
+    p.add_argument("--web-no-browser",action="store_true")
     p.add_argument("--parent-pid",type=int,default=0)
     p.add_argument("--check-models",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
@@ -780,12 +1143,21 @@ def main():
             neural.check_inference()
             write_startup_code(args.diagnostic_file,"IA_MODELOS_REALES_CT2_LISTOS")
             return
+        if args.web_root is not None:
+            if args.game_root is not None or args.halva_content is not None or not 1024<=args.web_port<=65535:
+                raise ValueError("IA_WEB_ARGUMENTOS_INVALIDOS")
+            from web_runtime import run_web
+            write_startup_code(args.diagnostic_file,"IA_WEB_VALIDANDO")
+            service=Service(args.web_root,engine,web_mode=True)
+            run_web(service,args.web_port,args.web_no_browser,args.parent_pid,args.diagnostic_file,
+                    make_handler,monitor_game_lifetime,write_startup_code)
+            return
         if args.game_root is None:
             raise ValueError("IA_GAME_ROOT_FALTANTE")
         write_startup_code(args.diagnostic_file,"IA_VALIDANDO_ESTRUCTURA_RPG")
         service=Service(args.game_root,engine,halva_content=args.halva_content)
         write_startup_code(args.diagnostic_file,"IA_MODELOS_CARGADOS_SERVICIO_INICIANDO")
-        run(service,args.parent_pid)
+        run(service,args.parent_pid,args.diagnostic_file)
     except Exception as exc:
         write_startup_code(args.diagnostic_file,safe_startup_code(exc))
         raise SystemExit(1)

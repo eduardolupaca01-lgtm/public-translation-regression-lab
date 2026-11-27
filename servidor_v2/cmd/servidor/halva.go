@@ -134,6 +134,10 @@ func halvaInspect(root string)(string,*plainHalva,error){
 }
 
 func detectInstallTarget(gameEXE string)(string,error){
+ if _,matched,vxErr:=detectVXAce(gameEXE);matched{
+  if vxErr!=nil{return "",vxErr}
+  return "VX Ace",nil
+ }
  root,content,e:=detectGame(gameEXE)
  if e==nil{return engineAt(content),nil}
  if packed,ok:=halvaRootFromDetection(gameEXE,e);ok{

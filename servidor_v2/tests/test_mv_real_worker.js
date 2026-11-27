@@ -6,6 +6,7 @@ const path=require("node:path");
 const vm=require("node:vm");
 const assert=require("node:assert/strict");
 const cp=require("node:child_process");
+const r42Notice=require("./r42_notice_contract.js");
 
 const game=path.resolve(process.argv[2]||"");
 const wrapped=path.join(game,"www");
@@ -32,7 +33,7 @@ Window_NameBox.prototype.constructor=Window_NameBox;
 Window_NameBox.prototype.setName=function(v){this._name=v;this.refresh();};
 Window_NameBox.prototype.refresh=function(){this.drawText(this._name);};
 function Window_Message(){this.starts=0;}
-Window_Message.prototype.startMessage=function(){this.starts++;};
+Window_Message.prototype.startMessage=function(){this.starts++;this.paintedText=gameMessage.allText();};
 Window_Message.prototype.updateWait=function(){return false;};
 Window_Message.prototype.canStart=function(){return this.starts===0&&gameMessage.hasText();};
 Window_Message.prototype.update=function(){
@@ -253,7 +254,41 @@ async function runCteMZ(){
     assert.equal(scene._iaPanel.visible,false);
     console.log("SERVIDOR_V2_R20_REAL_OPUS_CTE_F10_LARGE_INVENTORY_DIALOG_CHOICE_QUEST_PASS");
 }
+async function runSolData(){
+    const sol=require("./soldata_fixture.js"),data=path.join(content,"data"),calls=[];
+    assert.ok(!isMZ&&!fs.existsSync(path.join(data,"System.json")),"IA_SOL_EXPECT_OPAQUE_MV");
+    const originals=new Map();
+    for(const n of fs.readdirSync(data).filter(n=>n.endsWith(".soldata")||n==="message_data.json"))
+        originals.set(n,fs.readFileSync(path.join(data,n)));
+    ctx.XMLHttpRequest=sol.loader(calls,new Set());
+    ctx.window.__IA_TRADUCTORA_TEST_HOOKS__=true;
+    vm.runInNewContext(source,ctx,{filename:"IATraductora.js"});
+    const scene=new Scene_Map();ctx.SceneManager._scene=scene;scene.createAllWindows();
+    const qa=ctx.window.__IA_TRADUCTORA_TEST__;
+    await until(()=>{scene.update();return qa.done();},30000,"IA_SOL_INVENTORY_TIMEOUT");
+    assert.ok(qa.soldata().detected&&qa.soldata().read===qa.soldata().total&&qa.soldata().unavailable===0,"IA_SOL_INVENTORY_INCOMPLETE");
+    assert.ok(calls.includes("Map369.json")&&calls.includes("Quests.json")&&calls.includes("Achievements.json"),"IA_SOL_REMOTE_MAP_OR_TYPED_FIELDS_MISSING");
+    const win=new Window_Base();win.initialize(0,0,600,200);
+    // Native window draw uses the same OPUS/cache as dialogue. Require
+    // actual Spanish from the installed frozen worker, not the loader shim.
+    await until(()=>{
+        scene.update();win.drawText("Please open the window.",0,0,600,"left");
+        return /ventana/i.test(win.drawn[win.drawn.length-1]);
+    },120000,"IA_SOL_REAL_QUEST_TIMEOUT");
+    await until(()=>{
+        win.drawText("Thank you for your help.",0,0,600,"left");
+        return /gracias|ayuda|agradez/i.test(win.drawn[win.drawn.length-1])&&win.drawn[win.drawn.length-1]!=="Thank you for your help.";
+    },120000,"IA_SOL_REAL_PHONE_TIMEOUT");
+    await until(()=>{
+        gameMessage._texts=["橋を渡ってください。"];new Window_Message().startMessage();
+        return /puente/i.test(gameMessage.allText())&&!japanese(gameMessage.allText());
+    },120000,"IA_SOL_REAL_UNVISITED_MAP_TIMEOUT");
+    for(const [n,before] of originals)assert.deepEqual(fs.readFileSync(path.join(data,n)),before,"IA_SOL_ORIGINAL_CHANGED");
+    assert.ok(!fs.existsSync(path.join(data,"System.json")),"IA_SOL_PLAINTEXT_CREATED");
+    console.log("IA_SOLDATA_SIMULATED_NATIVE_LOADER_REAL_OPUS_QUEST_PHONE_MAP_PASS");
+}
 async function run(){
+    if(process.argv[3]==="--soldata")return runSolData();
     if(process.argv[3]==="--cte")return runCteMZ();
     if(process.argv[3]==="--por")return runCompressedMZ();
     // This is the CI-created synthetic acceptance game, not a user's game.
@@ -265,6 +300,9 @@ async function run(){
         ["$text4","$v[5] = 9","","if(s[10]) Internal event condition","","",""]];
     const csvRaw=cells.map(row=>row.map(v=>'"'+v.replace(/"/g,'""')+'"').join(",")).join("\r\n")+"\r\n";
     fs.mkdirSync(root,{recursive:true});fs.writeFileSync(sheet,csvRaw,"utf8");
+    const questDir=path.join(content,"quest"),questFile=path.join(questDir,"fixture.txt");
+    const questRaw="Title: Find the missing key.\n- Please open the window.\n";
+    fs.mkdirSync(questDir,{recursive:true});fs.writeFileSync(questFile,questRaw,"utf8");
     fs.writeFileSync(path.join(content,"data","System.json"),JSON.stringify({locale:"en_US",startMapId:1}),"utf8");
     vm.runInNewContext(source,ctx,{filename:"IATraductora.js"});
     assert.equal(ctx.Input.keyMapper[121],"ia-traductora","IA_F10_MAPPER_MISSING");
@@ -294,6 +332,65 @@ async function run(){
             return m&&Number(m[2])>=3&&m[1]===m[2];
         });
     },120000,"IA_EXTERNAL_CSV_PREFETCH_TIMEOUT");
+    const journal="\\c[2]Affection: \\c[0]12|Progress: 0\nStage 1(2): Find the missing key.\n- \\c[6]Please open the window.\\I[17]\\c[0] (6 AM, 20 AP)";
+    const questMessage=new Window_Message();
+    gameMessage._texts=journal.split("\n");
+    const beforeQuest=JSON.stringify(gameMessage._texts);
+    questMessage.startMessage();
+    assert.ok(/Afinidad/.test(questMessage.paintedText)&&/Progreso/.test(questMessage.paintedText)&&/Etapa 1\(2\)/.test(questMessage.paintedText),"IA_QUEST_TXT_HEADER_FAIL");
+    assert.ok(/llave/i.test(questMessage.paintedText)&&/ventana/i.test(questMessage.paintedText),"IA_QUEST_TXT_REAL_OPUS_FAIL");
+    assert.ok(questMessage.paintedText.includes("\\c[6]")&&questMessage.paintedText.includes("\\I[17]\\c[0] (6 AM, 20 AP)"),"IA_QUEST_TXT_CONTROLS_FAIL");
+    assert.equal(JSON.stringify(gameMessage._texts),beforeQuest,"IA_QUEST_TXT_STATE_CHANGED");
+    assert.equal(fs.readFileSync(questFile,"utf8"),questRaw,"IA_QUEST_TXT_SOURCE_CHANGED");
+    console.log("IA_R41_REAL_OPUS_QUEST_TXT_NATIVE_JOURNAL_PASS "+(isMZ?"MZ":"MV"));
+    // Fresh native quote/hotkey route. The worker must translate the
+    // inner prose, while the original formatting and _texts survive.
+    const formattedNotice=r42Notice.RAW;
+    const beforeNoticeWindows=scene.windows.length;
+    let noticeResult=r42Notice.inspect("",formattedNotice);
+    function noticeCacheDiagnostic(){
+        // This is a disposable synthetic acceptance game. Read only its
+        // known private journal and report booleans, never cached contents.
+        try{
+            const file=path.join(game,"IA Traductora",".local","Rpg","cache","translations-ja-en-es-v2.jsonl");
+            if(!fs.existsSync(file))return {journal:false,hit:false};
+            if(fs.statSync(file).size>4*1024*1024)return {journal:true,hit:false,bounded:false};
+            let found=null;
+            for(const line of fs.readFileSync(file,"utf8").split(/\r?\n/)){
+                if(!line)continue;
+                try{
+                    const row=JSON.parse(line);
+                    if(row.source==="en"&&row.original===r42Notice.BODY&&typeof row.translated==="string")found=row.translated;
+                }catch(_){}
+            }
+            return {journal:true,hit:found!==null,
+                semantic:found!==null&&r42Notice.inspect('※"'+found+'" 【M】',formattedNotice).semantic,
+                legacyClose:found!==null&&/cerr/i.test(found)};
+        }catch(_){return {journal:false,hit:false,readError:true};}
+    }
+    // Keep the existing readiness budget. Stop waiting once the native
+    // renderer has actually changed the sentence; evaluate semantics and
+    // exact envelope separately instead of disguising a failed predicate
+    // as a connection timeout.
+    try{
+        await until(()=>{
+            gameMessage._texts=[formattedNotice];
+            const w=new Window_Message();w.startMessage();
+            noticeResult=r42Notice.inspect(w.paintedText,gameMessage._texts[0]);
+            assert.equal(gameMessage._texts[0],formattedNotice,"IA_R42_NOTICE_NATIVE_SOURCE_CHANGED");
+            assert.equal(w.starts,1,"IA_R42_NOTICE_NATIVE_RESTARTED");
+            assert.equal(scene.windows.length,beforeNoticeWindows,"IA_R42_NOTICE_EXTRA_WINDOW");
+            return typeof w.paintedText==="string"&&w.paintedText!==formattedNotice;
+        },120000,"IA_R42_REAL_OPUS_NOTICE_UNCHANGED_TIMEOUT");
+    }catch(error){
+        console.log("IA_R42_NOTICE_CHECK "+JSON.stringify(noticeResult));
+        console.log("IA_R42_NOTICE_CACHE "+JSON.stringify(noticeCacheDiagnostic()));throw error;
+    }
+    console.log("IA_R42_NOTICE_CHECK "+JSON.stringify(noticeResult));
+    assert.ok(noticeResult.envelope,"IA_R42_NOTICE_NATIVE_FORMAT_CHANGED");
+    assert.ok(noticeResult.semantic,"IA_R42_NOTICE_REAL_OPUS_SEMANTIC_FAIL");
+    assert.ok(noticeResult.ok,"IA_R42_NOTICE_CONTRACT_FAIL");
+    console.log("IA_R42_REAL_OPUS_NOTICE_QUOTES_HOTKEY_PASS "+(isMZ?"MZ":"MV"));
     const preloaded=new Window_Message();
     gameMessage._texts=[csvMessage];preloaded.startMessage();
     assert.equal(preloaded.starts,1,"IA_EXTERNAL_CSV_FIRST_PAINT_RESTARTED");

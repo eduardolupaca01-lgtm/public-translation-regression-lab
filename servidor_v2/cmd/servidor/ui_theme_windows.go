@@ -100,7 +100,7 @@ func iaThemeDestroy(){
 }
 func iaApplyControlFont(window uintptr,klass string,id int,title string){
     var font=iaThemeFontNormal
-    if id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
+    if id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
         font=iaThemeFontButton
     }
     if klass=="STATIC"&&font!=0{
@@ -169,18 +169,19 @@ func iaDrawButton(param uintptr)bool{
     switch id{
     case 300: text="01"
     case 301: text="RPG"
-    case 302: text="03"
+    case 302: text="WEB"
     case 303: text="04"
     case 304: text="05"
     case 305: text="+"
     case iaCmdBrowse: text="EXE"
-    case iaCmdInstall: text="2. INSTALAR TRADUCTOR AUTOMÁTICO"
+    case iaCmdInstall: text="2. INSTALAR TRADUCTOR"
+    case iaCmdClone: text="CREAR COPIA VX ACE"
     case iaCmdClose: text="Cerrar"
     case iaCmdCopy: text="Copiar diagnóstico"
     case iaCmdRecover: text="Recuperar inicio RPG"
     default: return false
     }
-    if id==iaCmdInstall||id==iaCmdBrowse||id==301{
+    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdBrowse||id==301||id==302{
         background=iaRGB(0,96,225)
     }else if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{
         background=iaRGB(221,230,244)

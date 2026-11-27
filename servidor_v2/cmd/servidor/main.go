@@ -25,7 +25,9 @@ const (
  packageMagic="SERVIDOR2ZIPSHA1" // exactamente 16 bytes
  brandFolder="IA Traductora"
  pluginName="IATraductora"
- installerBuildID="RPG-MVMZ-R30-20261126"
+ // The JS payload now includes the read-only SOLData runtime adapter.
+ installerBuildID="RPG-MVMZ-R42-20261127"
+ packageBuildID="RPG-MVMZ-VXACE-WEB-R42-20261127"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -36,6 +38,10 @@ type ownerManifest struct{
  Schema string `json:"schema"`
  WorkerSHA string `json:"worker_sha256"`
  PluginSHA string `json:"plugin_sha256"`
+ Product string `json:"product,omitempty"`
+ VXACEHelperSHA string `json:"vxace_helper_sha256,omitempty"`
+ VXACEPluginSHA string `json:"vxace_plugin_sha256,omitempty"`
+ VXACEPluginBuild string `json:"vxace_plugin_build,omitempty"`
 }
 type installReceipt struct{
  Schema string `json:"schema"`
@@ -95,6 +101,21 @@ func readPackage(filename string)(*packageReader,error){
    "models/opus_en_es/target.spm"}{
   if files[name]==nil{return nil,errors.New("IA_MODELOS_NO_INCLUIDOS")}
  }
+ // VX Ace support is optional for old MV/MZ packages, but the helper and
+ // Ruby runtime must arrive together; never accept a half-packaged adapter.
+ helperPresent:=files["vxace-helper.exe"]!=nil
+ pluginPresent:=files["vxace/IATraductoraVXACE.rb"]!=nil
+ if helperPresent!=pluginPresent{return nil,errors.New("IA_VXACE_PAQUETE_INCOMPLETO")}
+ if helperPresent{
+  if len(manifest.Files["vxace-helper.exe"])!=64||
+     len(manifest.Files["vxace/IATraductoraVXACE.rb"])!=64{
+   return nil,errors.New("IA_VXACE_MANIFIESTO_INVALIDO")
+  }
+ }
+ // Keep old packages readable; the optional desktop host is all-or-nothing.
+ hostCount:=0
+ for _,name:=range webHostFiles{if files["webhost/"+name]!=nil{hostCount++}}
+ if hostCount!=0&&hostCount!=len(webHostFiles){return nil,errors.New("IA_WEB_HOST_PAQUETE_INCOMPLETO")}
  good=true
  return &packageReader{f:f,archive:zr,files:files,manifest:manifest},nil
 }
@@ -138,6 +159,31 @@ func porCompressedDatabase(content string) bool {
  for _,c:=range body{if !((c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='+'||c=='/'){return false}}
  return true
 }
+// SOLData is an observed MV deployment profile, not proof that an
+// arbitrary binary file is decryptable. The game owns its loader.
+// Require the complete MV core, normal directories and four consistent
+// opaque database markers. No decoder, key, extraction or rename.
+func soldataDatabase(content string) bool {
+ js:=filepath.Join(content,"js")
+ data:=filepath.Join(content,"data")
+ for _,dir:=range []string{content,js,filepath.Join(js,"plugins"),data}{
+  st,err:=os.Lstat(dir)
+  if err!=nil||!st.IsDir()||st.Mode()&os.ModeSymlink!=0{return false}
+ }
+ for _,n:=range []string{"rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"}{
+  f:=filepath.Join(js,n)
+  if !ordinary(f){return false}
+  st,err:=os.Stat(f)
+  if err!=nil||st.Size()<=0||st.Size()>8*1024*1024{return false}
+ }
+ for _,n:=range []string{"System","Actors","CommonEvents","MapInfos"}{
+  f:=filepath.Join(data,n+".soldata")
+  if !ordinary(f){return false}
+  st,err:=os.Stat(f)
+  if err!=nil||st.Size()<16||st.Size()>32*1024*1024||st.Size()%16!=0{return false}
+ }
+ return true
+}
 // Detect deployed engines by original file markers, without running game code.
 func engineAt(content string) string {
  js:=filepath.Join(content,"js")
@@ -146,7 +192,7 @@ func engineAt(content string) string {
  if mv&&mz{return "AMBIGUOUS"}
  if !ordinary(filepath.Join(js,"plugins.js")){return ""}
  plain:=ordinary(filepath.Join(content,"data","System.json"))
- if !plain&&!(mz&&porCompressedDatabase(content)){return ""}
+ if !plain&&!(mz&&porCompressedDatabase(content))&&!(mv&&soldataDatabase(content)){return ""}
  if mz {
   for _,n:=range []string{"rmmz_managers.js","rmmz_objects.js","rmmz_scenes.js","rmmz_windows.js"}{
    if !ordinary(filepath.Join(js,n)){return "AMBIGUOUS"}
@@ -267,6 +313,10 @@ func prepareSidecar(game string,pkg *packageReader)(string,error){
  return iaPrepareAndPublishSidecar(game,pkg)
 }
 func Install(gameEXE string,pkg *packageReader)error{
+ if fingerprint,matched,vxErr:=detectVXAce(gameEXE);matched{
+  if vxErr!=nil{return vxErr}
+  return installVXAce(fingerprint,pkg)
+ }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{
@@ -339,6 +389,10 @@ func Install(gameEXE string,pkg *packageReader)error{
 // The receipt may be valid for an older version. Verify the bytes against
 // the selected package before announcing successful installation.
 func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
+ if fingerprint,matched,vxErr:=detectVXAce(gameEXE);matched{
+  if vxErr!=nil{return "",vxErr}
+  return installedVXAceIdentity(fingerprint,pkg)
+ }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{return halvaIdentity(packed,pkg)}
@@ -368,16 +422,37 @@ func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
  return build+" SHA256="+hash(source),nil
 }
 func main(){
- exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV o MZ")
+ exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV, MZ o VX Ace")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
  recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV/MZ (no necesita modelos)")
  inspect:=flag.Bool("inspect",false,"Diagnóstico RPG de solo lectura, sin modelos ni ejecución del juego")
+ copyVXAce:=flag.Bool("copy-vxace",false,"Crear una copia independiente VX Ace empaquetada, sin reemplazar el original")
+ copyParent:=flag.String("copy-parent","","Carpeta existente donde crear una nueva copia VX Ace (opcional)")
+ webFolder:=flag.String("web-folder","","Carpeta web extraída con index.html y assets (experimental, no EXE)")
+ webPort:=flag.Int("web-port",8765,"Puerto local fijo de la carpeta web")
+ webNoBrowser:=flag.Bool("web-no-browser",false,"No abrir navegador automáticamente (pruebas)")
+ webEXE:=flag.String("web-exe","","EXE Go con recursos web embed.FS (lectura estática, sin ejecutarlo)")
+ webCopy:=flag.Bool("web-copy",false,"Preparar copia web independiente con lanzador de escritorio")
+ webCopyParent:=flag.String("web-copy-parent","","Carpeta existente para la copia web")
  flag.Parse()
+ webInput:=*webFolder!=""||*webEXE!=""
+ if (*webFolder!=""&&*webEXE!="")||(*webEXE!=""&&!*webCopy)||
+    (*webCopy&&(!webInput||*webNoBrowser||*webPort!=8765))||(!*webCopy&&*webCopyParent!=""){
+  fmt.Fprintln(os.Stderr,"IA_WEB_ARGUMENTOS_INVALIDOS");os.Exit(1)
+ }
+ if (webInput&&(*exe!=""||*inspect||*recoverGame||*copyVXAce||*copyParent!=""))||
+    (!webInput&&(*webPort!=8765||*webNoBrowser))||
+    (webInput&&(*webPort<1024||*webPort>65535)){
+  fmt.Fprintln(os.Stderr,"IA_WEB_ARGUMENTOS_INVALIDOS");os.Exit(1)
+ }
+ if (*copyVXAce&&(*inspect||*recoverGame||*exe==""))||(!*copyVXAce&&*copyParent!=""){
+  fmt.Fprintln(os.Stderr,"IA_VXACE_COPIA_ARGUMENTOS_INVALIDOS");os.Exit(1)
+ }
  if *inspect {
   if *exe==""||*recoverGame{fmt.Fprintln(os.Stderr,"IA_INSPECCION_GAME_EXE_REQUERIDO");os.Exit(1)}
   kind,e:=detectInstallTarget(*exe)
   if e!=nil{fmt.Println(e.Error());os.Exit(2)}
-  fmt.Println("IA_RPG_RECURSOS_ACCESIBLES motor="+kind+" version="+installerBuildID)
+  fmt.Println("IA_RPG_RECURSOS_ACCESIBLES motor="+kind+" version="+packageBuildID)
   return
  }
  if *recoverGame{
@@ -386,11 +461,28 @@ func main(){
   fmt.Println("IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA")
   return
  }
- if *exe==""{runUI();return}
+ if *exe==""&&!webInput{runUI();return}
  source:=*payload;if source==""{var err error;source,err=os.Executable();if err!=nil{fmt.Fprintln(os.Stderr,"IA_EXE_NO_DISPONIBLE");os.Exit(1)}}
  p,err:=readPackage(source)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  defer p.Close()
+ if webInput{
+  if *webCopy{
+   var path string
+   var e error
+   if *webEXE!=""{path,e=webCloneFromEXE(*webEXE,*webCopyParent,p)}else{path,e=webCloneInstall(*webFolder,*webCopyParent,p)}
+   if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+   fmt.Println("IA_WEB_COPIA_LISTA|"+path)
+  }else if e:=webLaunch(*webFolder,*webPort,*webNoBrowser,p);e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+  return
+ }
+ if *copyVXAce{
+  final,identity,e:=vxaceCloneInstall(*exe,*copyParent,p)
+  if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+  fmt.Println("IA_VXACE_COPIA_LISTA|"+final)
+  fmt.Println("[IA_VERSION_INSTALADA] "+identity)
+  return
+ }
  if err=Install(*exe,p);err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  identity,err:=installedPackageIdentity(*exe,p)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}

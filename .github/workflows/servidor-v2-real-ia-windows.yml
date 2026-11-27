@@ -1,12 +1,42 @@
-name: Servidor v2 - modelo OPUS real - Windows propietario cifrado
+name: Servidor R42 candidate - battle log and formatted native notices
 on:
   push:
     branches:
-      - feature/servidor-v2-rpg-mz-20261124
+      - feature/servidor-v2-rpg-vxace-integration-20261126
     paths:
-      - "servidor_v2/**"
       - ".github/workflows/servidor-v2-real-ia-windows.yml"
+      - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/worker/web_runtime.py"
+      - "servidor_v2/tests/test_web_runtime.py"
+      - "servidor_v2/tests/probe_web_real_worker.py"
+      - "servidor_v2/tests/probe_web_browser.js"
+      - "servidor_v2/tests/probe_web_browser_preflight.py"
+      - "servidor_v2/tests/probe_web_desktop.py"
+      - "servidor_v2/webhost/**"
+      - "servidor_v2/tools/build_webhost.ps1"
+      - "servidor_v2/tools/pack.py"
+      - "servidor_v2/tests/test_vxace_real_worker.py"
+      - "servidor_v2/tests/test_vxace_runtime.rb"
+      - "servidor_v2/tests/test_vxace_cache_release.py"
+      - "servidor_v2/vxace-helper/src/main.rs"
+      - "servidor_v2/vxace-helper/examples/vxace_fixture.rs"
+      - "servidor_v2/tests/test_worker.py"
+      - "servidor_v2/tests/probe_vxace_launch.py"
+      - "servidor_v2/tests/audit_pyinstaller_warnings.py"
+      - "servidor_v2/tests/test_pyinstaller_warning_audit.py"
+      - "servidor_v2/vxace/**"
+      - "servidor_v2/tests/test_vxace_presentation.rb"
+      - "servidor_v2/cmd/servidor/**"
+      - "servidor_v2/tools/pack_vxace_assets.py"
+      - "servidor_v2/plugin/IATraductora.js"
+      - "servidor_v2/tests/test_mv_dialogue.js"
+      - "servidor_v2/tests/test_mv_real_worker.js"
+      - "servidor_v2/tests/soldata_fixture.js"
   workflow_dispatch:
+
+concurrency:
+  group: servidor-r31-real-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -21,16 +51,42 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       IA_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.23.2"
-      - uses: actions/setup-python@v5
+          cache-dependency-path: servidor_v2/go.sum
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
+          package-manager-cache: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+      - name: Exigir regresiones VX Ace y compilar helper antes de cargar pesos
+        shell: pwsh
+        run: |
+          ruby -c servidor_v2/vxace/IATraductoraVXACE.rb
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_RUBY_SYNTAX_FAIL" }
+          ruby servidor_v2/tests/test_vxace_runtime.rb --mock
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_NATIVE_CONTRACT_FAIL" }
+          ruby servidor_v2/tests/test_vxace_presentation.rb
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_PRESENTATION_CONTRACT_FAIL" }
+          python -m unittest discover -s servidor_v2/tests -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_WORKER_REGRESSION" }
+          cargo test --manifest-path servidor_v2/vxace-helper/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_RUST_TEST_FAIL" }
+          cargo build --release --manifest-path servidor_v2/vxace-helper/Cargo.toml --bins --examples
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_HELPER_BUILD_FAIL" }
+      - name: Verify actual native helper launch and Ruby startup before downloading OPUS
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/probe_vxace_launch.py --target servidor_v2/vxace-helper/target/release
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_NATIVE_LAUNCH_PREFLIGHT_FAIL" }
       - name: Exigir regresiones de presentacion MV/MZ antes de preparar el EXE
         shell: pwsh
         run: |
@@ -45,6 +101,19 @@ jobs:
             go test ./cmd/servidor -run "TestMZCompressedNativeDetectionAndInstallation|TestMZDetectionAndInstallation|TestHalva" -count=1
             if ($LASTEXITCODE -ne 0) { throw "IA_R17_COMPRESSED_INSTALL_FAIL" }
           } finally { Pop-Location }
+      - name: Validar Edge y CSP con respuestas sintéticas antes de cargar OPUS
+        shell: pwsh
+        run: |
+          $deps=Join-Path $env:RUNNER_TEMP "ia-web-browser-deps"
+          npm install --prefix $deps --no-save --ignore-scripts --no-audit --no-fund playwright-core@1.52.0
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_TEST_DEPENDENCY_FAIL" }
+          python servidor_v2/tests/probe_web_browser_preflight.py --playwright (Join-Path $deps "node_modules/playwright-core")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_CSP_PREFLIGHT_FAIL" }
+      - name: Build native Windows WebView2 player using pinned Microsoft SDK
+        shell: pwsh
+        run: |
+          servidor_v2/tools/build_webhost.ps1 -Output (Join-Path $env:RUNNER_TEMP "ia-webhost")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_DESKTOP_BUILD_FAIL" }
       - name: Bloqueo si no se dispone de origen privado cifrado
         shell: pwsh
         run: |
@@ -135,6 +204,11 @@ jobs:
             throw "IA_MOTOR_PROPIO_NO_COMPILA"
           }
           Write-Host "IA_WORKER_BINARIO_NUEVO_NO_EJECUTA_GUI_ANTIGUA"
+      - name: Auditar advertencias de analisis PyInstaller sin exponer rutas privadas
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/audit_pyinstaller_warnings.py build/IATraductora/warn-IATraductora.txt
+          if ($LASTEXITCODE -ne 0) { throw "IA_PYINSTALLER_WARNING_REPORT_INVALID" }
       - name: Verificar que el NUEVO EXE congelado carga los dos modelos OPUS reales
         shell: pwsh
         run: |
@@ -160,11 +234,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "IA_SERVIDOR_EXE_NO_COMPILA" }
           } finally { Pop-Location }
           $out=Join-Path $env:RUNNER_TEMP "Servidor.exe"
-          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --out $out
+          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --vxace-helper servidor_v2/vxace-helper/target/release/servidor-vxace-helper.exe --vxace-plugin servidor_v2/vxace/IATraductoraVXACE.rb --web-host-dir (Join-Path $env:RUNNER_TEMP "ia-webhost") --out $out
           if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $out)) {
             throw "IA_SERVIDOR_PROPIO_PAQUETE_INVALIDO"
           }
           Write-Host "IA_SERVIDOR_UNICO_EXE_CON_MODELOS_Y_PLUGIN_PROPIOS_CREADO"
+      - name: VX Ace - installed script, real OPUS IPC, cache and exact restoration
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/test_vxace_real_worker.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --fixture servidor_v2/vxace-helper/target/release/examples/vxace_fixture.exe
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_REAL_OPUS_ACCEPTANCE_FAIL" }
       - name: Instalar desde Servidor.exe propio en MV sintético y verificar nuevo puente con traducción neuronal REAL
         shell: pwsh
         run: |
@@ -230,6 +309,24 @@ jobs:
           }
           node servidor_v2/tests/test_mv_real_worker.js $game
           if ($LASTEXITCODE -ne 0) { throw "IA_MZ_MODELO_REAL_Y_PRESENTACION_FALLO" }
+      - name: Instalar MV SOLData sintético y probar inventario nativo con OPUS real
+        shell: pwsh
+        run: |
+          $game=Join-Path $env:RUNNER_TEMP "ia-v2-soldata-日本語"
+          node servidor_v2/tests/soldata_fixture.js $game
+          if ($LASTEXITCODE -ne 0) { throw "IA_SOL_FIXTURE_FAIL" }
+          $exe=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          $arg='--game "'+(Join-Path $game "SOL.exe")+'"'
+          $p=Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP "ia-sol-install.txt") -RedirectStandardError (Join-Path $env:RUNNER_TEMP "ia-sol-error.txt") -ErrorAction Stop
+          if ($null -eq $p -or $p.ExitCode -ne 0) { throw "IA_SOL_INSTALL_FAIL" }
+          node servidor_v2/tests/test_mv_real_worker.js $game --soldata
+          if ($LASTEXITCODE -ne 0) { throw "IA_SOL_NATIVE_CONTRACT_FAIL" }
+          $data=Join-Path $game "www/data"
+          if (Test-Path -LiteralPath (Join-Path $data "System.json")) { throw "IA_SOL_PLAINTEXT_CREATED" }
+          $arg='--recover --game "'+(Join-Path $game "SOL.exe")+'"'
+          $p=Start-Process -FilePath $exe -ArgumentList $arg -Wait -PassThru -RedirectStandardOutput (Join-Path $env:RUNNER_TEMP "ia-sol-recover.txt") -RedirectStandardError (Join-Path $env:RUNNER_TEMP "ia-sol-recover-error.txt") -ErrorAction Stop
+          if ($null -eq $p -or $p.ExitCode -ne 0) { throw "IA_SOL_RECOVER_FAIL" }
+          if ([IO.File]::ReadAllText((Join-Path $game "www/js/plugins.js")) -ne 'var $plugins = [];') { throw "IA_SOL_REGISTRY_NOT_RESTORED" }
       - name: Instalar MZ comprimido y exigir respuestas reales desde JSONO sin System.json
         shell: pwsh
         run: |
@@ -335,27 +432,43 @@ jobs:
           if ($p.ExitCode -ne 0 -or (Get-FileHash -LiteralPath (Join-Path $packages "EnginePackage.halva")).Hash -ne $before) { throw "IA_HALVA_RECUPERACION_FAIL" }
           if (!(Test-Path -LiteralPath $cache)) { throw "IA_HALVA_CACHE_ELIMINADA" }
           Write-Host "IA_HALVA_NATIVE_OPUS_REAL_AND_RECOVERY_PASS"
-      - name: Cifrar siempre la versión final antes de publicarla en GitHub
+      - name: Validar carpeta web autónoma con Edge real, OPUS, guardado y recursos intactos
+        shell: pwsh
+        run: |
+          $deps=Join-Path $env:RUNNER_TEMP "ia-web-browser-deps"
+          python servidor_v2/tests/probe_web_real_worker.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --playwright (Join-Path $deps "node_modules/playwright-core")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_REAL_ACCEPTANCE_FAIL" }
+      - name: Validar nueva copia jugable WebView2 y guardado tras cerrar y volver a abrir
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/probe_web_desktop.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_DESKTOP_REAL_ACCEPTANCE_FAIL" }
+      - name: Validar extracción automática desde un solo EXE Go de 600 MiB y jugar con OPUS real
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/probe_web_desktop.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --auto-exe
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_AUTO_EXE_REAL_ACCEPTANCE_FAIL" }
+      - name: Cifrar siempre la versión candidata antes de publicarla en GitHub
         shell: pwsh
         run: |
           $seven="C:\Program Files\7-Zip\7z.exe"
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-R30-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R42-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-R30-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
-          'Servidor v2: modelo propio CT2 OPUS; MV y MZ, probar sobre copia cerrada. No confirma compatibilidad con todos los complementos del videojuego comercial.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R42-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          'Servidor R42 candidato: mensajes de combate y avisos con formato, misiones TXT, MV/MZ/VX Ace/SOLData y WEB con OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Copy-Item -LiteralPath "servidor_v2/LICENSE-BROTLI.txt" -Destination (Join-Path $dir "LICENSE-BROTLI.txt")
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-R30-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-WEB-R42-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error

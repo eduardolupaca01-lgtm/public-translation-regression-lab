@@ -1,5 +1,6 @@
 import importlib.util, json, tempfile, threading, unittest
 from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -354,6 +355,34 @@ class MZLayoutTests(unittest.TestCase):
                 (content/"js"/"rpg_core.js").write_text("{}")
                 with self.assertRaises(ValueError):ia.game_root(root)
 
+class SolDataWorkerTests(unittest.TestCase):
+    def test_mv_soldata_root_and_www_no_plaintext(self):
+        for wrapped in (False,True):
+            with self.subTest(wrapped=wrapped),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                content=root/"www" if wrapped else root
+                for name in ("rpg_core.js","rpg_managers.js","rpg_objects.js","rpg_scenes.js","rpg_windows.js","plugins.js"):
+                    file=content/"js"/name
+                    file.parent.mkdir(parents=True,exist_ok=True)
+                    file.write_text("// synthetic MV",encoding="utf8")
+                (content/"js"/"plugins").mkdir()
+                data=content/"data"
+                data.mkdir()
+                for name in ("System","Actors","CommonEvents","MapInfos"):
+                    (data/(name+".soldata")).write_bytes(b"\xa9"*32)
+                self.assertEqual(ia.game_root(root),(root.resolve(),content.resolve()))
+                engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+                engine.mkdir(parents=True)
+                service=ia.Service(root,engine,neural=FakeNeural())
+                try:
+                    self.assertEqual(service.translate("en","Good morning."),"Buen día")
+                finally:
+                    service.close()
+                self.assertFalse((data/"System.json").exists())
+                self.assertEqual((data/"Actors.soldata").read_bytes(),b"\xa9"*32)
+                (data/"Actors.soldata").write_bytes(b"invalid")
+                with self.assertRaises(ValueError):ia.game_root(root)
+
 class CompressedMZWorkerTests(unittest.TestCase):
     def fixture(self,root,wrapped=False):
         content=root/"www" if wrapped else root
@@ -476,5 +505,181 @@ class HalvaNativeWorkerTests(unittest.TestCase):
             finally:service.close()
             packed.write_bytes(b"restored original")
             with self.assertRaises(ValueError):ia.Service(root,engine,neural=FakeNeural(),halva_content=runtime)
+
+class VXAceWorkerTests(unittest.TestCase):
+    def make_game(self,packed=False):
+        temporary=tempfile.TemporaryDirectory(prefix="IA VX Ace 日本語 ")
+        self.addCleanup(temporary.cleanup)
+        root=Path(temporary.name)
+        (root/"Game.exe").write_bytes(b"MZ synthetic VX Ace")
+        (root/"RGSS301.dll").write_bytes(b"RGSS301 synthetic runtime")
+        (root/"Game.ini").write_text(
+            "[Game]\nLibrary=RGSS301.dll\nScripts=Data\\Scripts.rvdata2\nTitle=VX Ace fixture\n",
+            encoding="utf-8",
+        )
+        if packed:
+            (root/"Game.rgss3a").write_bytes(b"RGSSAD\x00\x03"+b"\x00"*16)
+        else:
+            data=root/"Data"
+            data.mkdir()
+            for name in ("Scripts.rvdata2","System.rvdata2","MapInfos.rvdata2"):
+                (data/name).write_bytes(b"\x04\x08\x00\x00")
+        return root
+
+    def test_loose_vxace_game_root_is_accepted(self):
+        root=self.make_game()
+        self.assertEqual(ia.vxace_game_root(root),(root.resolve(),root.resolve()))
+
+    def test_packed_vxace_game_root_is_accepted_for_native_archive_preflight(self):
+        root=self.make_game(packed=True)
+        self.assertEqual(ia.vxace_game_root(root),(root.resolve(),root.resolve()))
+
+    def test_large_packed_archive_accepted_at_worker_startup(self):
+        root=self.make_game(packed=True)
+        archive=root/"Game.rgss3a"
+        with archive.open("r+b") as stream:
+            stream.truncate(1216546*1024)
+        self.assertEqual(ia.vxace_game_root(root),(root.resolve(),root.resolve()))
+        with archive.open("r+b") as stream:
+            stream.truncate(ia.VXACE_MAX_ARCHIVE_BYTES+1)
+        with self.assertRaisesRegex(ValueError,"IA_VXACE_RGSS3A_INVALIDO"):
+            ia.vxace_game_root(root)
+
+    def test_vxace_service_uses_existing_game_local_memory_and_bridge(self):
+        root=self.make_game()
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        class NoopNeural:
+            def close(self):
+                return None
+            def shutdown(self):
+                return None
+        service=ia.Service(root,engine,neural=NoopNeural())
+        self.addCleanup(service.close)
+        self.assertTrue(service.vxace)
+        self.assertEqual(service.game,root.resolve())
+        self.assertEqual(service.content,root.resolve())
+        expected=root/"IA Traductora"/".local"/"Rpg"/"cache"/"translation-memory-v2.sqlite3"
+        self.assertTrue(expected.is_file())
+        bridge=ia.publish(service,24123)
+        self.assertEqual(bridge.resolve(strict=True).parent,
+                         (root/"IA Traductora"/".local"/"Rpg").resolve(strict=True))
+        descriptor=json.loads(bridge.read_text(encoding="utf-8"))
+        self.assertEqual(descriptor["schema"],ia.SCHEMA)
+        self.assertEqual(len(descriptor["token"]),64)
+        self.assertFalse((root/"Data"/"IATraductora"/"bridge.json").exists())
+
+
+    def test_vxace_core_ipc_roundtrip_authentication_and_persistence(self):
+        root=self.make_game()
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        class Neural:
+            def __init__(self):self.calls=[]
+            def translate(self,lang,text):
+                self.calls.append((lang,text))
+                return {"Good morning.":"Buenos días.","Open the gate.":"Abre la puerta.",
+                        "123 apples":"Manzanas"}[text]
+        neural=Neural()
+        service=ia.Service(root,engine,neural=neural)
+        ipc=ia.VXAceFileBridge(service,101)
+        def request(bridge,number,texts,token=None):
+            ident="%016x"%number
+            path=bridge.session/(ident+".req")
+            path.write_text("\n".join([ia.VXACE_IPC_REQUEST,token or bridge.service.token,"en"]+
+                            [t.encode("utf8").hex() for t in texts])+"\n",encoding="ascii")
+            bridge.process_once()
+            return bridge.session/(ident+".res")
+        try:
+            descriptor=ipc.descriptor.read_text("ascii").splitlines()
+            self.assertEqual(descriptor[0],ia.VXACE_IPC_SCHEMA)
+            self.assertEqual(descriptor[3],"101")
+            self.assertFalse(request(ipc,1,["Good morning."],token="0"*64).exists())
+            self.assertEqual(neural.calls,[])
+            response=request(ipc,2,["Good morning.","Open the gate.","Good morning.","123 apples"])
+            fields=response.read_text("ascii").splitlines()
+            self.assertEqual(fields[:3],[ia.VXACE_IPC_RESPONSE,service.token,"%016x"%2])
+            self.assertEqual([bytes.fromhex(x).decode() if x!="-" else x for x in fields[3:]],
+                             ["Buenos días.","Abre la puerta.","Buenos días.","-"])
+            self.assertEqual(neural.calls.count(("en","Good morning.")),1)
+            with self.assertRaises((OSError,RuntimeError)):
+                other=ia.VXAceFileBridge(service,102)
+                other.close()
+        finally:
+            ipc.close()
+            service.close()
+        self.assertFalse(ipc.descriptor.exists())
+        second=Neural()
+        service2=ia.Service(root,engine,neural=second)
+        ipc2=ia.VXAceFileBridge(service2,103)
+        try:
+            self.assertNotEqual(ipc2.session,ipc.session)
+            response=request(ipc2,1,["Good morning."])
+            self.assertEqual(bytes.fromhex(response.read_text("ascii").splitlines()[3]).decode(),"Buenos días.")
+            self.assertEqual(second.calls,[])
+        finally:
+            ipc2.close()
+            service2.close()
+
+    def test_vxace_run_closes_memory_before_releasing_session(self):
+        root=self.make_game()
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        service=ia.Service(root,engine,neural=FakeNeural())
+        descriptor=engine.parent/"vxace-session.txt"
+        bridge=engine.parent/"bridge.json"
+        original_close=service.close
+        events=[]
+        def close_memory():
+            self.assertTrue(descriptor.is_file(),"session removed before SQLite closed")
+            self.assertTrue(bridge.is_file(),"HTTP descriptor removed before SQLite closed")
+            original_close()
+            events.append("memory closed")
+        with mock.patch.object(service,"close",side_effect=close_memory), \
+             mock.patch.object(ia,"monitor_game_lifetime"), \
+             mock.patch.object(ia.ThreadingHTTPServer,"serve_forever",return_value=None):
+            ia.run(service,parent_pid=1234)
+        self.assertEqual(events,["memory closed"])
+        self.assertFalse(descriptor.exists())
+        self.assertFalse(bridge.exists())
+        # The exact same connection must be closed, not only its transaction.
+        with self.assertRaises(ia.sqlite3.ProgrammingError):
+            service.memory.db.execute("SELECT 1")
+
+    def test_vxace_system_dll_and_empty_rtp_match_installer(self):
+        root=self.make_game()
+        (root/"System").mkdir()
+        (root/"RGSS301.dll").rename(root/"System"/"RGSS301.dll")
+        (root/"Game.ini").write_text("[Game]\nLibrary=System\\RGSS301.dll\nScripts=Data\\Scripts.rvdata2\nRTP=\nTitle=日本語\n",encoding="utf8")
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        service=ia.Service(root,engine,neural=object())
+        self.assertTrue(service.vxace)
+        ipc=ia.VXAceFileBridge(service,1234)
+        try:
+            self.assertEqual(ipc.descriptor.read_text("ascii").splitlines()[3],"1234")
+            diag=engine.parent/"vxace-startup-worker-1234.json"
+            ia.write_startup_code(diag,"IA_VXACE_SESSION_READY")
+            self.assertEqual(json.loads(diag.read_text("utf8"))["code"],"IA_VXACE_SESSION_READY")
+            ia.write_startup_code(diag,"IA_VXACE_IPC_LOCK_INVALIDO")
+            self.assertEqual(json.loads(diag.read_text("utf8"))["code"],"IA_VXACE_IPC_LOCK_INVALIDO")
+        finally:
+            ipc.close()
+            service.close()
+        (root/"Data"/"MapInfos.rvdata2").unlink()
+        with self.assertRaisesRegex(ValueError,"IA_VXACE_DATA_INCOMPLETA"):
+            ia.Service(root,engine,neural=object())
+
+    def test_vxace_rejects_non_rgss3a_and_incomplete_loose_data(self):
+        root=self.make_game(packed=True)
+        (root/"Game.rgss3a").write_bytes(b"not an RGSS3A archive")
+        with self.assertRaises(ValueError) as error:
+            ia.vxace_game_root(root)
+        self.assertEqual(str(error.exception),"IA_VXACE_RGSS3A_INVALIDO")
+        root=self.make_game()
+        (root/"Data"/"MapInfos.rvdata2").unlink()
+        with self.assertRaises(ValueError) as error:
+            ia.vxace_game_root(root)
+        self.assertEqual(str(error.exception),"IA_VXACE_DATA_INCOMPLETA")
 
 if __name__=="__main__":unittest.main()
