@@ -837,6 +837,7 @@ async function testR42BattleLogAndFormattedNotices(mz){
         "Remember the hotkeys.":"Recuerda los atajos.","Please check the menu.":"Consulta el menú.",
         [skill]:"Asalto relámpago","Please close the wooden door.":"Cierra la puerta de madera."};
     const f=fixture(5,{root,mz,fsState:state,batch:true,testHooks:true,nativePaint:true,responses,configure(c){
+        c.Window_Message.prototype.canStart=function(){return c.$gameMessage.hasText()&&!this._textState;};
         c.$dataActors=[null,{name:"Mira"}];c.$dataEnemies=[null,{name:"Training Golem"}];
         c.$dataSkills=[null,{name:skill}];
         c.$gameTroop={members:()=>[{name:()=>"Training Golem A"}]};
@@ -908,6 +909,8 @@ async function testR42BattleLogAndFormattedNotices(mz){
     const combinedDeadline=Date.now()+3000;
     // A single window and original event. Wait for the same native
     // first-view gate that the installed game uses.
+    assert.equal(cold.updateWait(),true,"cold combined notice must wait before native paint");
+    assert.equal(cold.originalStarts,0);
     while(cold.updateWait()&&Date.now()<combinedDeadline)await wait(20);
     assert.ok(Date.now()<combinedDeadline,"combined notice gate did not resolve");
     cold.startMessage();

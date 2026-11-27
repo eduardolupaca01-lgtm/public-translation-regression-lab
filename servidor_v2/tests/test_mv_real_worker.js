@@ -348,6 +348,26 @@ async function run(){
     const formattedNotice=r42Notice.RAW;
     const beforeNoticeWindows=scene.windows.length;
     let noticeResult=r42Notice.inspect("",formattedNotice);
+    function noticeCacheDiagnostic(){
+        // This is a disposable synthetic acceptance game. Read only its
+        // known private journal and report booleans, never cached contents.
+        try{
+            const file=path.join(game,"IA Traductora",".local","Rpg","cache","translations-ja-en-es-v2.jsonl");
+            if(!fs.existsSync(file))return {journal:false,hit:false};
+            if(fs.statSync(file).size>4*1024*1024)return {journal:true,hit:false,bounded:false};
+            let found=null;
+            for(const line of fs.readFileSync(file,"utf8").split(/\r?\n/)){
+                if(!line)continue;
+                try{
+                    const row=JSON.parse(line);
+                    if(row.source==="en"&&row.original===r42Notice.BODY&&typeof row.translated==="string")found=row.translated;
+                }catch(_){}
+            }
+            return {journal:true,hit:found!==null,
+                semantic:found!==null&&r42Notice.inspect('※"'+found+'" 【M】',formattedNotice).semantic,
+                legacyClose:found!==null&&/cerr/i.test(found)};
+        }catch(_){return {journal:false,hit:false,readError:true};}
+    }
     // Keep the existing readiness budget. Stop waiting once the native
     // renderer has actually changed the sentence; evaluate semantics and
     // exact envelope separately instead of disguising a failed predicate
@@ -363,7 +383,8 @@ async function run(){
             return typeof w.paintedText==="string"&&w.paintedText!==formattedNotice;
         },120000,"IA_R42_REAL_OPUS_NOTICE_UNCHANGED_TIMEOUT");
     }catch(error){
-        console.log("IA_R42_NOTICE_CHECK "+JSON.stringify(noticeResult));throw error;
+        console.log("IA_R42_NOTICE_CHECK "+JSON.stringify(noticeResult));
+        console.log("IA_R42_NOTICE_CACHE "+JSON.stringify(noticeCacheDiagnostic()));throw error;
     }
     console.log("IA_R42_NOTICE_CHECK "+JSON.stringify(noticeResult));
     assert.ok(noticeResult.envelope,"IA_R42_NOTICE_NATIVE_FORMAT_CHANGED");
