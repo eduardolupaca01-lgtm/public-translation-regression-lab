@@ -499,21 +499,37 @@ def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
 
     ini=root/"Game.ini"
     game_exe=root/"Game.exe"
-    runtime=root/"RGSS301.dll"
-    if not ordinary(ini,64*1024) or not ordinary(game_exe,64*1024*1024) or not ordinary(runtime,64*1024*1024):
+    if not ordinary(ini,64*1024) or not ordinary(game_exe,64*1024*1024):
         raise ValueError("IA_VXACE_RUNTIME_NO_VERIFICADO")
     try:
         parser=configparser.ConfigParser(interpolation=None,strict=True)
         parser.optionxform=str.lower
-        parser.read_string(ini.read_text(encoding="utf-8-sig"))
-        if not parser.has_section("Game"):
+        raw=ini.read_bytes()
+        try:
+            decoded=raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            decoded=raw.decode("cp932",errors="replace")
+        parser.read_string(decoded)
+        sections=[name for name in parser.sections() if name.casefold()=="game"]
+        if len(sections)!=1:
             raise ValueError("IA_VXACE_GAME_INI_INVALIDO")
-        library=parser.get("Game","Library",fallback="")
-        scripts=parser.get("Game","Scripts",fallback="Data\\Scripts.rvdata2")
+        library=parser.get(sections[0],"Library",fallback="")
+        scripts=parser.get(sections[0],"Scripts",fallback="Data\\Scripts.rvdata2")
     except (OSError,UnicodeError,configparser.Error) as exc:
         raise ValueError("IA_VXACE_GAME_INI_INVALIDO") from exc
-    if Path(library.replace("\\","/")).name.casefold()!="rgss301.dll":
+    library=library.replace("\\","/").removeprefix("./")
+    parts=library.split("/")
+    if (len(parts) not in (1,2) or parts[-1].casefold() not in ("rgss300.dll","rgss301.dll")
+            or (len(parts)==2 and parts[0].casefold()!="system")):
         raise ValueError("IA_VXACE_GAME_INI_INVALIDO")
+    if len(parts)==2 and ((root/parts[0]).is_symlink() or not (root/parts[0]).is_dir()):
+        raise ValueError("IA_VXACE_RUNTIME_NO_VERIFICADO")
+    if not ordinary(root.joinpath(*parts),64*1024*1024):
+        raise ValueError("IA_VXACE_RUNTIME_NO_VERIFICADO")
+    for name in ("Game.rgssad","Game.rgss2a"):
+        other=root/name
+        if other.is_symlink() or other.exists():
+            raise ValueError("IA_VXACE_ARCHIVO_DE_OTRO_MOTOR")
     normalized=scripts.replace("\\","/").removeprefix("./").casefold()
     if normalized!="data/scripts.rvdata2":
         raise ValueError("IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO")
@@ -541,9 +557,6 @@ def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
         with file.open("rb") as stream:
             if stream.read(2)!=b"\x04\x08":
                 raise ValueError("IA_VXACE_MARSHAL_INVALIDO")
-    for name in ("Game.rgssad","Game.rgss2a"):
-        if (root/name).exists():
-            raise ValueError("IA_VXACE_ARCHIVO_DE_OTRO_MOTOR")
     return root,root
 
 

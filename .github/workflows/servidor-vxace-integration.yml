@@ -1,0 +1,67 @@
+name: Servidor RPG - VX Ace integration validation
+
+on:
+  push:
+    branches:
+      - feature/servidor-v2-rpg-vxace-integration-20261126
+    paths:
+      - 'servidor_v2/**'
+      - '.github/workflows/servidor-vxace-integration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: servidor-vxace-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: RPG integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+      - name: Servidor Go regression, including VX Ace journal
+        working-directory: servidor_v2
+        run: go test -v ./...
+      - name: Go static analysis
+        working-directory: servidor_v2
+        run: go vet ./...
+      - name: Existing MV/MZ native display regression
+        run: node servidor_v2/tests/test_mv_dialogue.js
+      - name: Worker and single-EXE footer regression
+        run: python -m unittest discover -s servidor_v2/tests -p 'test_*.py' -v
+      - name: Independent RGSS3 helper - synthetic archive and Marshal tests
+        run: cargo test --manifest-path servidor_v2/vxace-helper/Cargo.toml
+      - name: Ruby syntax only - not a real RGSS3 runtime
+        run: ruby -c servidor_v2/vxace/IATraductoraVXACE.rb
+      - name: Compile the new Windows selector and native helper
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Push-Location servidor_v2
+          go build -trimpath -ldflags "-H=windowsgui" -o "$env:RUNNER_TEMP\Servidor-bootstrap.exe" ./cmd/servidor
+          if ($LASTEXITCODE -ne 0) { throw 'SERVIDOR_BOOTSTRAP_BUILD_FAILED' }
+          cargo build --release --manifest-path vxace-helper/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { throw 'VXACE_HELPER_BUILD_FAILED' }
+          Pop-Location
+      # No fake-weight or unverified RGSS3 EXE is published.

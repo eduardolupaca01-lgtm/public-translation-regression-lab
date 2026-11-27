@@ -141,17 +141,11 @@ fn ini_values(path: &Path) -> Result<(String, String), String> {
     if normalized_scripts != "data/scripts.rvdata2" {
         return Err(fail("IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO"));
     }
-    if Path::new(&library.replace('\\', "/"))
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.eq_ignore_ascii_case("RGSS301.dll"))
-        != Some(true)
-    {
+    let library = library.replace('\\', "/").trim_start_matches("./").to_owned();
+    let parts = library.split('/').collect::<Vec<_>>();
+    if !(parts.len() == 1 || (parts.len() == 2 && parts[0].eq_ignore_ascii_case("System")))
+        || !parts.last().is_some_and(|name| name.eq_ignore_ascii_case("RGSS300.dll") || name.eq_ignore_ascii_case("RGSS301.dll")) {
         return Err(fail("IA_VXACE_GAME_INI_INVALIDO"));
-    }
-    let normalized = scripts.replace('\\', "/").trim_start_matches("./").to_ascii_lowercase();
-    if normalized != "data/scripts.rvdata2" {
-        return Err(fail("IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO"));
     }
     Ok((library, scripts))
 }
@@ -161,12 +155,20 @@ fn validate_game_root(root: &Path) -> Result<GameLayout, String> {
     if !root.is_dir() || root.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(true) {
         return Err(fail("IA_VXACE_JUEGO_NO_VALIDO"));
     }
-    for required in ["Game.exe", "RGSS301.dll", "Game.ini"] {
+    for required in ["Game.exe", "Game.ini"] {
         if !ordinary(&root.join(required), 64 * 1024 * 1024) {
             return Err(fail("IA_VXACE_RUNTIME_NO_VERIFICADO"));
         }
     }
-    let _ = ini_values(&root.join("Game.ini"))?;
+    let (library, _) = ini_values(&root.join("Game.ini"))?;
+    let library_path = root.join(library);
+    let library_parent = library_path.parent().ok_or_else(|| fail("IA_VXACE_RUNTIME_NO_VERIFICADO"))?;
+    if library_parent.is_symlink() || !ordinary(&library_path, 64 * 1024 * 1024) {
+        return Err(fail("IA_VXACE_RUNTIME_NO_VERIFICADO"));
+    }
+    for incompatible in ["Game.rgssad", "Game.rgss2a"] {
+        if root.join(incompatible).symlink_metadata().is_ok() { return Err(fail("IA_VXACE_ARCHIVO_DE_OTRO_MOTOR")); }
+    }
     let archive = root.join("Game.rgss3a");
     if archive.is_symlink() {
         return Err(fail("IA_VXACE_RGSS3A_INVALIDO"));

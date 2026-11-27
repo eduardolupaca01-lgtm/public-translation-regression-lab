@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,5 +126,46 @@ func TestVXAceRejectsNonMarshalLooseData(t *testing.T) {
 	}
 	if _, matched, err := detectVXAce(exe); !matched || err == nil {
 		t.Fatalf("non-Marshal Scripts.rvdata2 was accepted: matched=%v err=%v", matched, err)
+	}
+}
+
+
+func TestVXAceStandardSystemRuntimeAndEmptyRTP(t *testing.T) {
+	exe := vxaceFixture(t, false)
+	root := filepath.Dir(exe)
+	if err := os.Mkdir(filepath.Join(root, "System"), 0700); err != nil { t.Fatal(err) }
+	if err := os.Rename(filepath.Join(root, "RGSS301.dll"), filepath.Join(root, "System", "RGSS301.dll")); err != nil { t.Fatal(err) }
+	ini := "[Game]\r\nRTP=\r\nLibrary=System\\RGSS301.dll\r\nScripts=Data\\Scripts.rvdata2\r\nTitle=日本語\r\n"
+	if err := os.WriteFile(filepath.Join(root,"Game.ini"), []byte(ini), 0600); err != nil { t.Fatal(err) }
+	fp, matched, err := detectVXAce(exe)
+	if !matched || err != nil || filepath.Base(filepath.Dir(fp.Library)) != "System" { t.Fatalf("standard VX Ace: %v %v %+v", matched, err, fp) }
+}
+
+func TestVXAceRecoveryAfterPreparedJournal(t *testing.T) {
+	for _, published := range []bool{false,true} {
+		t.Run(map[bool]string{false:"before_replace",true:"after_replace"}[published],func(t *testing.T){
+			exe := vxaceFixture(t,false)
+			fp, matched, err := detectVXAce(exe)
+			if err != nil || !matched { t.Fatalf("fixture: %v",err) }
+			_,_,_,_,_,receiptFile,installDir := vxaceSidecarPaths(fp.Root)
+			if err = os.MkdirAll(installDir,0700);err != nil {t.Fatal(err)}
+			original,err := os.ReadFile(fp.ScriptsFile);if err != nil{t.Fatal(err)}
+			patched := append(append([]byte{},original...),[]byte("synthetic patched")...)
+			backup:=filepath.Join(installDir,"original-Scripts.rvdata2")
+			if err=os.WriteFile(backup,original,0600);err!=nil{t.Fatal(err)}
+			receipt := vxaceReceipt{Schema:"ia-traductora-vxace-install-v1",BeforeSHA:hash(original),AfterSHA:hash(patched),PluginSHA:hash([]byte("plugin")),WorkerSHA:hash([]byte("worker")),HelperSHA:hash([]byte("helper")),Mode:"loose",TargetRel:"Data/Scripts.rvdata2",Build:vxacePluginBuildID,Status:"PREPARED"}
+			raw,_:=json.Marshal(receipt)
+			if err=os.WriteFile(receiptFile,raw,0600);err!=nil{t.Fatal(err)}
+			if published {if err=os.WriteFile(fp.ScriptsFile,patched,0600);err!=nil{t.Fatal(err)}}
+			save:=filepath.Join(fp.Root,"Save01.rvdata2")
+			if err=os.WriteFile(save,[]byte("player save"),0600);err!=nil{t.Fatal(err)}
+			for i:=0;i<2;i++{if err=recoverVXAce(fp);err!=nil{t.Fatal(err)}}
+			restored,_:=os.ReadFile(fp.ScriptsFile)
+			if hash(restored)!=hash(original){t.Fatal("original not restored")}
+			saved,_:=os.ReadFile(save)
+			if string(saved)!="player save"{t.Fatal("save modified")}
+			got,ok,err:=vxaceReadReceipt(receiptFile)
+			if err!=nil||!ok||got.Status!="RESTORED"{t.Fatalf("receipt: %+v %v",got,err)}
+		})
 	}
 }
