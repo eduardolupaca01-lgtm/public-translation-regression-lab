@@ -137,7 +137,9 @@ module IATraductoraVXACE
       refs = {}
       parsed.each_with_index do |row, i|
         row.each_with_index do |piece, j|
-          next if j.odd? || !piece.is_a?(String) || !piece.valid_encoding?
+          next if j.odd? || !piece.is_a?(String)
+          next unless piece.dup.force_encoding('UTF-8').valid_encoding?
+          piece = piece.dup.force_encoding('UTF-8')
           next if piece =~ /[\x00-\x1f\\]/
           core = piece.strip
           lang = source(core)
@@ -249,7 +251,7 @@ module IATraductoraVXACE
     # event arrays and choice callbacks are restored, not persisted into saves.
     def around_native(array)
       return yield unless array.is_a?(Array) && !array.empty?
-      original = array.dup
+      original = array.map { |s| s.is_a?(String) ? s.dup : s }
       p = plan(original)
       Fiber.yield until advance(p)
       return yield unless array == original
