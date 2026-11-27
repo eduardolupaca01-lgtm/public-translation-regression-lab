@@ -11,6 +11,8 @@ on:
       - "servidor_v2/tests/test_vxace_cache_release.py"
       - "servidor_v2/vxace-helper/src/main.rs"
       - "servidor_v2/tests/probe_vxace_launch.py"
+      - "servidor_v2/tests/audit_pyinstaller_warnings.py"
+      - "servidor_v2/tests/test_pyinstaller_warning_audit.py"
   workflow_dispatch:
 
 concurrency:
@@ -30,16 +32,18 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       IA_PASSWORD: ${{ secrets.EDUARDO_RPG_SOURCE_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.23.2"
-      - uses: actions/setup-python@v5
+          cache-dependency-path: servidor_v2/go.sum
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: ruby/setup-ruby@v1
         with:
@@ -166,6 +170,11 @@ jobs:
             throw "IA_MOTOR_PROPIO_NO_COMPILA"
           }
           Write-Host "IA_WORKER_BINARIO_NUEVO_NO_EJECUTA_GUI_ANTIGUA"
+      - name: Auditar advertencias de analisis PyInstaller sin exponer rutas privadas
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/audit_pyinstaller_warnings.py build/IATraductora/warn-IATraductora.txt
+          if ($LASTEXITCODE -ne 0) { throw "IA_PYINSTALLER_WARNING_REPORT_INVALID" }
       - name: Verificar que el NUEVO EXE congelado carga los dos modelos OPUS reales
         shell: pwsh
         run: |
@@ -389,7 +398,7 @@ jobs:
           Copy-Item -LiteralPath "servidor_v2/LICENSE-BROTLI.txt" -Destination (Join-Path $dir "LICENSE-BROTLI.txt")
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-R31-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/

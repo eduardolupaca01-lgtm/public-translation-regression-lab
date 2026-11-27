@@ -90,7 +90,7 @@ fn read_bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     if !ordinary(path, max) {
         return Err(fail("IA_VXACE_ARCHIVO_NO_ORDINARIO"));
     }
-    let mut file = File::open(path).map_err(|_| fail("IA_VXACE_ARCHIVO_NO_LEIBLE"))?;
+    let file = File::open(path).map_err(|_| fail("IA_VXACE_ARCHIVO_NO_LEIBLE"))?;
     let mut output = Vec::new();
     file.take(max + 1)
         .read_to_end(&mut output)
