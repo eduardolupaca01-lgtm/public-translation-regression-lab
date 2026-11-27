@@ -581,6 +581,30 @@ class VXAceWorkerTests(unittest.TestCase):
             ipc2.close()
             service2.close()
 
+    def test_vxace_system_dll_and_empty_rtp_match_installer(self):
+        root=self.make_game()
+        (root/"System").mkdir()
+        (root/"RGSS301.dll").rename(root/"System"/"RGSS301.dll")
+        (root/"Game.ini").write_text("[Game]\nLibrary=System\\RGSS301.dll\nScripts=Data\\Scripts.rvdata2\nRTP=\nTitle=日本語\n",encoding="utf8")
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        service=ia.Service(root,engine,neural=object())
+        self.assertTrue(service.vxace)
+        ipc=ia.VXAceFileBridge(service,1234)
+        try:
+            self.assertEqual(ipc.descriptor.read_text("ascii").splitlines()[3],"1234")
+            diag=engine.parent/"vxace-startup-worker-1234.json"
+            ia.write_startup_code(diag,"IA_VXACE_SESSION_READY")
+            self.assertEqual(json.loads(diag.read_text("utf8"))["code"],"IA_VXACE_SESSION_READY")
+            ia.write_startup_code(diag,"IA_VXACE_IPC_LOCK_INVALIDO")
+            self.assertEqual(json.loads(diag.read_text("utf8"))["code"],"IA_VXACE_IPC_LOCK_INVALIDO")
+        finally:
+            ipc.close()
+            service.close()
+        (root/"Data"/"MapInfos.rvdata2").unlink()
+        with self.assertRaisesRegex(ValueError,"IA_VXACE_DATA_INCOMPLETA"):
+            ia.Service(root,engine,neural=object())
+
     def test_vxace_rejects_non_rgss3a_and_incomplete_loose_data(self):
         root=self.make_game(packed=True)
         (root/"Game.rgss3a").write_bytes(b"not an RGSS3A archive")

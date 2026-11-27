@@ -554,7 +554,7 @@ fn parse_arg(args: &[String], name: &str) -> Result<PathBuf, String> {
 }
 
 
-const RUNTIME_BUILD: &str = "VXACE-RGSS3-20261126-C";
+const RUNTIME_BUILD: &str = "VXACE-RGSS3-20261126-D";
 const SIDECAR: &str = "IA Traductora/.local/Rpg";
 fn safe_runtime_file(root: &Path, relative: &str, maximum: u64) -> Result<PathBuf, String> {
     let mut file = root.to_owned();
@@ -631,30 +631,107 @@ fn verified_worker(root: &Path, current_helper: &Path) -> Result<PathBuf, String
     Ok(worker)
 }
 
+// Resolve from the installed helper, not a mutable working directory. Keep
+// the ordinary native path for CreateProcessW and Python argv; canonical paths
+// are used solely for identity/containment comparisons.
+fn runtime_root(helper: &Path) -> Result<PathBuf, String> {
+    if !helper.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("vxace-helper.exe")) {
+        return Err(fail("IA_VXACE_HELPER_RUTA_INVALIDA"));
+    }
+    let mut directory = helper.parent().ok_or_else(|| fail("IA_VXACE_HELPER_RUTA_INVALIDA"))?;
+    for expected in ["engine", "Rpg", ".local", "IA Traductora"] {
+        if !directory.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(expected)) {
+            return Err(fail("IA_VXACE_HELPER_RUTA_INVALIDA"));
+        }
+        directory = directory.parent().ok_or_else(|| fail("IA_VXACE_HELPER_RUTA_INVALIDA"))?;
+    }
+    Ok(directory.to_owned())
+}
+
+fn startup_directory(root: &Path) -> Result<PathBuf, String> {
+    let canonical = root.canonicalize().map_err(|_| fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"))?;
+    let mut directory = root.to_owned();
+    for part in ["IA Traductora", ".local", "Rpg"] {
+        directory.push(part);
+        let info = directory.symlink_metadata().map_err(|_| fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"))?;
+        if !info.is_dir() || info.file_type().is_symlink() {
+            return Err(fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if info.file_attributes() & 0x400 != 0 {
+                return Err(fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"));
+            }
+        }
+    }
+    if !directory.canonicalize().map_err(|_| fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"))?.starts_with(&canonical) {
+        return Err(fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"));
+    }
+    Ok(directory)
+}
+
+fn startup_record(path: &Path, data: &[u8]) -> Result<(), String> {
+    if let Ok(info) = path.symlink_metadata() {
+        if !info.is_file() || info.file_type().is_symlink() || info.len() > 1024 {
+            return Err(fail("IA_VXACE_DIAGNOSTICO_NO_SEGURO"));
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if info.file_attributes() & 0x400 != 0 {
+                return Err(fail("IA_VXACE_DIAGNOSTICO_NO_SEGURO"));
+            }
+        }
+    }
+    let directory = path.parent().ok_or_else(|| fail("IA_VXACE_DIAGNOSTICO_NO_SEGURO"))?;
+    let mut temp = tempfile::NamedTempFile::new_in(directory).map_err(|_| fail("IA_VXACE_DIAGNOSTICO_NO_SEGURO"))?;
+    temp.write_all(data).map_err(|_| fail("IA_VXACE_DIAGNOSTICO_NO_SEGURO"))?;
+    temp.as_file().sync_all().map_err(|_| fail("IA_VXACE_DIAGNOSTICO_NO_SEGURO"))?;
+    temp.persist(path).map_err(|_| fail("IA_VXACE_DIAGNOSTICO_NO_SEGURO"))?;
+    Ok(())
+}
+
 fn launch_worker(args: &[String]) -> Result<serde_json::Value, String> {
-    // The caller supplies only the game process ID; the executable, resource
-    // paths and child arguments are derived from the verified installation.
     let parent = args.get(2).and_then(|s| s.parse::<u32>().ok()).filter(|p| *p > 0)
         .ok_or_else(|| fail("IA_VXACE_PARENT_INVALIDO"))?;
     if args.len() != 3 || args[1] != "--parent-pid" {
         return Err(fail("IA_VXACE_PARENT_INVALIDO"));
     }
-    let root = env::current_dir().map_err(|_| fail("IA_VXACE_JUEGO_NO_VALIDO"))?
-        .canonicalize().map_err(|_| fail("IA_VXACE_JUEGO_NO_VALIDO"))?;
     let helper = env::current_exe().map_err(|_| fail("IA_VXACE_HELPER_RUTA_INVALIDA"))?;
-    let worker = verified_worker(&root, &helper)?;
-    let mut command = std::process::Command::new(worker);
-    command.current_dir(&root).arg("--game-root").arg(&root)
-        .arg("--parent-pid").arg(parent.to_string())
-        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let root = runtime_root(&helper)?;
+    let diagnostics = startup_directory(&root)?;
+    let helper_status = diagnostics.join(format!("vxace-startup-helper-{parent}.txt"));
+    let worker_status = diagnostics.join(format!("vxace-startup-worker-{parent}.json"));
+    startup_record(&helper_status, b"IA_VXACE_LAUNCH_CHECKING\n")?;
+    let result = (|| {
+        let verified = verified_worker(&root, &helper)?;
+        let worker = root.join(SIDECAR).join("engine/IATraductora.exe");
+        if worker.canonicalize().map_err(|_| fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"))? !=
+            verified.canonicalize().map_err(|_| fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"))? {
+            return Err(fail("IA_VXACE_RUNTIME_RUTA_INVALIDA"));
+        }
+        startup_record(&worker_status, b"{\"schema\":\"ia-traductora-startup-v1\",\"code\":\"IA_VXACE_WORKER_STARTING\"}\n")?;
+        let mut command = std::process::Command::new(worker);
+        command.current_dir(&root).arg("--game-root").arg(&root)
+            .arg("--parent-pid").arg(parent.to_string())
+            .arg("--diagnostic-file").arg(&worker_status)
+            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let child = command.spawn().map_err(|_| fail("IA_VXACE_WORKER_NO_INICIA"))?;
+        // Status writes must never start a second child if the first started.
+        let _ = startup_record(&helper_status, b"IA_VXACE_WORKER_SPAWNED\n");
+        Ok(json!({"schema":"ia-vxace-launch-v1","pid":child.id()}))
+    })();
+    if let Err(ref code) = result {
+        let _ = startup_record(&helper_status, format!("{code}\n").as_bytes());
     }
-    let child = command.spawn().map_err(|_| fail("IA_VXACE_WORKER_NO_INICIA"))?;
-    Ok(json!({"schema":"ia-vxace-launch-v1","pid":child.id()}))
+    result
 }
 
 fn main() {

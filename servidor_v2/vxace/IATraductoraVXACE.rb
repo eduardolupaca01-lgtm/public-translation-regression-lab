@@ -3,7 +3,7 @@
 # Servidor / Ruby 1.9.2 core-only adapter. No socket, JSON, gems or overlay.
 # The verified native helper launches the same game-local OPUS worker.
 module IATraductoraVXACE
-  PLUGIN_BUILD = 'VXACE-RGSS3-20261126-C'
+  PLUGIN_BUILD = 'VXACE-RGSS3-20261126-D'
   SIDECAR = File.join('IA Traductora', '.local', 'Rpg')
   SESSION = 'IA-VXACE-SESSION-1'
   REQUEST = 'IA-VXACE-REQUEST-1'
@@ -76,6 +76,24 @@ module IATraductoraVXACE
       false
     end
 
+    def startup_helper_code
+      raw = bounded_read(local("vxace-startup-helper-#{Process.pid}.txt"), 512)
+      code = raw && raw.strip
+      code && code =~ /\AIA_[A-Z0-9_]{4,90}\z/ ? code : nil
+    rescue StandardError
+      nil
+    end
+
+    def launch_diagnostic
+      # Only status categories; never read/display tokens or dialogue.
+      helper = startup_helper_code || @launch_error || 'IA_VXACE_LAUNCH_NOT_REPORTED'
+      raw = bounded_read(local("vxace-startup-worker-#{Process.pid}.json"), 1024)
+      worker = raw && raw[/"code"\s*:\s*"(IA_[A-Z0-9_]{4,90})"/, 1]
+      helper + ' / ' + (worker || 'IA_VXACE_WORKER_NOT_REPORTED')
+    rescue StandardError
+      'IA_VXACE_LAUNCH_DIAGNOSTIC_UNAVAILABLE'
+    end
+
     def start
       return if @started
       @started = true
@@ -89,12 +107,32 @@ module IATraductoraVXACE
         raise 'IA_VXACE_LAUNCH' if result <= 32
       else
         # Desktop Ruby fixture: no shell and no externally provided command.
-        pid = Process.spawn(helper, 'launch-worker', '--parent-pid', Process.pid.to_s,
+        # Explicit executable/argv0 tuple: do not let Ruby split a Unicode
+        # path containing spaces or invoke a command interpreter.
+        pid = Process.spawn([helper, helper], 'launch-worker', '--parent-pid', Process.pid.to_s,
                             :chdir => root, :out => File::NULL, :err => File::NULL)
-        Process.detach(pid)
+        @launch_process = Process.detach(pid)
       end
+    rescue StandardError => error
+      @launch_error = case error
+      when Errno::ENOENT then 'IA_VXACE_HELPER_NO_ENCONTRADO'
+      when Errno::EACCES then 'IA_VXACE_HELPER_ACCESO_DENEGADO'
+      when ArgumentError, EncodingError then 'IA_VXACE_HELPER_ARGUMENTO_INVALIDO'
+      else
+        error.message == 'IA_VXACE_HELPER' ? 'IA_VXACE_HELPER_NO_VERIFICADO' : 'IA_VXACE_HELPER_LAUNCH_FAILED'
+      end
+      @status = 'OPUS no disponible: ' + @launch_error
+    end
+
+    def launch_failed?
+      return true if @launch_error
+      if @launch_process && !@launch_process.alive?
+        return true unless @launch_process.value.success?
+      end
+      code = startup_helper_code
+      code && !['IA_VXACE_LAUNCH_CHECKING', 'IA_VXACE_WORKER_SPAWNED'].include?(code)
     rescue StandardError
-      @status = 'OPUS no disponible'
+      false
     end
 
     def session
@@ -223,10 +261,10 @@ module IATraductoraVXACE
 
     def advance(p)
       return true if p[:queue].empty? && !p[:active]
-      if Time.now.to_f >= p[:deadline]
+      if launch_failed? || Time.now.to_f >= p[:deadline]
         @failures += p[:queue].inject(0) { |n,keys| n + keys.length }
         @failures += p[:active][3].length if p[:active]
-        @status = 'Espera agotada; original conservado'
+        @status = 'Original conservado: ' + launch_diagnostic
         return true
       end
       return false if Time.now.to_f < p[:next_poll]

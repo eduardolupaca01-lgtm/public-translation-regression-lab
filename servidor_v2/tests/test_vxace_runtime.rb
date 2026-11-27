@@ -139,11 +139,26 @@ elsif ARGV[0]=='--real'
     load installed
     deadline=Time.now+180
     until IATraductoraVXACE.session
-      assert(Time.now<deadline,'IA_VXACE_VERIFIED_WORKER_BOOT_TIMEOUT')
+      assert(!IATraductoraVXACE.launch_failed?, 'IA_VXACE_VERIFIED_LAUNCH_FAILED: '+IATraductoraVXACE.launch_diagnostic)
+      assert(Time.now<deadline,'IA_VXACE_VERIFIED_WORKER_BOOT_TIMEOUT: '+IATraductoraVXACE.launch_diagnostic)
       sleep 0.2
     end
     checks(false)
   end
+elsif ARGV[0]=='--launch-probe'
+  game=File.realpath(ARGV.fetch(1))
+  Dir.chdir(game) do
+    load File.expand_path(File.join(SIDECAR,'engine','vxace','IATraductoraVXACE.rb'))
+    deadline=Time.now+30
+    loop do
+      status=IATraductoraVXACE.launch_diagnostic
+      break if status.include?('IA_VXACE_PROBE_READY')
+      assert(!IATraductoraVXACE.launch_failed?, 'IA_VXACE_PROBE_LAUNCH_FAILED: '+status)
+      assert(Time.now<deadline,'IA_VXACE_PROBE_TIMEOUT: '+status)
+      sleep 0.1
+    end
+    puts 'IA_VXACE_RUBY_UNICODE_NATIVE_SPAWN_PASS'
+  end
 else
-  raise 'use --mock or --real <fixture>'
+  raise 'use --mock, --real or --launch-probe <fixture>'
 end

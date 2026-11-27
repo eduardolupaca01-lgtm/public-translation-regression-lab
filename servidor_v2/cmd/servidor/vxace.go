@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	vxacePluginBuildID = "VXACE-RGSS3-20261126-C"
+	vxacePluginBuildID = "VXACE-RGSS3-20261126-D"
 	vxaceLibraryName = "RGSS301.dll"
 	vxaceArchiveName = "Game.rgss3a"
 	vxaceMaxArchive  = int64(900 * 1024 * 1024)

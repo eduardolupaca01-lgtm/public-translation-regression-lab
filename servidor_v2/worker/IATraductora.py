@@ -602,10 +602,19 @@ class Service:
             try:
                 self.game,self.content=game_root(game)
             except ValueError as original:
+                # An ambiguous or damaged JS engine is not a VX Ace fallback.
+                if str(original)!="IA_SOLAMENTE_RPG_MV_MZ":
+                    raise
                 try:
                     self.game,self.content=vxace_game_root(game)
                     self.vxace=True
-                except (ValueError,OSError):
+                except (ValueError,OSError) as vxace_error:
+                    candidate=Path(game)
+                    if ((candidate/"Game.ini").is_file() and
+                        any((candidate/name).exists() for name in
+                            ("RGSS300.dll","RGSS301.dll","System/RGSS300.dll",
+                             "System/RGSS301.dll","Game.rgss3a","Data/Scripts.rvdata2"))):
+                        raise vxace_error
                     raise original
         engine=engine.resolve(strict=True)
         if engine.is_symlink() or not engine.is_relative_to(self.game):
@@ -974,7 +983,7 @@ def monitor_game_lifetime(http, parent_pid):
             kernel.CloseHandle(handle)
     threading.Thread(target=watch, daemon=True, name="IA-Game-Lifetime").start()
 
-def run(service,parent_pid=0):
+def run(service,parent_pid=0,diagnostic_file=None):
     http=ThreadingHTTPServer(("127.0.0.1",0),make_handler(service))
     dest=None
     ipc=None
@@ -984,6 +993,8 @@ def run(service,parent_pid=0):
             ipc.start()
         dest=publish(service,http.server_port)
         monitor_game_lifetime(http,parent_pid)
+        if service.vxace and ipc is not None:
+            write_startup_code(diagnostic_file,"IA_VXACE_SESSION_READY")
         http.serve_forever(poll_interval=0.5)
     finally:
         http.server_close()
@@ -1005,6 +1016,8 @@ def safe_startup_code(error):
              "IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO","IA_VXACE_RGSS3A_INVALIDO",
              "IA_VXACE_DATA_NO_DISPONIBLE","IA_VXACE_DATA_INCOMPLETA",
              "IA_VXACE_MARSHAL_INVALIDO","IA_VXACE_ARCHIVO_DE_OTRO_MOTOR",
+             "IA_VXACE_IPC_SESION_INVALIDA","IA_VXACE_IPC_RUTA_INVALIDA",
+             "IA_VXACE_IPC_LOCK_INVALIDO","IA_VXACE_IPC_DESCRIPTOR_INVALIDO",
              "IA_RPG_RUTAS_AMBIGUAS","IA_RPG_MZ_COMPRIMIDO_NO_VALIDO",
              "IA_MOTOR_FUERA_DEL_JUEGO","IA_MODELO_INCOMPLETO",
              "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO",
@@ -1045,8 +1058,9 @@ def write_startup_code(filename, code):
         file = Path(filename)
         if file.is_symlink() or not file.parent.is_dir():
             return
-        file.write_text(json.dumps({"schema": "ia-traductora-startup-v1", "code": code})+"\n",
-                        encoding="utf8")
+        if file.exists() and not _ipc_regular(file,1024):
+            return
+        _ipc_atomic(file,(json.dumps({"schema": "ia-traductora-startup-v1", "code": code})+"\n").encode("utf8"))
     except OSError:
         pass
 
@@ -1071,7 +1085,7 @@ def main():
         write_startup_code(args.diagnostic_file,"IA_VALIDANDO_ESTRUCTURA_RPG")
         service=Service(args.game_root,engine,halva_content=args.halva_content)
         write_startup_code(args.diagnostic_file,"IA_MODELOS_CARGADOS_SERVICIO_INICIANDO")
-        run(service,args.parent_pid)
+        run(service,args.parent_pid,args.diagnostic_file)
     except Exception as exc:
         write_startup_code(args.diagnostic_file,safe_startup_code(exc))
         raise SystemExit(1)
