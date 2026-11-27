@@ -47,8 +47,15 @@ func iaReadOwner(filename string)(ownerManifest,error){
  var o ownerManifest
  if !ordinary(filename){return o,errors.New("IA_IDENTIDAD_NO_VERIFICADA")}
  bytes,err:=os.ReadFile(filename)
- if err!=nil||len(bytes)>2048||json.Unmarshal(bytes,&o)!=nil||
+ if err!=nil||len(bytes)>4096||json.Unmarshal(bytes,&o)!=nil||
   o.Schema!=ownerSchema||len(o.WorkerSHA)!=64||len(o.PluginSHA)!=64{
+  return o,errors.New("IA_IDENTIDAD_NO_VERIFICADA")
+ }
+ if (o.VXACEHelperSHA=="")!=(o.VXACEPluginSHA=="") {
+  return o,errors.New("IA_IDENTIDAD_NO_VERIFICADA")
+ }
+ if o.VXACEHelperSHA!=""&&(len(o.VXACEHelperSHA)!=64||len(o.VXACEPluginSHA)!=64||
+  o.VXACEPluginBuild!=vxacePluginBuildID) {
   return o,errors.New("IA_IDENTIDAD_NO_VERIFICADA")
  }
  return o,nil
@@ -72,6 +79,14 @@ func iaSortedFiles(pkg *packageReader)[]string{
 }
 func iaCheckEngine(root string,pkg *packageReader)error{
  if err:=iaCheckOwner(root,pkg);err!=nil{return err}
+ if helper:=pkg.manifest.Files["vxace-helper.exe"];helper!="" {
+  owner,err:=iaReadOwner(filepath.Join(root,"owner-v1.json"))
+  if err!=nil||owner.VXACEHelperSHA!=helper||
+   owner.VXACEPluginSHA!=pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"]||
+   owner.VXACEPluginBuild!=vxacePluginBuildID {
+   return errors.New("IA_VXACE_PROPIEDAD_NO_VERIFICADA")
+  }
+ }
  for _,name:=range iaSortedFiles(pkg){
   filename:=filepath.Join(root,".local","Rpg","engine",filepath.FromSlash(name))
   if !ordinary(filename){return errors.New("IA_MODELO_NO_VERIFICADO")}
@@ -162,6 +177,20 @@ func iaCopyVerifiedStage(stage,folder string,pkg *packageReader)error{
   src:=filepath.Join(stage,rel);dest:=filepath.Join(folder,rel)
   if err=iaCopyFileOnlyIfMissing(src,dest,pkg.manifest.Files[name]);err!=nil{return err}
  }
+ if helper:=pkg.manifest.Files["vxace-helper.exe"];helper!="" {
+  owner,readErr:=iaReadOwner(own)
+  if readErr!=nil{return readErr}
+  wantPlugin:=pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"]
+  if owner.VXACEHelperSHA!=""&&(owner.VXACEHelperSHA!=helper||owner.VXACEPluginSHA!=wantPlugin) {
+   return errors.New("IA_VXACE_PROPIEDAD_NO_VERIFICADA")
+  }
+  owner.Product="TENSHIXGAME-SERVIDOR"
+  owner.VXACEHelperSHA=helper
+  owner.VXACEPluginSHA=wantPlugin
+  owner.VXACEPluginBuild=vxacePluginBuildID
+  marker,_:=json.MarshalIndent(owner,"","  ")
+  if err=writeAtomic(own,marker);err!=nil{return errors.New("IA_VXACE_MARCADOR_NO_PUBLICADO")}
+ }
  if err=iaCheckEngine(folder,pkg);err!=nil{return err}
  if err=iaMakeSafeDirs(folder,"install");err!=nil{return err}
  return nil
@@ -210,7 +239,10 @@ func iaPrepareStage(game string,pkg *packageReader)(string,error){
   }
  }
  own:=ownerManifest{Schema:ownerSchema,WorkerSHA:pkg.manifest.Files["IATraductora.exe"],
-  PluginSHA:pkg.manifest.Files["IATraductora.js"]}
+  PluginSHA:pkg.manifest.Files["IATraductora.js"],Product:"TENSHIXGAME-SERVIDOR",
+  VXACEHelperSHA:pkg.manifest.Files["vxace-helper.exe"],
+  VXACEPluginSHA:pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"]}
+ if own.VXACEHelperSHA!=""{own.VXACEPluginBuild=vxacePluginBuildID}
  bytes,_:=json.MarshalIndent(own,"","  ")
  if err=createNew(filepath.Join(stage,"owner-v1.json"),bytes);err!=nil{return "",errors.New("IA_ETAPA_NO_SE_PUEDE_MARCAR")}
  if err=iaMakeSafeDirs(stage,"install");err!=nil{return "",err}
