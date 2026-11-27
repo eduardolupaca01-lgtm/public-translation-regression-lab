@@ -1,7 +1,7 @@
-use encoding_rs::SHIFT_JIS;
+use encoding_rs::{SHIFT_JIS, WINDOWS_1252, GBK, BIG5, EUC_KR};
 use marshal_rs::{dump, load};
 use rpgmad_lib::{
-    decrypt_from_reader, encrypt_to_writer, ArchiveEntry, Engine, EntrySource,
+    decrypt_from_reader, encrypt_to_writer, Engine, EntrySource,
 };
 use rvpacker_txt_rs_lib::{core::Base, types::Scripts};
 use serde_json::json;
@@ -36,7 +36,6 @@ struct GameLayout {
 #[derive(Debug, Clone)]
 struct EntryRecord {
     raw_path: Vec<u8>,
-    decoded_path: String,
     file: PathBuf,
     size: usize,
     sha256: String,
@@ -279,31 +278,52 @@ fn patch_scripts(original: &[u8], plugin: &str) -> Result<(Vec<u8>, usize), Stri
     Ok((encoded, index))
 }
 
-fn safe_archive_path(raw: &[u8], index: usize) -> Result<(String, Vec<String>), String> {
-    let (decoded, _, had_errors) = SHIFT_JIS.decode(raw);
-    if had_errors {
-        return Err(format!("IA_VXACE_PATH_ENCODING_{index}"));
+// Archive member names are not filesystem paths in this installer. Preserve
+// their original bytes in the repacked table. Decode strictly only to check
+// path components and case-insensitive duplicates; never transcode a name.
+fn normalized_raw_path(raw: &[u8]) -> Vec<u8> {
+    raw.iter().map(|b| if *b == b'\\' { b'/' } else { b.to_ascii_lowercase() }).collect()
+}
+
+fn ascii_archive_path_eq(raw: &[u8], expected: &str) -> bool {
+    raw.is_ascii() && normalized_raw_path(raw) == expected.as_bytes()
+}
+
+fn safe_archive_path(raw: &[u8], index: usize) -> Result<String, String> {
+    let unsafe_path = || format!("IA_VXACE_PATH_UNSAFE_{index}");
+    // These bytes cannot occur as a continuation byte in the supported
+    // multibyte filename encodings. The raw check also forbids ASCII
+    // traversal components even if the encoding is ambiguous.
+    if raw.is_empty() || matches!(raw.first(), Some(b'/' | b'\\'))
+        || raw.iter().any(|b| *b < 0x20 || *b == 0x7f || *b == b':')
+        || raw.split(|b| *b == b'/' || *b == b'\\')
+            .any(|part| part == b"." || part == b"..")
+    {
+        return Err(unsafe_path());
     }
-    let decoded = decoded.into_owned();
-    let entry = ArchiveEntry {
-        path: decoded.as_bytes(),
-        data: &[],
+    let decoded = if let Ok(value) = std::str::from_utf8(raw) {
+        value.to_owned()
+    } else if let Some(value) = [SHIFT_JIS, GBK, BIG5, EUC_KR, WINDOWS_1252]
+        .iter()
+        .find_map(|encoding| encoding.decode_without_bom_handling_and_without_replacement(raw))
+    {
+        value.into_owned()
+    } else {
+        // Some legacy archives contain opaque, mixed-codepage bytes. A
+        // one-byte-to-one-codepoint view is reversible, unlike U+FFFD.
+        // No decoded view is ever used to name an extracted host file.
+        raw.iter().map(|byte| char::from(*byte)).collect()
     };
-    let components = entry
-        .path_components()
-        .ok_or_else(|| format!("IA_VXACE_PATH_UNSAFE_{index}"))?;
-    let mut parts = Vec::new();
-    for part in components {
-        let value = String::from_utf8(part.to_vec()).map_err(|_| format!("IA_VXACE_PATH_ENCODING_{index}"))?;
-        if value.is_empty() || value == "." || value == ".." || value.contains(':') || value.contains('\0') {
-            return Err(format!("IA_VXACE_PATH_UNSAFE_{index}"));
-        }
-        parts.push(value);
+    // Split the decoded view rather than treating a multibyte trail 0x5c
+    // as a separator (e.g. Shift-JIS ソ). Reject rooted, empty and traversal
+    // components and retain the original safety policy.
+    if decoded.split(['/', '\\']).any(|part|
+        part.is_empty() || part == "." || part == ".." ||
+        part.contains(':') || part.contains('\0'))
+    {
+        return Err(unsafe_path());
     }
-    if parts.is_empty() {
-        return Err(format!("IA_VXACE_PATH_UNSAFE_{index}"));
-    }
-    Ok((decoded, parts))
+    Ok(decoded)
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {
@@ -331,13 +351,14 @@ fn extract_archive(
     let unpacked = staging.join("unpacked");
     fs::create_dir(&unpacked).map_err(|_| fail("IA_VXACE_STAGING_FALLO"))?;
     let mut seen = HashSet::with_capacity(count);
+    let mut seen_raw = HashSet::with_capacity(count);
     let mut records = Vec::with_capacity(count);
     let mut total = 0u64;
     for index in 0..count {
         let raw_path = archive.path(index).to_vec();
-        let (decoded_path, _parts) = safe_archive_path(&raw_path, index)?;
+        let decoded_path = safe_archive_path(&raw_path, index)?;
         let duplicate = decoded_path.replace('\\', "/").to_lowercase();
-        if !seen.insert(duplicate) {
+        if !seen_raw.insert(normalized_raw_path(&raw_path)) || !seen.insert(duplicate) {
             return Err(fail("IA_VXACE_ARCHIVE_DUPLICATE_PATH"));
         }
         // Never materialize an archive-controlled path on the host filesystem.
@@ -363,7 +384,6 @@ fn extract_archive(
         let sha256 = file_sha256(&target)?;
         records.push(EntryRecord {
             raw_path,
-            decoded_path,
             file: target,
             size: copied as usize,
             sha256,
@@ -496,7 +516,7 @@ fn install_game_root(
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
-                if entry.decoded_path.replace('\\', "/").eq_ignore_ascii_case("Data/Scripts.rvdata2") {
+                if ascii_archive_path_eq(&entry.raw_path, "data/scripts.rvdata2") {
                     Some(index)
                 } else {
                     None
@@ -506,8 +526,8 @@ fn install_game_root(
         if script_indices.len() != 1 {
             return Err(fail("IA_VXACE_SCRIPTS_ARCHIVE_ENTRY_MISSING"));
         }
-        for required in ["Data/System.rvdata2", "Data/MapInfos.rvdata2"] {
-            let count = records.iter().filter(|entry| entry.decoded_path.replace('\\', "/").eq_ignore_ascii_case(required)).count();
+        for required in ["data/system.rvdata2", "data/mapinfos.rvdata2"] {
+            let count = records.iter().filter(|entry| ascii_archive_path_eq(&entry.raw_path, required)).count();
             if count != 1 {
                 return Err(fail("IA_VXACE_ARCHIVE_DATA_INCOMPLETE"));
             }
@@ -800,6 +820,7 @@ fn main() {
 mod tests {
     use super::*;
     use marshal_rs::dump;
+    use rpgmad_lib::ArchiveEntry;
     use rvpacker_txt_rs_lib::types::Scripts;
 
     fn make_scripts() -> Vec<u8> {
@@ -903,6 +924,75 @@ mod tests {
     }
 
     #[test]
+    fn mixed_encoded_archive_names_are_safe_without_renaming() {
+        let utf8 = "Graphics\\雪☃.png".as_bytes();
+        let cp1252 = b"Graphics\\Caf\xe9.png";
+        let sjis = b"Graphics\\\x83\x5c\\asset.png";
+        assert!(SHIFT_JIS.decode(cp1252).2, "fixture must reproduce the R33 error");
+        assert_eq!(safe_archive_path(cp1252, 307).unwrap(), "Graphics\\Café.png");
+        assert_eq!(safe_archive_path(utf8, 308).unwrap(), "Graphics\\雪☃.png");
+        assert_eq!(safe_archive_path(sjis, 309).unwrap(), "Graphics\\ソ\\asset.png");
+        assert!(safe_archive_path(b"Graphics\\legacy-\xff.bin", 310).is_ok());
+        assert!(ascii_archive_path_eq(b"DATA\\Scripts.rvdata2", "data/scripts.rvdata2"));
+        assert!(!ascii_archive_path_eq(b"Data\\Script\xe9.rvdata2", "data/scripts.rvdata2"));
+        assert_eq!(normalized_raw_path(b"Graphics\\A.png"), normalized_raw_path(b"graphics/a.PNG"));
+        for unsafe_name in [
+            b"".as_slice(), b"../bad.png", b"Graphics\\..\\bad.png", b"Graphics\\.\\bad.png",
+            b"\\absolute", b"/absolute", b"C:\\bad.png", b"Graphics\\file:stream",
+            b"Graphics\\a\0b.png", b"Graphics\\\x1fb.png", b"Graphics//bad.png",
+            b"Graphics\\\xe9\\..\\bad.png", b"Graphics\\",
+        ] {
+            assert_eq!(safe_archive_path(unsafe_name, 311).unwrap_err(), "IA_VXACE_PATH_UNSAFE_311");
+        }
+    }
+
+    #[test]
+    fn mixed_encoding_roundtrip_preserves_original_name_bytes_and_payloads() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = make_game(&temp.path().join("game"), true);
+        let scripts = make_scripts();
+        let names: &[&[u8]] = &[
+            b"Graphics\\Caf\xe9.png",
+            "Graphics\\雪☃.png".as_bytes(),
+            b"Graphics\\\x83\x5c\\asset.png",
+            b"Graphics\\legacy-\xff.bin",
+        ];
+        let mut entries = vec![
+            ArchiveEntry { path: b"Data\\Scripts.rvdata2", data: &scripts },
+            ArchiveEntry { path: b"Data\\System.rvdata2", data: b"\x04\x08system" },
+            ArchiveEntry { path: b"Data\\MapInfos.rvdata2", data: b"\x04\x08maps" },
+        ];
+        for path in names {
+            entries.push(ArchiveEntry { path, data: b"untouched multilingual asset" });
+        }
+        let archive = root.join("Game.rgss3a");
+        let original = rpgmad_lib::encrypt_to_vec(&entries, Engine::Vxace).unwrap();
+        fs::write(&archive, &original).unwrap();
+        let plugin = root.join("plugin.rb");
+        fs::write(&plugin, make_plugin()).unwrap();
+        let staging = root.join("IA Traductora/.local/Rpg/staging");
+        fs::create_dir_all(&staging).unwrap();
+        let out = staging.join("Game.rgss3a.new");
+        let report = install_game_root(&root, &plugin, &out).unwrap();
+        assert_eq!(report["archive_entries"], 7);
+        assert_eq!(fs::read(&archive).unwrap(), original);
+        let mut patched = decrypt_from_reader(File::open(&out).unwrap()).unwrap();
+        for (index, name) in names.iter().enumerate() {
+            assert_eq!(patched.path(index + 3), *name);
+            let mut bytes = Vec::new();
+            patched.read_entry(index + 3).unwrap().read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"untouched multilingual asset");
+        }
+        // The archive writer may permit aliases; our installer must refuse
+        // them before publication regardless of separator or case.
+        entries.push(ArchiveEntry { path: b"data/scripts.RVDATA2", data: &scripts });
+        fs::write(&archive, rpgmad_lib::encrypt_to_vec(&entries, Engine::Vxace).unwrap()).unwrap();
+        let bad = staging.join("duplicate.new");
+        assert_eq!(install_game_root(&root, &plugin, &bad).unwrap_err(), "IA_VXACE_ARCHIVE_DUPLICATE_PATH");
+        assert!(!bad.exists());
+    }
+
+    #[test]
     fn large_packed_size_gate_and_output_bound() {
         let temp = tempfile::tempdir().unwrap();
         let root = make_game(&temp.path().join("game"), true);
@@ -915,7 +1005,6 @@ mod tests {
         drop(file);
         let mut record = EntryRecord {
             raw_path: b"Graphics/large.bin".to_vec(),
-            decoded_path: "Graphics/large.bin".to_owned(),
             file: path,
             size: 1_216_546 * 1024,
             sha256: String::new(),

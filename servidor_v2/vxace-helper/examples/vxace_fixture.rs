@@ -1,6 +1,6 @@
 //! CI-only fixture generator and inspector. Never runs Game.exe/RGSS301.dll.
 use marshal_rs::{dump, load};
-use rpgmad_lib::{decrypt_from_reader, encrypt_to_vec, encrypt_to_writer, ArchiveEntry, Engine, EntrySource};
+use rpgmad_lib::{decrypt_from_reader, encrypt_to_writer, Engine, EntrySource};
 use rvpacker_txt_rs_lib::{core::Base, types::Scripts};
 use std::{env, fs::{self,File}, io::{self, BufWriter, Cursor, Read, Write}, path::Path};
 
@@ -23,6 +23,24 @@ impl EntrySource for GeneratedEntry {
 }
 fn generated(path: &[u8], data: &[u8]) -> GeneratedEntry {
     GeneratedEntry { path:path.to_vec(), data:data.to_vec(), padding:0, fill:0 }
+}
+
+// Reproduce the user's reported entry index, with both UTF-8 and legacy
+// byte-encoded names in the same archive. No commercial assets are used.
+fn encoding_entries() -> Vec<GeneratedEntry> {
+    let mut result = Vec::new();
+    for n in 4..307 {
+        result.push(generated(format!("Graphics\\qa-encoding-{n:03}.bin").as_bytes(),b"index fixture"));
+    }
+    for name in [
+        b"Graphics\\Caf\xe9.png".as_slice(),
+        "Graphics\\雪☃.png".as_bytes(),
+        b"Graphics\\\x83\x5c\\asset.png",
+        b"Graphics\\legacy-\xff.bin",
+    ] {
+        result.push(generated(name,b"multilingual resource preserved"));
+    }
+    result
 }
 
 fn original() -> Scripts {
@@ -48,27 +66,23 @@ fn make(root:&Path,mode:&str) {
         fs::create_dir(root.join("Data")).unwrap();
         fs::write(root.join("Data/Scripts.rvdata2"),script).unwrap();
         for name in ["System.rvdata2","MapInfos.rvdata2"] {fs::write(root.join("Data").join(name),other).unwrap();}
-    } else if mode=="packed" {
-        let entries=[
-            ArchiveEntry{path:b"Data\\Scripts.rvdata2",data:&script},
-            ArchiveEntry{path:b"Data\\System.rvdata2",data:other},
-            ArchiveEntry{path:b"Data\\MapInfos.rvdata2",data:other},
-            ArchiveEntry{path:b"Graphics\\keep.png",data:b"untouched fixture"},
-        ];
-        fs::write(root.join("Game.rgss3a"),encrypt_to_vec(&entries,Engine::Vxace).unwrap()).unwrap();
     } else {
-        assert_eq!(mode,"packed-large");
+        assert!(mode=="packed" || mode=="packed-large");
         let mut entries=vec![
             generated(b"Data\\Scripts.rvdata2",&script),
             generated(b"Data\\System.rvdata2",other),
             generated(b"Data\\MapInfos.rvdata2",other),
             generated(b"Graphics\\keep.png",b"untouched fixture"),
         ];
-        for i in 0..LARGE_ENTRIES {
-            entries.push(GeneratedEntry {
-                path:format!("Graphics\\qa-large-{i:02}.bin").into_bytes(),
-                data:Vec::new(), padding:LARGE_ENTRY_SIZE, fill:0x31+i as u8,
-            });
+        entries.extend(encoding_entries());
+        assert_eq!(entries[307].path,b"Graphics\\Caf\xe9.png");
+        if mode=="packed-large" {
+            for i in 0..LARGE_ENTRIES {
+                entries.push(GeneratedEntry {
+                    path:format!("Graphics\\qa-large-{i:02}.bin").into_bytes(),
+                    data:Vec::new(), padding:LARGE_ENTRY_SIZE, fill:0x31+i as u8,
+                });
+            }
         }
         let file=File::create(root.join("Game.rgss3a")).unwrap();
         let mut output=BufWriter::new(file);
@@ -76,8 +90,10 @@ fn make(root:&Path,mode:&str) {
         output.flush().unwrap();
         output.into_inner().unwrap().sync_all().unwrap();
         let size=fs::metadata(root.join("Game.rgss3a")).unwrap().len();
-        assert!(size>=1_216_546*1024,"large archive fixture is too small");
-        println!("IA_VXACE_LARGE_FIXTURE_BYTES={size}");
+        if mode=="packed-large" {
+            assert!(size>=1_216_546*1024,"large archive fixture is too small");
+            println!("IA_VXACE_LARGE_FIXTURE_BYTES={size}");
+        }
     }
     fs::write(root.join("Save01.rvdata2"),b"unchanged save fixture").unwrap();
 }
@@ -88,7 +104,16 @@ fn verify(root:&Path,plugin:&Path) {
         let mut archive=decrypt_from_reader(File::open(path).unwrap()).unwrap();
         let mut bytes=Vec::new();
         let mut seen=[false;LARGE_ENTRIES];
+        let mixed=encoding_entries();
         let mut kept=false;
+        for (n,expected) in mixed.iter().enumerate() {
+            let i=n+4;
+            assert_eq!(archive.path(i),expected.path.as_slice(),"encoded name bytes changed");
+            let mut payload=Vec::new();
+            archive.read_entry(i).unwrap().take(128).read_to_end(&mut payload).unwrap();
+            assert_eq!(payload,expected.data,"encoded-name payload changed");
+        }
+        println!("IA_VXACE_MIXED_ENCODING_ENTRY_307_AND_PAYLOADS_PASS");
         for i in 0..archive.entry_count() {
             let name=archive.path(i).to_vec();
             if name.eq_ignore_ascii_case(b"Data\\Scripts.rvdata2") {
@@ -120,7 +145,7 @@ fn verify(root:&Path,plugin:&Path) {
             }
         }
         assert!(kept);
-        assert_eq!(archive.entry_count(),4+if large { LARGE_ENTRIES } else { 0 });
+        assert_eq!(archive.entry_count(),4+mixed.len()+if large { LARGE_ENTRIES } else { 0 });
         assert_eq!(seen.iter().filter(|value| **value).count(),if large { LARGE_ENTRIES } else { 0 });
         if large { println!("IA_VXACE_LARGE_NON_SCRIPT_PAYLOADS_PRESERVED_PASS"); }
         bytes

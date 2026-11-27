@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // Keep the MV/MZ plugin identity tied to the unchanged JS payload.
  installerBuildID="RPG-MVMZ-R30-20261126"
- packageBuildID="RPG-MVMZ-VXACE-R33-20261126"
+ packageBuildID="RPG-MVMZ-VXACE-R34-20261126"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
