@@ -170,6 +170,12 @@ func iaSafeInstallCode(message string)string{
 }
 func iaFriendlyInstall(code string)string{
     switch code{
+    case rpgxpPendingCode:
+        return "RPG Maker XP (RGSS1) detectado. El adaptador XP aún requiere validación; juego intacto."
+    case rpgxpPackedCode:
+        return "RPG Maker XP con archivo RGSSAD detectado. Formato empaquetado aún no admitido; juego intacto."
+    case rpgxpInvalidCode:
+        return "RPG Maker XP detectado, pero sus recursos no se han podido verificar. Juego intacto."
     case cookToolPackedCode:
         return "RPG Maker Dragonhouse/Halva detectado. Requiere una exportación o integración autorizada; no se han modificado los paquetes."
     case "IA_HALVA_VERSION_EXISTENTE_CONSERVADA":
@@ -455,6 +461,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                     code:=iaSafeInstallCode(e.Error())
                     if code==cookToolPackedCode||code==cookToolUnsafeCode{
                         iaLog("[IA_RPG_HALVA_DETECTADO] "+e.Error())
+                        iaSet(ui.status,iaFriendlyInstall(code))
+                    }else if strings.HasPrefix(code,"IA_RPGXP_"){
+                        iaLog("[IA_RPGXP_DETECTADO] "+code)
                         iaSet(ui.status,iaFriendlyInstall(code))
                     }else{
                         iaLog("[IA_EXE_NO_COMPATIBLE] "+code)

@@ -224,6 +224,12 @@ func detectGame(gameEXE string)(string,string,error){
    chosen=dir
   }
  }
+ // XP is a different Ruby runtime, not a JS or RGSS3 installation target.
+ if matched,xpErr:=detectRPGXP(gameEXE);matched{
+  if chosen!=""{return "","",errors.New("IA_RPG_RUTAS_AMBIGUAS")}
+  if xpErr!=nil{return "","",xpErr}
+  return "","",errors.New(rpgxpPendingCode)
+ }
  if chosen==""{return "","",errors.New("IA_SOLO_RPG_MAKER_MV_MZ")}
  if info,err:=os.Lstat(filepath.Join(chosen,"js","plugins"));err!=nil||!info.IsDir()||
  info.Mode()&os.ModeSymlink!=0{return "","",errors.New("IA_CARPETA_PLUGINS_INVALIDA")}

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/servidor-v2-rpg-vxace-integration-20261126
+      - feature/servidor-r43-rpgxp-rgss1
     paths:
       - 'servidor_v2/**'
       - '.github/workflows/servidor-vxace-integration.yml'
