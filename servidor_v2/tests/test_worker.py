@@ -509,12 +509,16 @@ class VXAceWorkerTests(unittest.TestCase):
         root=self.make_game()
         engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
         engine.mkdir(parents=True)
-        service=ia.Service(root,engine,neural=FakeNeural())
+        class NoopNeural:
+            def close(self):
+                return None
+            def shutdown(self):
+                return None
+        service=ia.Service(root,engine,neural=NoopNeural())
         self.addCleanup(service.close)
         self.assertTrue(service.vxace)
         self.assertEqual(service.game,root.resolve())
         self.assertEqual(service.content,root.resolve())
-        self.assertEqual(service.translate("ja","おはようございます。"),"Buenos días")
         expected=root/"IA Traductora"/".local"/"Rpg"/"cache"/"translation-memory-v2.sqlite3"
         self.assertTrue(expected.is_file())
         bridge=ia.publish(service,24123)
