@@ -646,6 +646,39 @@ def rpgxp_game_root(exe_root:Path)->tuple[Path,Path]:
     return root,root
 
 
+def verified_rpgxp_install(game,engine):
+    root,_=rpgxp_game_root(game)
+    folder=_ipc_directory(root/"IA Traductora",root)
+    installed=_ipc_directory(folder/"install",root)
+    journal=_ipc_directory(installed/"rpgxp",root)
+    engine=Path(engine).absolute()
+    expected=folder
+    for part in (".local","Rpg","engine"):expected=_ipc_directory(expected/part,root)
+    if engine!=expected:raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
+    def record(file,limit):
+        if not _ipc_regular(file,limit):raise ValueError("IA_RPGXP_INSTALACION_NO_VERIFICADA")
+        return json.loads(file.read_text("utf8"))
+    owner=record(folder/"owner-v1.json",4096)
+    r=record(journal/"receipt.json",8192)
+    if (owner.get("schema")!="ia-traductora-owner-v1" or owner.get("product")!="SERVIDOR-IA-TRADUCTORA"
+        or r.get("schema")!="ia-rpgxp-install-v1" or r.get("build")!="RPGXP-RGSS1-R43-LAB-2"
+        or r.get("status")!="INSTALLED" or r.get("target_rel")!="Data/Scripts.rxdata"
+        or owner.get("worker_sha256")!=r.get("worker_sha256")):
+        raise ValueError("IA_RPGXP_INSTALACION_NO_VERIFICADA")
+    _ipc_directory(engine/"rpgxp",root)
+    for file,key,limit in ((root/"Data"/"Scripts.rxdata","after_sha256",64*1024*1024),
+      (journal/"Scripts.original.rxdata","before_sha256",64*1024*1024),
+      (engine/"rpgxp"/"IATraductoraXP.rb","plugin_sha256",1024*1024),
+      (engine/"rpgxp-launcher.exe","launcher_sha256",128*1024*1024),
+      (engine/"IATraductora.exe","worker_sha256",450*1024*1024)):
+        want=r.get(key)
+        if not isinstance(want,str) or not re.fullmatch(r"[0-9a-f]{64}",want) or not _ipc_regular(file,limit):
+            raise ValueError("IA_RPGXP_INSTALACION_NO_VERIFICADA")
+        with file.open("rb") as stream:
+            actual=hashlib.file_digest(stream,"sha256").hexdigest()
+        if actual!=want:raise ValueError("IA_RPGXP_INSTALACION_NO_VERIFICADA")
+
+
 def verified_halva_runtime(game:Path, runtime:Path):
     # Only a declared, owned installation; the launcher may provide an
     # external temporary content directory. No scanning for unrelated caches.
@@ -822,7 +855,7 @@ def make_handler(service:Service):
         sys_version=""
         # VX Ace drains its HTTP threads before closing the persistent memory.
         # Bound stalled local clients so shutdown cannot wait forever for input.
-        timeout=10 if getattr(service,"vxace",False) else None
+        timeout=10 if (getattr(service,"vxace",False) or getattr(service,"rpgxp",False)) else None
         def log_message(self,*_):pass
         def send(self,status,obj):
             body=json.dumps(obj,ensure_ascii=False).encode("utf8")
@@ -867,7 +900,7 @@ def make_handler(service:Service):
     return Handler
 
 def publish(service,port):
-    folder=service.game/"IA Traductora"/".local"/"Rpg" if (getattr(service,"halva",False) or getattr(service,"vxace",False)) else service.content/"data"/"IATraductora"
+    folder=service.game/"IA Traductora"/".local"/"Rpg" if (getattr(service,"halva",False) or getattr(service,"vxace",False) or getattr(service,"rpgxp",False)) else service.content/"data"/"IATraductora"
     folder.mkdir(exist_ok=True,mode=0o700)
     if folder.is_symlink() or not folder.resolve().is_relative_to(service.game):
         raise RuntimeError("IA_PUENTE_INSEGURO")
@@ -1109,7 +1142,8 @@ def monitor_game_lifetime(http, parent_pid):
 
 def run(service,parent_pid=0,diagnostic_file=None):
     http=ThreadingHTTPServer(("127.0.0.1",0),make_handler(service))
-    if service.vxace:
+    xp=getattr(service,"rpgxp",False)
+    if service.vxace or xp:
         # ThreadingHTTPServer normally abandons daemon request handlers.
         # Keep them joinable here, so a final translation cannot race SQLite close.
         http.daemon_threads=False
@@ -1117,13 +1151,13 @@ def run(service,parent_pid=0,diagnostic_file=None):
     dest=None
     ipc=None
     try:
-        if service.vxace and parent_pid > 0:
-            ipc=VXAceFileBridge(service,parent_pid)
+        if (service.vxace or xp) and parent_pid > 0:
+            ipc=(RPGXPFileBridge if xp else VXAceFileBridge)(service,parent_pid)
             ipc.start()
         dest=publish(service,http.server_port)
         monitor_game_lifetime(http,parent_pid)
-        if service.vxace and ipc is not None:
-            write_startup_code(diagnostic_file,"IA_VXACE_SESSION_READY")
+        if (service.vxace or xp) and ipc is not None:
+            write_startup_code(diagnostic_file,"IA_RPGXP_SESSION_READY" if xp else "IA_VXACE_SESSION_READY")
         http.serve_forever(poll_interval=0.5)
     finally:
         # Drain both transports, close SQLite, then withdraw session ownership.
@@ -1151,7 +1185,7 @@ def safe_startup_code(error):
     # the private worker through this diagnostic.
     raw = str(error).lower()
     # Enumerate safe startup categories; never expose a raw path or game text.
-    allowed={"IA_JUEGO_NO_VALIDO","IA_GAME_ROOT_FALTANTE","IA_SOLAMENTE_RPG_MV_MZ",
+    allowed={"IA_RPGXP_INSTALACION_NO_VERIFICADA","IA_RPGXP_RECURSOS_NO_VERIFICADOS","IA_JUEGO_NO_VALIDO","IA_GAME_ROOT_FALTANTE","IA_SOLAMENTE_RPG_MV_MZ",
              "IA_VXACE_JUEGO_NO_VALIDO","IA_VXACE_GAME_INI_INVALIDO","IA_VXACE_RUNTIME_NO_VERIFICADO",
              "IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO","IA_VXACE_RGSS3A_INVALIDO",
              "IA_VXACE_DATA_NO_DISPONIBLE","IA_VXACE_DATA_INCOMPLETA",
@@ -1214,11 +1248,23 @@ def main():
     p.add_argument("--web-port",type=int,default=8765)
     p.add_argument("--web-no-browser",action="store_true")
     p.add_argument("--parent-pid",type=int,default=0)
+    p.add_argument("--rpgxp-lab",action="store_true")
     p.add_argument("--check-models",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
     args=p.parse_args()
     engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
     try:
+        if args.rpgxp_lab:
+            if args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid<=0:
+                raise ValueError("IA_RPGXP_INSTALACION_NO_VERIFICADA")
+            verified_rpgxp_install(args.game_root,engine)
+            service=Service(args.game_root,engine,rpgxp_mode=True)
+            try:
+                service.neural.check_all()
+            except Exception:
+                service.close();raise
+            run(service,args.parent_pid,args.diagnostic_file)
+            return
         if args.check_models:
             neural = NeuralOPUS(engine)
             neural.check_all()

@@ -112,6 +112,7 @@ func readPackage(filename string)(*packageReader,error){
    return nil,errors.New("IA_VXACE_MANIFIESTO_INVALIDO")
   }
  }
+ if (files[xpLauncherAsset]!=nil)!=(files[xpPluginAsset]!=nil){return nil,errors.New("IA_RPGXP_PAQUETE_INCOMPLETO")}
  // Keep old packages readable; the optional desktop host is all-or-nothing.
  hostCount:=0
  for _,name:=range webHostFiles{if files["webhost/"+name]!=nil{hostCount++}}
@@ -440,7 +441,16 @@ func main(){
  webEXE:=flag.String("web-exe","","EXE Go con recursos web embed.FS (lectura estática, sin ejecutarlo)")
  webCopy:=flag.Bool("web-copy",false,"Preparar copia web independiente con lanzador de escritorio")
  webCopyParent:=flag.String("web-copy-parent","","Carpeta existente para la copia web")
+ xpLabInstall:=flag.Bool("xp-lab-install",false,"Experimental XP installation on a CLOSED loose copy")
+ xpLabRecover:=flag.Bool("xp-lab-recover",false,"Restore an XP laboratory installation")
+ xpParent:=flag.Int("xp-launch-parent",0,"Internal installed XP launcher; parent PID")
  flag.Parse()
+ if *xpLabInstall||*xpLabRecover||*xpParent!=0 {
+  if err:=xpLabCommand(*xpLabInstall,*xpLabRecover,*xpParent,*exe,*payload);err!=nil{
+   fmt.Fprintln(os.Stderr,err);os.Exit(1)
+  }
+  return
+ }
  webInput:=*webFolder!=""||*webEXE!=""
  if (*webFolder!=""&&*webEXE!="")||(*webEXE!=""&&!*webCopy)||
     (*webCopy&&(!webInput||*webNoBrowser||*webPort!=8765))||(!*webCopy&&*webCopyParent!=""){

@@ -4,7 +4,7 @@
 # A separately verified transport supplies poll(lang, text). Until one
 # is attached, native messages continue unchanged.
 module IATraductoraXP
-  BUILD = 'RPGXP-RGSS1-R43-LAB-1'
+  BUILD = 'RPGXP-RGSS1-R43-LAB-2'
   MAX_WAIT = 8.0
   MAX_CACHE = 4096
   MAX_BYTES = 7200
@@ -19,6 +19,7 @@ module IATraductoraXP
     SIDECAR=File.join('IA Traductora','.local','Rpg')
     LIMIT=96*1024
     def initialize
+      @cwd=Dir.pwd
       @token=nil
       @serial=0
       @pending={}
@@ -41,7 +42,7 @@ module IATraductoraXP
       nil
     end
     def session
-      return nil unless safe_dir(SIDECAR)
+      return nil unless Dir.pwd==@cwd && safe_dir(SIDECAR)
       raw=read(File.join(SIDECAR,'rpgxp-session.txt'),512)
       return nil unless raw
       fields=raw.split("\n")
@@ -115,6 +116,46 @@ module IATraductoraXP
   class << self
     def attach(transport)
       @transport = transport
+    end
+    def wide_ascii(text)
+      (text.unpack('C*')+[0]).pack('v*')
+    end
+    def fold_path(units)
+      units.map { |u| u>=65 && u<=90 ? u+32 : (u==47 ? 92 : u) }
+    end
+    def start_native
+      return false unless defined?(Win32API) && defined?(Window_Message)
+      return false if @transport
+      # Resolve the actual executable, not an arbitrary CWD. Check that the
+      # game's existing relative file access is rooted in the same directory.
+      module_api=Win32API.new('kernel32','GetModuleFileNameW','lpl','l')
+      full_api=Win32API.new('kernel32','GetFullPathNameW','plpl','l')
+      buffer="\0"*65536
+      count=module_api.call(0,buffer,32768)
+      return false unless count>0 && count<32768
+      executable=buffer[0,count*2].unpack('v*')
+      candidate="\0"*65536
+      n=full_api.call(wide_ascii('Game.exe'),32768,candidate,0)
+      return false unless n>0 && n<32768 && fold_path(executable)==fold_path(candidate[0,n*2].unpack('v*'))
+      separator=executable.rindex(92)
+      return false unless separator && fold_path(executable[separator+1..-1])=='game.exe'.unpack('C*')
+      root=executable[0...separator]
+      # Keep all native launch paths in UTF-16. No shell, no Ruby 1.9 APIs.
+      helper=File.join('IA Traductora','.local','Rpg','engine','rpgxp-launcher.exe')
+      return false unless File.file?(helper) && !File.symlink?(helper)
+      transport=FileBridge.new
+      if transport.session
+        attach(transport);return true
+      end
+      shell=Win32API.new('shell32','ShellExecuteW','lppppl','l')
+      suffix=('\IA Traductora\.local\Rpg\engine\rpgxp-launcher.exe').unpack('C*')
+      path=(root+suffix+[0]).pack('v*')
+      result=shell.call(0,wide_ascii('open'),path,wide_ascii('--xp-launch-parent '+Process.pid.to_s),(root+[0]).pack('v*'),0)
+      return false unless result>32
+      attach(transport)
+      true
+    rescue StandardError
+      false
     end
     def codepoints(value)
       points = value.unpack('U*')
@@ -263,3 +304,6 @@ if defined?(Window_Message) && Window_Message.method_defined?(:update) &&
     end
   end
 end
+
+# The installed adapter starts its verified helper on the native game process.
+IATraductoraXP.start_native

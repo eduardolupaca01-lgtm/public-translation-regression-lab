@@ -1,10 +1,12 @@
-name: Servidor R42 candidate - battle log and formatted native notices
+name: Servidor R43 lab - XP reversible installation and real OPUS
 on:
   push:
     branches:
-      - feature/servidor-v2-rpg-vxace-integration-20261126
+      - feature/servidor-r43-rpgxp-rgss1
     paths:
       - ".github/workflows/servidor-v2-real-ia-windows.yml"
+      - "servidor_v2/rpgxp/**"
+      - "servidor_v2/tests/*rpgxp*"
       - "servidor_v2/worker/IATraductora.py"
       - "servidor_v2/worker/web_runtime.py"
       - "servidor_v2/tests/test_web_runtime.py"
@@ -82,6 +84,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_RUST_TEST_FAIL" }
           cargo build --release --manifest-path servidor_v2/vxace-helper/Cargo.toml --bins --examples
           if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_HELPER_BUILD_FAIL" }
+      - name: XP lab preflight before real models
+        shell: pwsh
+        run: |
+          ruby servidor_v2/tests/test_rpgxp_runtime.rb
+          if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_NATIVE_CONTRACT_FAIL" }
+          python servidor_v2/tests/probe_rpgxp_bridge.py
+          if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_IPC_PREFLIGHT_FAIL" }
+          Push-Location servidor_v2
+          try {
+            go test ./cmd/servidor -run TestRPGXP -count=1
+            if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_INSTALL_PREFLIGHT_FAIL" }
+          } finally { Pop-Location }
       - name: Verify actual native helper launch and Ruby startup before downloading OPUS
         shell: pwsh
         run: |
@@ -234,11 +248,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "IA_SERVIDOR_EXE_NO_COMPILA" }
           } finally { Pop-Location }
           $out=Join-Path $env:RUNNER_TEMP "Servidor.exe"
-          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --vxace-helper servidor_v2/vxace-helper/target/release/servidor-vxace-helper.exe --vxace-plugin servidor_v2/vxace/IATraductoraVXACE.rb --web-host-dir (Join-Path $env:RUNNER_TEMP "ia-webhost") --out $out
+          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --vxace-helper servidor_v2/vxace-helper/target/release/servidor-vxace-helper.exe --vxace-plugin servidor_v2/vxace/IATraductoraVXACE.rb --web-host-dir (Join-Path $env:RUNNER_TEMP "ia-webhost") --rpgxp-launcher (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --rpgxp-plugin servidor_v2/rpgxp/IATraductoraXP.rb --out $out
           if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $out)) {
             throw "IA_SERVIDOR_PROPIO_PAQUETE_INVALIDO"
           }
           Write-Host "IA_SERVIDOR_UNICO_EXE_CON_MODELOS_Y_PLUGIN_PROPIOS_CREADO"
+      - name: XP lab - actual packaged installer, installed launcher, OPUS and restore
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/probe_rpgxp_real.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe")
+          if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_REAL_OPUS_ACCEPTANCE_FAIL" }
       - name: VX Ace - installed script, real OPUS IPC, cache and exact restoration
         shell: pwsh
         run: |
@@ -448,27 +467,4 @@ jobs:
         run: |
           python servidor_v2/tests/probe_web_desktop.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --auto-exe
           if ($LASTEXITCODE -ne 0) { throw "IA_WEB_AUTO_EXE_REAL_ACCEPTANCE_FAIL" }
-      - name: Cifrar siempre la versión candidata antes de publicarla en GitHub
-        shell: pwsh
-        run: |
-          $seven="C:\Program Files\7-Zip\7z.exe"
-          if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
-          $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R42-Prueba.7z"
-          & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
-          & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
-          $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R42-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
-          'Servidor R42 candidato: mensajes de combate y avisos con formato, misiones TXT, MV/MZ/VX Ace/SOLData y WEB con OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
-          Copy-Item -LiteralPath "servidor_v2/LICENSE-BROTLI.txt" -Destination (Join-Path $dir "LICENSE-BROTLI.txt")
-          Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
-      - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
-        uses: actions/upload-artifact@v6
-        with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-WEB-R42-CIFRADO
-          path: ${{ runner.temp }}/IA-Traductora-Cifrado/
-          retention-days: 7
-          if-no-files-found: error
+      # No artifact publication: the XP adapter still needs actual 32-bit RGSS1 validation.
