@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -286,4 +289,382 @@ func vxaceDiagnostic(fp vxaceFingerprint) string {
 		mode = "rgss3a"
 	}
 	return fmt.Sprintf("VXACE mode=%s", mode)
+}
+
+
+type vxaceReceipt struct {
+	Schema string `json:"schema"`
+	BeforeSHA string `json:"before_sha256"`
+	AfterSHA string `json:"after_sha256"`
+	PluginSHA string `json:"plugin_sha256"`
+	WorkerSHA string `json:"worker_sha256"`
+	HelperSHA string `json:"helper_sha256"`
+	Mode string `json:"mode"`
+	TargetRel string `json:"target_rel"`
+	Build string `json:"build"`
+	Status string `json:"status"`
+}
+
+type vxaceHelperReport struct {
+	Schema string `json:"schema"`
+	Mode string `json:"mode"`
+	OriginalSHA string `json:"original_sha256"`
+	OutputSHA string `json:"output_sha256"`
+	PluginSHA string `json:"plugin_sha256"`
+	ScriptIndex int `json:"script_index"`
+	ArchiveEntries int `json:"archive_entries"`
+	NonScriptEntriesPreserved bool `json:"non_script_entries_preserved"`
+}
+
+func vxacePaths(fp vxaceFingerprint) (target, backupName, targetRel, mode, outputName string, maxSize int64) {
+	if fp.Packed {
+		return fp.ArchiveFile, "original-Game.rgss3a", "Game.rgss3a", "rgss3a", "Game.rgss3a.new", vxaceMaxArchive
+	}
+	return fp.ScriptsFile, "original-Scripts.rvdata2", "Data/Scripts.rvdata2", "loose", "Scripts.rvdata2.new", vxaceMaxMarshal
+}
+
+func vxaceCopyFileNew(source, destination string) error {
+	if !ordinary(source) {
+		return errors.New("IA_VXACE_BACKUP_SOURCE_INVALID")
+	}
+	if present, err := iaPathIsPresent(destination); err != nil {
+		return err
+	} else if present {
+		return errors.New("IA_VXACE_BACKUP_EXISTS")
+	}
+	input, err := os.Open(source)
+	if err != nil {
+		return errors.New("IA_VXACE_BACKUP_SOURCE_UNREADABLE")
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return errors.New("IA_VXACE_BACKUP_CREATE_FAILED")
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.Remove(destination)
+		}
+	}()
+	if _, err = io.CopyBuffer(output, input, make([]byte, 256*1024)); err != nil {
+		_ = output.Close()
+		return errors.New("IA_VXACE_BACKUP_COPY_FAILED")
+	}
+	if err = output.Sync(); err != nil {
+		_ = output.Close()
+		return errors.New("IA_VXACE_BACKUP_SYNC_FAILED")
+	}
+	if err = output.Close(); err != nil {
+		return errors.New("IA_VXACE_BACKUP_CLOSE_FAILED")
+	}
+	sourceSHA, err := digestFile(source)
+	if err != nil {
+		return errors.New("IA_VXACE_BACKUP_SOURCE_HASH_FAILED")
+	}
+	backupSHA, err := digestFile(destination)
+	if err != nil || backupSHA != sourceSHA {
+		return errors.New("IA_VXACE_BACKUP_HASH_MISMATCH")
+	}
+	ok = true
+	return nil
+}
+
+func vxaceAtomicReplaceFrom(source, destination string) error {
+	if !ordinary(source) {
+		return errors.New("IA_VXACE_REPLACE_SOURCE_INVALID")
+	}
+	if st, err := os.Lstat(destination); err == nil && (st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular()) {
+		return errors.New("IA_VXACE_REPLACE_TARGET_UNSAFE")
+	} else if err != nil && !os.IsNotExist(err) {
+		return errors.New("IA_VXACE_REPLACE_TARGET_INSPECT_FAILED")
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".ia-vxace-replace-")
+	if err != nil {
+		return errors.New("IA_VXACE_REPLACE_TEMP_FAILED")
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	input, err := os.Open(source)
+	if err != nil {
+		_ = tmp.Close()
+		return errors.New("IA_VXACE_REPLACE_SOURCE_UNREADABLE")
+	}
+	_, copyErr := io.CopyBuffer(tmp, input, make([]byte, 256*1024))
+	_ = input.Close()
+	if copyErr != nil {
+		_ = tmp.Close()
+		return errors.New("IA_VXACE_REPLACE_COPY_FAILED")
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return errors.New("IA_VXACE_REPLACE_SYNC_FAILED")
+	}
+	if err = tmp.Close(); err != nil {
+		return errors.New("IA_VXACE_REPLACE_CLOSE_FAILED")
+	}
+	if err = os.Rename(tmpName, destination); err != nil {
+		return errors.New("IA_VXACE_REPLACE_ATOMIC_FAILED")
+	}
+	return nil
+}
+
+func vxaceReadReceipt(filename string) (vxaceReceipt, bool, error) {
+	var receipt vxaceReceipt
+	if !ordinary(filename) {
+		if _, err := os.Lstat(filename); os.IsNotExist(err) {
+			return receipt, false, nil
+		}
+		return receipt, false, errors.New("IA_VXACE_RECIBO_INVALIDO")
+	}
+	raw, err := os.ReadFile(filename)
+	if err != nil || len(raw) > 16*1024 || json.Unmarshal(raw, &receipt) != nil ||
+		receipt.Schema != "ia-traductora-vxace-install-v1" ||
+		len(receipt.BeforeSHA) != 64 || len(receipt.AfterSHA) != 64 ||
+		len(receipt.PluginSHA) != 64 || len(receipt.HelperSHA) != 64 ||
+		len(receipt.WorkerSHA) != 64 {
+		return receipt, false, errors.New("IA_VXACE_RECIBO_INVALIDO")
+	}
+	return receipt, true, nil
+}
+
+func vxaceSidecarPaths(root string) (sidecar, engine, helper, plugin, worker, receiptFile, installDir string) {
+	sidecar = filepath.Join(root, brandFolder)
+	engine = filepath.Join(sidecar, ".local", "Rpg", "engine")
+	helper = filepath.Join(engine, "vxace-helper.exe")
+	plugin = filepath.Join(engine, "vxace", "TenshixgameVXACELive.rb")
+	worker = filepath.Join(engine, "IATraductora.exe")
+	installDir = filepath.Join(sidecar, "install", "vxace")
+	receiptFile = filepath.Join(sidecar, "install", "vxace-receipt.json")
+	return
+}
+
+func installVXAce(fp vxaceFingerprint, pkg *packageReader) error {
+	if pkg == nil || pkg.files["vxace-helper.exe"] == nil || pkg.files["vxace/TenshixgameVXACELive.rb"] == nil {
+		return errors.New("IA_VXACE_PAQUETE_INCOMPLETO")
+	}
+	sidecar, err := prepareSidecar(fp.Root, pkg)
+	if err != nil {
+		return err
+	}
+	if err = iaCheckEngine(sidecar, pkg); err != nil {
+		return err
+	}
+	_, engine, helper, plugin, worker, receiptFile, installDir := vxaceSidecarPaths(fp.Root)
+	if !ordinary(helper) || !ordinary(plugin) || !ordinary(worker) {
+		return errors.New("IA_VXACE_COMPONENTES_NO_INSTALADOS")
+	}
+	helperSHA, err := digestFile(helper)
+	if err != nil || helperSHA != pkg.manifest.Files["vxace-helper.exe"] {
+		return errors.New("IA_VXACE_HELPER_SHA_INVALIDO")
+	}
+	pluginSHA, err := digestFile(plugin)
+	if err != nil || pluginSHA != pkg.manifest.Files["vxace/TenshixgameVXACELive.rb"] {
+		return errors.New("IA_VXACE_PLUGIN_SHA_INVALIDO")
+	}
+	workerSHA, err := digestFile(worker)
+	if err != nil || workerSHA != pkg.manifest.Files["IATraductora.exe"] {
+		return errors.New("IA_VXACE_WORKER_SHA_INVALIDO")
+	}
+	target, backupName, targetRel, mode, outputName, maxSize := vxacePaths(fp)
+	if !ordinary(target) {
+		return errors.New("IA_VXACE_RECURSO_ORIGINAL_INVALIDO")
+	}
+	currentSHA, err := digestFile(target)
+	if err != nil {
+		return errors.New("IA_VXACE_RECURSO_HASH_FALLO")
+	}
+	if err = iaMakeSafeDirs(sidecar, filepath.Join("install", "vxace", "staging")); err != nil {
+		return err
+	}
+	if err = iaMakeSafeDirs(sidecar, filepath.Join("install", "vxace")); err != nil {
+		return err
+	}
+	backup := filepath.Join(installDir, backupName)
+	receipt, hasReceipt, err := vxaceReadReceipt(receiptFile)
+	if err != nil {
+		return err
+	}
+	originalSHA := currentSHA
+	if hasReceipt {
+		if receipt.Mode != mode || receipt.TargetRel != targetRel {
+			return errors.New("IA_VXACE_RECIBO_OTRO_RECURSO")
+		}
+		if receipt.Status == "INSTALLED" {
+			if currentSHA != receipt.AfterSHA {
+				return errors.New("IA_VXACE_RECURSO_MODIFICADO")
+			}
+			originalSHA = receipt.BeforeSHA
+		} else if receipt.Status == "RESTORED" {
+			if currentSHA != receipt.BeforeSHA {
+				return errors.New("IA_VXACE_RECURSO_MODIFICADO")
+			}
+			originalSHA = receipt.BeforeSHA
+		} else {
+			return errors.New("IA_VXACE_RECIBO_ESTADO_INVALIDO")
+		}
+		if !ordinary(backup) {
+			return errors.New("IA_VXACE_BACKUP_FALTANTE")
+		}
+		backupSHA, e := digestFile(backup)
+		if e != nil || backupSHA != originalSHA {
+			return errors.New("IA_VXACE_BACKUP_HASH_MISMATCH")
+		}
+	} else {
+		if present, e := iaPathIsPresent(backup); e != nil {
+			return e
+		} else if present {
+			backupSHA, hashErr := digestFile(backup)
+			if hashErr != nil || backupSHA != currentSHA {
+				return errors.New("IA_VXACE_BACKUP_EXISTENTE_NO_COINCIDE")
+			}
+		} else if err = vxaceCopyFileNew(target, backup); err != nil {
+			return err
+		}
+	}
+	stagingRoot := filepath.Join(installDir, "staging")
+	stageDir, err := os.MkdirTemp(stagingRoot, ".vxace-run-")
+	if err != nil {
+		return errors.New("IA_VXACE_STAGING_NO_DISPONIBLE")
+	}
+	defer os.RemoveAll(stageDir)
+	output := filepath.Join(stageDir, outputName)
+	command := exec.Command(helper, "install", "--game-root", fp.Root, "--plugin", plugin, "--output", output)
+	command.Dir = fp.Root
+	outputBytes, runErr := command.CombinedOutput()
+	if runErr != nil {
+		message := strings.TrimSpace(string(outputBytes))
+		if message == "" {
+			message = "IA_VXACE_HELPER_FALLO"
+		}
+		return errors.New(message)
+	}
+	var report vxaceHelperReport
+	if json.Unmarshal(bytes.TrimSpace(outputBytes), &report) != nil ||
+		report.Schema != "servidor-vxace-install-v1" || report.Mode != mode ||
+		report.OriginalSHA != currentSHA || report.PluginSHA != pluginSHA ||
+		(mode == "rgss3a" && (!report.NonScriptEntriesPreserved || report.ArchiveEntries <= 0)) {
+		return errors.New("IA_VXACE_HELPER_REPORTE_INVALIDO")
+	}
+	if !ordinary(output) {
+		return errors.New("IA_VXACE_OUTPUT_NO_GENERADO")
+	}
+	outputInfo, err := os.Stat(output)
+	if err != nil || outputInfo.Size() > maxSize {
+		return errors.New("IA_VXACE_OUTPUT_TAMANO_INVALIDO")
+	}
+	outputSHA, err := digestFile(output)
+	if err != nil || outputSHA != report.OutputSHA {
+		return errors.New("IA_VXACE_OUTPUT_SHA_INVALIDO")
+	}
+	// Refuse to replace a game resource if another process changed it while
+	// the helper was working on its isolated staging copy.
+	latestSHA, err := digestFile(target)
+	if err != nil || latestSHA != currentSHA {
+		return errors.New("IA_VXACE_RECURSO_CAMBIO_DURANTE_INSTALACION")
+	}
+	if err = vxaceAtomicReplaceFrom(output, target); err != nil {
+		return err
+	}
+	installedSHA, err := digestFile(target)
+	if err != nil || installedSHA != outputSHA {
+		if rollbackErr := vxaceAtomicReplaceFrom(backup, target); rollbackErr != nil {
+			return errors.New("IA_VXACE_POSTCHECK_Y_RESTAURACION_FALLARON")
+		}
+		return errors.New("IA_VXACE_POSTCHECK_SHA_FALLO")
+	}
+	receipt = vxaceReceipt{
+		Schema: "ia-traductora-vxace-install-v1",
+		BeforeSHA: originalSHA,
+		AfterSHA: outputSHA,
+		PluginSHA: pluginSHA,
+		WorkerSHA: workerSHA,
+		HelperSHA: helperSHA,
+		Mode: mode,
+		TargetRel: targetRel,
+		Build: vxacePluginBuildID,
+		Status: "INSTALLED",
+	}
+	receiptBytes, _ := json.MarshalIndent(receipt, "", "  ")
+	if err = writeAtomic(receiptFile, receiptBytes); err != nil {
+		if rollbackErr := vxaceAtomicReplaceFrom(backup, target); rollbackErr != nil {
+			return errors.New("IA_VXACE_RECIBO_Y_RESTAURACION_FALLARON")
+		}
+		return errors.New("IA_VXACE_RECIBO_NO_GUARDADO")
+	}
+	return nil
+}
+
+func installedVXAceIdentity(fp vxaceFingerprint, pkg *packageReader) (string, error) {
+	if pkg == nil {
+		return "", errors.New("IA_VXACE_PAQUETE_INVALIDO")
+	}
+	sidecar, _, helper, plugin, worker, receiptFile, _ := vxaceSidecarPaths(fp.Root)
+	if err := iaCheckEngine(sidecar, pkg); err != nil {
+		return "", err
+	}
+	receipt, ok, err := vxaceReadReceipt(receiptFile)
+	if err != nil || !ok || receipt.Status != "INSTALLED" || receipt.Build != vxacePluginBuildID {
+		return "", errors.New("IA_VXACE_INSTALACION_NO_VERIFICADA")
+	}
+	target, _, targetRel, mode, _, _ := vxacePaths(fp)
+	if receipt.Mode != mode || receipt.TargetRel != targetRel {
+		return "", errors.New("IA_VXACE_INSTALACION_RECURSO_NO_COINCIDE")
+	}
+	targetSHA, err := digestFile(target)
+	if err != nil || targetSHA != receipt.AfterSHA {
+		return "", errors.New("IA_VXACE_INSTALACION_RECURSO_MODIFICADO")
+	}
+	helperSHA, _ := digestFile(helper)
+	pluginSHA, _ := digestFile(plugin)
+	workerSHA, _ := digestFile(worker)
+	if helperSHA != receipt.HelperSHA || pluginSHA != receipt.PluginSHA || workerSHA != receipt.WorkerSHA {
+		return "", errors.New("IA_VXACE_INSTALACION_COMPONENTE_MODIFICADO")
+	}
+	return "VXACE-RGSS3-" + receipt.Build + " SHA256=" + targetSHA, nil
+}
+
+func recoverVXAce(fp vxaceFingerprint) error {
+	sidecar, _, _, _, _, receiptFile, installDir := vxaceSidecarPaths(fp.Root)
+	receipt, ok, err := vxaceReadReceipt(receiptFile)
+	if err != nil || !ok {
+		return errors.New("IA_VXACE_RECIBO_NO_DISPONIBLE")
+	}
+	target, backupName, targetRel, mode, _, _ := vxacePaths(fp)
+	if receipt.Mode != mode || receipt.TargetRel != targetRel {
+		return errors.New("IA_VXACE_RECIBO_OTRO_RECURSO")
+	}
+	backup := filepath.Join(installDir, backupName)
+	if !ordinary(backup) {
+		return errors.New("IA_VXACE_BACKUP_FALTANTE")
+	}
+	backupSHA, err := digestFile(backup)
+	if err != nil || backupSHA != receipt.BeforeSHA {
+		return errors.New("IA_VXACE_BACKUP_HASH_MISMATCH")
+	}
+	currentSHA, err := digestFile(target)
+	if err != nil {
+		return errors.New("IA_VXACE_RECURSO_HASH_FALLO")
+	}
+	if currentSHA == receipt.BeforeSHA {
+		receipt.Status = "RESTORED"
+		raw, _ := json.MarshalIndent(receipt, "", "  ")
+		return writeAtomic(receiptFile, raw)
+	}
+	if currentSHA != receipt.AfterSHA || receipt.Status != "INSTALLED" {
+		return errors.New("IA_VXACE_RECURSO_MODIFICADO_NO_RESTAURADO")
+	}
+	if err = vxaceAtomicReplaceFrom(backup, target); err != nil {
+		return err
+	}
+	restoredSHA, err := digestFile(target)
+	if err != nil || restoredSHA != receipt.BeforeSHA {
+		return errors.New("IA_VXACE_RESTAURACION_SHA_FALLO")
+	}
+	receipt.Status = "RESTORED"
+	raw, _ := json.MarshalIndent(receipt, "", "  ")
+	if err = writeAtomic(receiptFile, raw); err != nil {
+		return errors.New("IA_VXACE_RECIBO_RESTAURACION_NO_GUARDADO")
+	}
+	return nil
 }
