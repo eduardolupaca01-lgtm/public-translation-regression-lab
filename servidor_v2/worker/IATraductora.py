@@ -621,10 +621,16 @@ def verified_halva_runtime(game:Path, runtime:Path):
     return root,content
 
 class Service:
-    def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None):
+    def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None,web_mode=False):
         self.halva=halva_content is not None
         self.vxace=False
-        if self.halva:
+        self.web=web_mode
+        if web_mode:
+            if self.halva:raise ValueError("IA_WEB_ARGUMENTOS_INVALIDOS")
+            from web_runtime import web_profile
+            self.game,_,_=web_profile(game)
+            self.content=self.game
+        elif self.halva:
             self.game,self.content=verified_halva_runtime(game,halva_content)
         else:
             try:
@@ -646,6 +652,8 @@ class Service:
                     raise original
         engine=engine.resolve(strict=True)
         if engine.is_symlink() or not engine.is_relative_to(self.game):
+            raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
+        if web_mode and engine!=self.game/"IA Traductora"/".local"/"Rpg"/"engine":
             raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
         self.engine=engine
         self.neural=neural if neural is not None else NeuralOPUS(engine)
@@ -1071,7 +1079,9 @@ def safe_startup_code(error):
              "IA_RPG_RUTAS_AMBIGUAS","IA_RPG_MZ_COMPRIMIDO_NO_VALIDO",
              "IA_MOTOR_FUERA_DEL_JUEGO","IA_MODELO_INCOMPLETO",
              "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO",
-             "IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA","IA_HALVA_INSTALACION_NO_VERIFICADA"}
+             "IA_HALVA_RUTA_PERSISTENTE_NO_VERIFICADA","IA_HALVA_INSTALACION_NO_VERIFICADA",
+             "IA_WEB_ARGUMENTOS_INVALIDOS","IA_WEB_RUTA_INVALIDA","IA_WEB_INDEX_INVALIDO",
+             "IA_WEB_MODULO_NO_ADMITIDO","IA_WEB_RECURSOS_INCOMPLETOS","IA_WEB_PUERTO_OCUPADO"}
     if str(error) in allowed:return str(error)
     if isinstance(error,sqlite3.Error):return "IA_CACHE_PERSISTENTE_INACCESIBLE"
     if "version" in raw and ("model" in raw or "binary" in raw):
@@ -1118,6 +1128,9 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument("--game-root",type=Path)
     p.add_argument("--halva-content",type=Path)
+    p.add_argument("--web-root",type=Path)
+    p.add_argument("--web-port",type=int,default=8765)
+    p.add_argument("--web-no-browser",action="store_true")
     p.add_argument("--parent-pid",type=int,default=0)
     p.add_argument("--check-models",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
@@ -1129,6 +1142,15 @@ def main():
             neural.check_all()
             neural.check_inference()
             write_startup_code(args.diagnostic_file,"IA_MODELOS_REALES_CT2_LISTOS")
+            return
+        if args.web_root is not None:
+            if args.game_root is not None or args.halva_content is not None or not 1024<=args.web_port<=65535:
+                raise ValueError("IA_WEB_ARGUMENTOS_INVALIDOS")
+            from web_runtime import run_web
+            write_startup_code(args.diagnostic_file,"IA_WEB_VALIDANDO")
+            service=Service(args.web_root,engine,web_mode=True)
+            run_web(service,args.web_port,args.web_no_browser,args.parent_pid,args.diagnostic_file,
+                    make_handler,monitor_game_lifetime,write_startup_code)
             return
         if args.game_root is None:
             raise ValueError("IA_GAME_ROOT_FALTANTE")

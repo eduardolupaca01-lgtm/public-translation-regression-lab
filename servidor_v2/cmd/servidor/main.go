@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R35-20261126"
- packageBuildID="RPG-MVMZ-VXACE-R37-20261126"
+ packageBuildID="RPG-MVMZ-VXACE-WEB-R38-20261127"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -424,7 +424,15 @@ func main(){
  inspect:=flag.Bool("inspect",false,"Diagnóstico RPG de solo lectura, sin modelos ni ejecución del juego")
  copyVXAce:=flag.Bool("copy-vxace",false,"Crear una copia independiente VX Ace empaquetada, sin reemplazar el original")
  copyParent:=flag.String("copy-parent","","Carpeta existente donde crear una nueva copia VX Ace (opcional)")
+ webFolder:=flag.String("web-folder","","Carpeta web extraída con index.html y assets (experimental, no EXE)")
+ webPort:=flag.Int("web-port",8765,"Puerto local fijo de la carpeta web")
+ webNoBrowser:=flag.Bool("web-no-browser",false,"No abrir navegador automáticamente (pruebas)")
  flag.Parse()
+ if (*webFolder!=""&&(*exe!=""||*inspect||*recoverGame||*copyVXAce||*copyParent!=""))||
+    (*webFolder==""&&(*webPort!=8765||*webNoBrowser))||
+    (*webFolder!=""&&(*webPort<1024||*webPort>65535)){
+  fmt.Fprintln(os.Stderr,"IA_WEB_ARGUMENTOS_INVALIDOS");os.Exit(1)
+ }
  if (*copyVXAce&&(*inspect||*recoverGame||*exe==""))||(!*copyVXAce&&*copyParent!=""){
   fmt.Fprintln(os.Stderr,"IA_VXACE_COPIA_ARGUMENTOS_INVALIDOS");os.Exit(1)
  }
@@ -441,11 +449,15 @@ func main(){
   fmt.Println("IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA")
   return
  }
- if *exe==""{runUI();return}
+ if *exe==""&&*webFolder==""{runUI();return}
  source:=*payload;if source==""{var err error;source,err=os.Executable();if err!=nil{fmt.Fprintln(os.Stderr,"IA_EXE_NO_DISPONIBLE");os.Exit(1)}}
  p,err:=readPackage(source)
  if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)}
  defer p.Close()
+ if *webFolder!=""{
+  if e:=webLaunch(*webFolder,*webPort,*webNoBrowser,p);e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+  return
+ }
  if *copyVXAce{
   final,identity,e:=vxaceCloneInstall(*exe,*copyParent,p)
   if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}

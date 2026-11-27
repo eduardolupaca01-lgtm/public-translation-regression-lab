@@ -1,4 +1,4 @@
-name: Servidor R37 candidate - create-only VX Ace game copy and real OPUS
+name: Servidor R38 candidate - standalone web frontend and existing RPG OPUS
 on:
   push:
     branches:
@@ -6,6 +6,10 @@ on:
     paths:
       - ".github/workflows/servidor-v2-real-ia-windows.yml"
       - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/worker/web_runtime.py"
+      - "servidor_v2/tests/test_web_runtime.py"
+      - "servidor_v2/tests/probe_web_real_worker.py"
+      - "servidor_v2/tests/probe_web_browser.js"
       - "servidor_v2/tests/test_vxace_real_worker.py"
       - "servidor_v2/tests/test_vxace_runtime.rb"
       - "servidor_v2/tests/test_vxace_cache_release.py"
@@ -410,6 +414,14 @@ jobs:
           if ($p.ExitCode -ne 0 -or (Get-FileHash -LiteralPath (Join-Path $packages "EnginePackage.halva")).Hash -ne $before) { throw "IA_HALVA_RECUPERACION_FAIL" }
           if (!(Test-Path -LiteralPath $cache)) { throw "IA_HALVA_CACHE_ELIMINADA" }
           Write-Host "IA_HALVA_NATIVE_OPUS_REAL_AND_RECOVERY_PASS"
+      - name: Validar carpeta web autónoma con Edge real, OPUS, guardado y recursos intactos
+        shell: pwsh
+        run: |
+          $deps=Join-Path $env:RUNNER_TEMP "ia-web-browser-deps"
+          npm install --prefix $deps --no-save --ignore-scripts --no-audit --no-fund playwright-core@1.52.0
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_BROWSER_TEST_DEPENDENCY_FAIL" }
+          python servidor_v2/tests/probe_web_real_worker.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --playwright (Join-Path $deps "node_modules/playwright-core")
+          if ($LASTEXITCODE -ne 0) { throw "IA_WEB_REAL_ACCEPTANCE_FAIL" }
       - name: Cifrar siempre la versión candidata antes de publicarla en GitHub
         shell: pwsh
         run: |
@@ -417,20 +429,20 @@ jobs:
           if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
           $dir=Join-Path $env:RUNNER_TEMP "IA-Traductora-Cifrado"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-R37-Prueba.7z"
+          $package=Join-Path $dir "Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R38-Prueba.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $env:RUNNER_TEMP "Servidor.exe") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_PAQUETE_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-R37-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
-          'Servidor R37 candidato: copia VX Ace independiente sin sustituir el archivo de origen, MV SOLData experimental, MV/MZ y OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
+          "$sha  Servidor-IA-Traductora-RPG-MVMZ-VXACE-WEB-R38-Prueba.7z" | Set-Content (Join-Path $dir 'SHA256.txt') -Encoding ascii
+          'Servidor R38 candidato: modalidad web experimental de carpeta ya extraída, copia VX Ace independiente, MV/MZ/SOLData y OPUS real. Pruebas de recursos sintéticos, no certificación de juegos reales. Instalar únicamente en una copia limpia y cerrada; no sobrescribir instalaciones anteriores.' | Set-Content (Join-Path $dir 'LEEME.txt') -Encoding utf8
           Copy-Item -LiteralPath "servidor_v2/LICENSE-BROTLI.txt" -Destination (Join-Path $dir "LICENSE-BROTLI.txt")
           Write-Host "SERVIDOR_V2_CIFRADO_SHA256=$sha"
       - name: Entregar EXCLUSIVAMENTE la nueva versión cifrada
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-R37-CIFRADO
+          name: SERVIDOR-V2-IA-TRADUCTORA-RPG-MVMZ-VXACE-WEB-R38-CIFRADO
           path: ${{ runner.temp }}/IA-Traductora-Cifrado/
           retention-days: 7
           if-no-files-found: error
