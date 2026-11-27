@@ -54,6 +54,7 @@ jobs:
           ruby -c servidor_v2/cmd/servidor/xp_native/window.rb
           ruby -c servidor_v2/cmd/servidor/xp_native/main.rb
           ruby servidor_v2/tests/test_rpgxp_runtime.rb
+          ruby servidor_v2/tests/test_rpgxp_coverage.rb
       - name: XP authenticated file bridge and persistent memory (controlled neural callback)
         run: python servidor_v2/tests/probe_rpgxp_bridge.py
       - name: Servidor Go regression, including VX Ace journal

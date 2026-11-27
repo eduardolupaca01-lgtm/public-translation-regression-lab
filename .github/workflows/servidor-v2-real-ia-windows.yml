@@ -93,6 +93,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_NATIVE_MAIN_SYNTAX" }
           ruby servidor_v2/tests/test_rpgxp_runtime.rb
           if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_NATIVE_CONTRACT_FAIL" }
+          ruby servidor_v2/tests/test_rpgxp_coverage.rb
+          if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_COVERAGE_FAIL" }
           python servidor_v2/tests/probe_rpgxp_bridge.py
           if ($LASTEXITCODE -ne 0) { throw "IA_RPGXP_IPC_PREFLIGHT_FAIL" }
           Push-Location servidor_v2
