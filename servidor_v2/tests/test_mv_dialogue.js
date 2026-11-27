@@ -858,6 +858,7 @@ async function testR42BattleLogAndFormattedNotices(mz){
         assert.equal(qa.r42NoticePlan(raw,false),null,"Japanese/mixed prose must keep the legacy message pipeline");
         assert.equal(qa.r42NoticePlan(raw,true),null,"custom notice windows must not bypass Japanese handling");
     }
+    assert.equal(qa.r42NoticePlan("“We are here.”",false),null,"recognized smart quotes retain the legacy full-line path");
     assert.ok(qa.r42NoticePlan(quote,false),"English quote envelope remains enabled");
     assert.ok(qa.r42NoticePlan(notice,false),"English formatted notice remains enabled");
     const raw=["Training Golem A attacks!","dealt \\c[2]69\\c[0] to Mira damage!",

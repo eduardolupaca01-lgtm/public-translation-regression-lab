@@ -6934,9 +6934,16 @@ function r42NoticePlan(raw,forced){
     // Ordinary dialogue keeps the previous adapters. Opt in only for
     // a paired quote envelope, explicit notice/key glyphs or native UI.
     var plain=visibleProse(raw).trim();
-    var marked=/[※]|【[A-Za-z0-9_+\- ]{1,16}】/.test(raw)||
+    var explicit=/[※]|【[A-Za-z0-9_+\- ]{1,16}】/.test(raw);
+    var marked=explicit||
         /(?:^|\r?\n)[ \t]*(?:"[^"\r\n]+"|“[^”\r\n]+”)[ \t]*(?=\r?\n|$)/.test(plain);
     if(!forced&&!marked)return null;
+    // Ordinary smart-quoted English dialogue already has a complete-line
+    // source/cache contract (R4). Do not divert that recognized prose into
+    // fragments. R42 still handles straight-quoted envelopes, explicit
+    // notices, and smart-quoted text the existing detector cannot recognize.
+    if(!forced&&!explicit&&raw.indexOf('"')<0&&/[“”]/.test(plain)&&
+        displaySource(raw,"message")==="en")return null;
     var lines=raw.split(/(\r?\n)/),plans=[],units=0;
     for(var i=0;i<lines.length;i+=2){
         var line=lines[i],parts=[],at=0,m,unsafe=false;
