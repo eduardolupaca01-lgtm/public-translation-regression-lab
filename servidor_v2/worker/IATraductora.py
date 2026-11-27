@@ -535,7 +535,8 @@ def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
         raise ValueError("IA_VXACE_DATA_NO_DISPONIBLE")
     for name in ("Scripts.rvdata2","System.rvdata2","MapInfos.rvdata2"):
         file=data/name
-        if not ordinary(file,128*1024*1024):
+        limit=512*1024*1024 if name=="Scripts.rvdata2" else 128*1024*1024
+        if not ordinary(file,limit):
             raise ValueError("IA_VXACE_DATA_INCOMPLETA")
         with file.open("rb") as stream:
             if stream.read(2)!=b"\x04\x08":
