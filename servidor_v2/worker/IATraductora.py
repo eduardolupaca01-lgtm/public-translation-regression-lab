@@ -2,6 +2,7 @@
 """IA Traductora, motor neuronal independiente. Sólo 127.0.0.1, sin nube."""
 from __future__ import annotations
 import argparse, hashlib, json, os, secrets, sys, threading, time
+import configparser
 import re, sqlite3, unicodedata
 from pathlib import Path
 from collections import OrderedDict
@@ -478,6 +479,73 @@ def game_root(exe_root:Path)->tuple[Path,Path]:
         raise ValueError("IA_SOLAMENTE_RPG_MV_MZ")
     return root,layouts[0]
 
+def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
+    """Validate a VX Ace root without executing the game or extracting its archive."""
+    candidate=Path(exe_root)
+    if candidate.is_symlink():
+        raise ValueError("IA_VXACE_JUEGO_NO_VALIDO")
+    root=candidate.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("IA_VXACE_JUEGO_NO_VALIDO")
+
+    def ordinary(file,limit):
+        if file.is_symlink() or not file.is_file():
+            return False
+        try:
+            size=file.stat().st_size
+        except OSError:
+            return False
+        return 0<size<=limit
+
+    ini=root/"Game.ini"
+    game_exe=root/"Game.exe"
+    runtime=root/"RGSS301.dll"
+    if not ordinary(ini,64*1024) or not ordinary(game_exe,64*1024*1024) or not ordinary(runtime,64*1024*1024):
+        raise ValueError("IA_VXACE_RUNTIME_NO_VERIFICADO")
+    try:
+        parser=configparser.ConfigParser(interpolation=None,strict=True)
+        parser.optionxform=str.lower
+        parser.read_string(ini.read_text(encoding="utf-8-sig"))
+        if not parser.has_section("Game"):
+            raise ValueError("IA_VXACE_GAME_INI_INVALIDO")
+        library=parser.get("Game","Library",fallback="")
+        scripts=parser.get("Game","Scripts",fallback="Data\\Scripts.rvdata2")
+    except (OSError,UnicodeError,configparser.Error) as exc:
+        raise ValueError("IA_VXACE_GAME_INI_INVALIDO") from exc
+    if Path(library.replace("\\","/")).name.casefold()!="rgss301.dll":
+        raise ValueError("IA_VXACE_GAME_INI_INVALIDO")
+    normalized=scripts.replace("\\","/").removeprefix("./").casefold()
+    if normalized!="data/scripts.rvdata2":
+        raise ValueError("IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO")
+
+    archive=root/"Game.rgss3a"
+    if archive.exists():
+        if archive.is_symlink() or not ordinary(archive,900*1024*1024):
+            raise ValueError("IA_VXACE_RGSS3A_INVALIDO")
+        with archive.open("rb") as stream:
+            header=stream.read(8)
+        if header!=b"RGSSAD\x00\x03":
+            raise ValueError("IA_VXACE_RGSS3A_INVALIDO")
+        # The native archive helper performs the authoritative entry-table,
+        # path and Scripts.rvdata2 validation before installation.
+        return root,root
+
+    data=root/"Data"
+    if data.is_symlink() or not data.is_dir():
+        raise ValueError("IA_VXACE_DATA_NO_DISPONIBLE")
+    for name in ("Scripts.rvdata2","System.rvdata2","MapInfos.rvdata2"):
+        file=data/name
+        if not ordinary(file,128*1024*1024):
+            raise ValueError("IA_VXACE_DATA_INCOMPLETA")
+        with file.open("rb") as stream:
+            if stream.read(2)!=b"\x04\x08":
+                raise ValueError("IA_VXACE_MARSHAL_INVALIDO")
+    for name in ("Game.rgssad","Game.rgss2a"):
+        if (root/name).exists():
+            raise ValueError("IA_VXACE_ARCHIVO_DE_OTRO_MOTOR")
+    return root,root
+
+
 def verified_halva_runtime(game:Path, runtime:Path):
     # Only a declared, owned installation; the launcher may provide an
     # external temporary content directory. No scanning for unrelated caches.
@@ -513,7 +581,18 @@ def verified_halva_runtime(game:Path, runtime:Path):
 class Service:
     def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None):
         self.halva=halva_content is not None
-        self.game,self.content=verified_halva_runtime(game,halva_content) if self.halva else game_root(game)
+        self.vxace=False
+        if self.halva:
+            self.game,self.content=verified_halva_runtime(game,halva_content)
+        else:
+            try:
+                self.game,self.content=game_root(game)
+            except ValueError as original:
+                try:
+                    self.game,self.content=vxace_game_root(game)
+                    self.vxace=True
+                except (ValueError,OSError):
+                    raise original
         engine=engine.resolve(strict=True)
         if engine.is_symlink() or not engine.is_relative_to(self.game):
             raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
@@ -658,7 +737,7 @@ def make_handler(service:Service):
     return Handler
 
 def publish(service,port):
-    folder=service.game/"IA Traductora"/".local"/"Rpg" if getattr(service,"halva",False) else service.content/"data"/"IATraductora"
+    folder=service.game/"IA Traductora"/".local"/"Rpg" if (getattr(service,"halva",False) or getattr(service,"vxace",False)) else service.content/"data"/"IATraductora"
     folder.mkdir(exist_ok=True,mode=0o700)
     if folder.is_symlink() or not folder.resolve().is_relative_to(service.game):
         raise RuntimeError("IA_PUENTE_INSEGURO")
@@ -719,6 +798,10 @@ def safe_startup_code(error):
     raw = str(error).lower()
     # Enumerate safe startup categories; never expose a raw path or game text.
     allowed={"IA_JUEGO_NO_VALIDO","IA_GAME_ROOT_FALTANTE","IA_SOLAMENTE_RPG_MV_MZ",
+             "IA_VXACE_JUEGO_NO_VALIDO","IA_VXACE_GAME_INI_INVALIDO","IA_VXACE_RUNTIME_NO_VERIFICADO",
+             "IA_VXACE_SCRIPTS_PATH_NO_ADMITIDO","IA_VXACE_RGSS3A_INVALIDO",
+             "IA_VXACE_DATA_NO_DISPONIBLE","IA_VXACE_DATA_INCOMPLETA",
+             "IA_VXACE_MARSHAL_INVALIDO","IA_VXACE_ARCHIVO_DE_OTRO_MOTOR",
              "IA_RPG_RUTAS_AMBIGUAS","IA_RPG_MZ_COMPRIMIDO_NO_VALIDO",
              "IA_MOTOR_FUERA_DEL_JUEGO","IA_MODELO_INCOMPLETO",
              "IA_DEPENDENCIAS_MODELO_FALTANTES","IA_PUENTE_INSEGURO",
