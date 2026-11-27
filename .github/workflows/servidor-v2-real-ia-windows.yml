@@ -1,4 +1,4 @@
-name: Servidor R31 candidate - MV MZ VX Ace - real OPUS encrypted Windows
+name: Servidor R31 candidate - MV MZ VX Ace - real OPUS and clean shutdown
 on:
   push:
     branches:

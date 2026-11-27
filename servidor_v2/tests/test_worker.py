@@ -1,5 +1,6 @@
 import importlib.util, json, tempfile, threading, unittest
 from types import SimpleNamespace
+from unittest import mock
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
@@ -580,6 +581,31 @@ class VXAceWorkerTests(unittest.TestCase):
         finally:
             ipc2.close()
             service2.close()
+
+    def test_vxace_run_closes_memory_before_releasing_session(self):
+        root=self.make_game()
+        engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+        engine.mkdir(parents=True)
+        service=ia.Service(root,engine,neural=FakeNeural())
+        descriptor=engine.parent/"vxace-session.txt"
+        bridge=engine.parent/"bridge.json"
+        original_close=service.close
+        events=[]
+        def close_memory():
+            self.assertTrue(descriptor.is_file(),"session removed before SQLite closed")
+            self.assertTrue(bridge.is_file(),"HTTP descriptor removed before SQLite closed")
+            original_close()
+            events.append("memory closed")
+        with mock.patch.object(service,"close",side_effect=close_memory), \
+             mock.patch.object(ia,"monitor_game_lifetime"), \
+             mock.patch.object(ia.ThreadingHTTPServer,"serve_forever",return_value=None):
+            ia.run(service,parent_pid=1234)
+        self.assertEqual(events,["memory closed"])
+        self.assertFalse(descriptor.exists())
+        self.assertFalse(bridge.exists())
+        # The exact same connection must be closed, not only its transaction.
+        with self.assertRaises(ia.sqlite3.ProgrammingError):
+            service.memory.db.execute("SELECT 1")
 
     def test_vxace_system_dll_and_empty_rtp_match_installer(self):
         root=self.make_game()

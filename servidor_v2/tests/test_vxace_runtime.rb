@@ -168,6 +168,18 @@ elsif ARGV[0]=='--real'
       assert(Time.now<deadline,'IA_VXACE_VERIFIED_WORKER_BOOT_TIMEOUT: '+IATraductoraVXACE.launch_diagnostic)
       sleep 0.2
     end
+    if ARGV[2]=='--observe-worker-exit'
+      # QA-only handshake: let the parent acquire a real Windows process
+      # handle before the fixture ends, instead of guessing from a PID later.
+      observed=File.join(SIDECAR,"qa-observed-#{Process.pid}.txt")
+      observe_deadline=Time.now+30
+      until File.file?(observed)
+        assert(Time.now<observe_deadline,'IA_VXACE_QA_OBSERVER_TIMEOUT')
+        sleep 0.05
+      end
+      assert(File.binread(observed)=="observed\n",'IA_VXACE_QA_OBSERVER_INVALID')
+      File.delete(observed)
+    end
     checks(false)
   end
 elsif ARGV[0]=='--launch-probe'

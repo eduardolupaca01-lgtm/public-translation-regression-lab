@@ -716,6 +716,9 @@ def make_handler(service:Service):
     class Handler(BaseHTTPRequestHandler):
         server_version="IATraductora/1"
         sys_version=""
+        # VX Ace drains its HTTP threads before closing the persistent memory.
+        # Bound stalled local clients so shutdown cannot wait forever for input.
+        timeout=10 if getattr(service,"vxace",False) else None
         def log_message(self,*_):pass
         def send(self,status,obj):
             body=json.dumps(obj,ensure_ascii=False).encode("utf8")
@@ -934,11 +937,14 @@ class VXAceFileBridge:
         self.thread = threading.Thread(target=serve, name="IA-VXACE-IPC", daemon=True)
         self.thread.start()
 
-    def close(self):
+    def stop_serving(self):
         self.stop.set()
-        if self.thread is not None:
-            # Wait for any in-flight inference before closing SQLite.
+        if self.thread is not None and self.thread.ident is not None:
+            # No more IPC requests can enter the shared translation memory.
             self.thread.join()
+
+    def close(self):
+        self.stop_serving()
         try:
             if _ipc_regular(self.descriptor, 512):
                 fields = self.descriptor.read_text("ascii").splitlines()
@@ -985,6 +991,11 @@ def monitor_game_lifetime(http, parent_pid):
 
 def run(service,parent_pid=0,diagnostic_file=None):
     http=ThreadingHTTPServer(("127.0.0.1",0),make_handler(service))
+    if service.vxace:
+        # ThreadingHTTPServer normally abandons daemon request handlers.
+        # Keep them joinable here, so a final translation cannot race SQLite close.
+        http.daemon_threads=False
+        http.block_on_close=True
     dest=None
     ipc=None
     try:
@@ -997,14 +1008,25 @@ def run(service,parent_pid=0,diagnostic_file=None):
             write_startup_code(diagnostic_file,"IA_VXACE_SESSION_READY")
         http.serve_forever(poll_interval=0.5)
     finally:
-        http.server_close()
-        if ipc is not None:ipc.close()
-        service.close()
+        # Drain both transports, close SQLite, then withdraw session ownership.
+        # A removed VX Ace descriptor must not announce completion while the
+        # persistent database is still open. Keep the IPC lock until cleanup.
         try:
-            if dest is not None:
-                state=json.loads(dest.read_text("utf8"))
-                if state.get("token")==service.token:dest.unlink()
-        except (OSError,ValueError):pass
+            try:
+                if ipc is not None:ipc.stop_serving()
+            finally:
+                try:
+                    http.server_close()
+                finally:
+                    service.close()
+        finally:
+            try:
+                if dest is not None:
+                    state=json.loads(dest.read_text("utf8"))
+                    if state.get("token")==service.token:dest.unlink()
+            except (OSError,ValueError):pass
+            finally:
+                if ipc is not None:ipc.close()
 
 def safe_startup_code(error):
     # Neither a raw exception, a model path nor game dialogue may leave
