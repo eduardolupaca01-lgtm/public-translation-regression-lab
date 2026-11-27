@@ -67,3 +67,16 @@ func TestRPGXPInflateRejectsTrailingAndOverflow(t *testing.T){
     if _,e=xpInflate(packed,10);e==nil{t.Fatal("expansion limit failed")}
     if _,e=xpInflate(append(packed,1),2048);e==nil{t.Fatal("trailing compressed data accepted")}
 }
+
+func TestRPGXPPluginHeaderExactLFAndCRLF(t *testing.T){
+    original:=xpTestOriginal(t)
+    for _,eol:=range []string{"\n","\r\n"}{
+        plugin:=[]byte(xpScriptMarker+eol+"# test"+eol)
+        staged,e:=xpPatchScripts(original,plugin);if e!=nil{t.Fatal(e)}
+        rows,e:=xpParseScripts(staged);if e!=nil{t.Fatal(e)}
+        code,e:=xpInflate(rows[3].packed,int64(len(plugin)));if e!=nil||!bytes.Equal(code,plugin){t.Fatal("plugin bytes normalized or changed")}
+    }
+    for _,suffix:=range []string{"X\n","\rX","\r",""}{
+        if _,e:=xpPatchScripts(original,[]byte(xpScriptMarker+suffix));e==nil{t.Fatal("ambiguous marker accepted")}
+    }
+}

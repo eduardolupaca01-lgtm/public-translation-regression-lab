@@ -588,6 +588,64 @@ def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
     return root,root
 
 
+def rpgxp_game_root(exe_root:Path)->tuple[Path,Path]:
+    """Explicit RGSS1 laboratory mode; no game code or Marshal objects executed."""
+    invalid="IA_RPGXP_RECURSOS_NO_VERIFICADOS"
+    candidate=Path(exe_root).absolute()
+    for folder in (candidate,*candidate.parents):
+        st=folder.lstat()
+        if not stat.S_ISDIR(st.st_mode) or getattr(st,"st_file_attributes",0)&0x400:
+            raise ValueError(invalid)
+    root=candidate.resolve(strict=True)
+    def pe32(file,dll):
+        if not _ipc_regular(file,64*1024*1024):return False
+        with file.open("rb") as f:
+            dos=f.read(64)
+            if len(dos)!=64 or dos[:2]!=b"MZ":return False
+            offset=int.from_bytes(dos[60:64],"little")
+            if not 64<=offset<=1024*1024:return False
+            f.seek(offset);h=f.read(26)
+        if len(h)!=26:return False
+        flags=int.from_bytes(h[22:24],"little")
+        return (h[:4]==b"PE\0\0" and h[4:6]==b"\x4c\x01"
+                and h[24:26]==b"\x0b\x01"
+                and int.from_bytes(h[20:22],"little")>=2
+                and flags&2 and bool(flags&0x2000)==dll)
+    ini=root/"Game.ini"
+    if not _ipc_regular(ini,64*1024) or not pe32(root/"Game.exe",False):
+        raise ValueError(invalid)
+    raw=ini.read_bytes()
+    if b"\0" in raw:raise ValueError(invalid)
+    parser=configparser.ConfigParser(interpolation=None,strict=True)
+    try:
+        try:text=raw.decode("utf-8-sig")
+        except UnicodeError:text=raw.decode("cp932",errors="strict")
+        parser.read_string(text)
+        sections=[s for s in parser.sections() if s.casefold()=="game"]
+        if len(sections)!=1 or parser.defaults():raise ValueError(invalid)
+        library=parser.get(sections[0],"Library",fallback="").replace("\\","/").removeprefix("./")
+        scripts=parser.get(sections[0],"Scripts",fallback="").replace("\\","/").removeprefix("./")
+    except (configparser.Error,UnicodeError) as exc:raise ValueError(invalid) from exc
+    parts=library.split("/")
+    if len(parts) not in (1,2) or (len(parts)==2 and parts[0].casefold()!="system"):
+        raise ValueError(invalid)
+    if not re.fullmatch(r"RGSS1[0-9]{2}[A-Z]?\.dll",parts[-1],re.I) or scripts.casefold()!="data/scripts.rxdata":
+        raise ValueError(invalid)
+    if len(parts)==2:_ipc_directory(root/parts[0],root)
+    if not pe32(root.joinpath(*parts),True):raise ValueError(invalid)
+    for name in ("Game.rgssad","Game.rgss2a","Game.rgss3a","js/rpg_core.js","js/rmmz_core.js",
+                 "www/js/rpg_core.js","www/js/rmmz_core.js"):
+        p=root/name
+        if p.exists() or p.is_symlink():raise ValueError(invalid)
+    data=_ipc_directory(root/"Data",root)
+    for name in ("Scripts.rxdata","System.rxdata","MapInfos.rxdata"):
+        file=data/name
+        if not _ipc_regular(file,64*1024*1024):raise ValueError(invalid)
+        with file.open("rb") as f:
+            if f.read(2)!=b"\x04\x08":raise ValueError(invalid)
+    return root,root
+
+
 def verified_halva_runtime(game:Path, runtime:Path):
     # Only a declared, owned installation; the launcher may provide an
     # external temporary content directory. No scanning for unrelated caches.
@@ -621,11 +679,21 @@ def verified_halva_runtime(game:Path, runtime:Path):
     return root,content
 
 class Service:
-    def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None,web_mode=False):
+    def __init__(self,game:Path,engine:Path,neural=None,*,halva_content=None,web_mode=False,rpgxp_mode=False):
         self.halva=halva_content is not None
         self.vxace=False
+        self.rpgxp=rpgxp_mode
         self.web=web_mode
-        if web_mode:
+        # XP laboratory entry is deliberately not exposed through the
+        # packaged CLI or the automatic worker launcher yet.
+        if rpgxp_mode:
+            if self.halva or web_mode:raise ValueError("IA_RPGXP_RECURSOS_NO_VERIFICADOS")
+            self.game,self.content=rpgxp_game_root(game)
+            expected=self.game
+            for part in ("IA Traductora",".local","Rpg","engine"):
+                expected=_ipc_directory(expected/part,self.game)
+            if engine.absolute()!=expected:raise ValueError("IA_MOTOR_FUERA_DEL_JUEGO")
+        elif web_mode:
             if self.halva:raise ValueError("IA_WEB_ARGUMENTOS_INVALIDOS")
             from web_runtime import web_profile
             self.game,_,_=web_profile(game)
@@ -858,8 +926,13 @@ def _ipc_atomic(path, data):
 
 class VXAceFileBridge:
     """One authenticated session per worker; no arbitrary paths or commands."""
+    profile="vxace"
+    session_schema=VXACE_IPC_SCHEMA
+    request_schema=VXACE_IPC_REQUEST
+    response_schema=VXACE_IPC_RESPONSE
+
     def __init__(self, service, parent_pid):
-        if not service.vxace or parent_pid <= 0 or not _VXACE_TOKEN.fullmatch(service.token):
+        if not getattr(service,self.profile,False) or parent_pid <= 0 or not _VXACE_TOKEN.fullmatch(service.token):
             raise ValueError("IA_VXACE_IPC_SESION_INVALIDA")
         self.service = service
         self.parent_pid = parent_pid
@@ -868,8 +941,8 @@ class VXAceFileBridge:
         folder = root
         for part in ("IA Traductora", ".local", "Rpg"):
             folder = _ipc_directory(folder / part, root)
-        self.descriptor = folder / "vxace-session.txt"
-        self.lock_path = folder / "vxace-worker.lock"
+        self.descriptor = folder / (self.profile+"-session.txt")
+        self.lock_path = folder / (self.profile+"-worker.lock")
         if self.lock_path.exists() and not _ipc_regular(self.lock_path, 1):
             raise RuntimeError("IA_VXACE_IPC_LOCK_INVALIDO")
         if self.lock_path.is_symlink():
@@ -889,7 +962,7 @@ class VXAceFileBridge:
             else:
                 import fcntl
                 fcntl.flock(self.lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            base = folder / "vxace-ipc"
+            base = folder / (self.profile+"-ipc")
             base.mkdir(exist_ok=True)
             _ipc_directory(base, root)
             session = base / service.token
@@ -899,7 +972,7 @@ class VXAceFileBridge:
                     self.descriptor.exists() and not _ipc_regular(self.descriptor, 512)):
                 raise RuntimeError("IA_VXACE_IPC_DESCRIPTOR_INVALIDO")
             descriptor = ("%s\n%s\n%d\n%d\n" % (
-                VXACE_IPC_SCHEMA, service.token, os.getpid(), parent_pid)).encode("ascii")
+                self.session_schema, service.token, os.getpid(), parent_pid)).encode("ascii")
             _ipc_atomic(self.descriptor, descriptor)
         except Exception:
             self.lock.close()
@@ -933,7 +1006,7 @@ class VXAceFileBridge:
                     if len(raw) > VXACE_IPC_MAX:
                         continue
                     lines = raw.decode("ascii").splitlines()
-                    if (not 4 <= len(lines) <= 9 or lines[0] != VXACE_IPC_REQUEST
+                    if (not 4 <= len(lines) <= 9 or lines[0] != self.request_schema
                             or not secrets.compare_digest(lines[1], self.service.token)
                             or lines[2] not in MODELS):
                         continue
@@ -954,7 +1027,7 @@ class VXAceFileBridge:
                         ]
                     except Exception:
                         values = ["-"] * len(texts)
-                    answer = ("\n".join([VXACE_IPC_RESPONSE, self.service.token,
+                    answer = ("\n".join([self.response_schema, self.service.token,
                                           request_id] + values) + "\n").encode("ascii")
                     if len(answer) <= VXACE_IPC_MAX and not self.stop.is_set():
                         _ipc_atomic(response, answer)
@@ -1000,6 +1073,15 @@ class VXAceFileBridge:
             pass
         finally:
             self.lock.close()
+
+
+class RPGXPFileBridge(VXAceFileBridge):
+    # Same verified service, bounded hex IPC and persistent memory, distinct
+    # engine-specific descriptor and protocol. The native launcher is next.
+    profile="rpgxp"
+    session_schema="IA-RPGXP-SESSION-1"
+    request_schema="IA-RPGXP-REQUEST-1"
+    response_schema="IA-RPGXP-RESPONSE-1"
 
 
 def monitor_game_lifetime(http, parent_pid):

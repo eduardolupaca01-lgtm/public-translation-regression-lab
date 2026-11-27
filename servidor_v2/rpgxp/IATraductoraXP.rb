@@ -12,6 +12,106 @@ module IATraductoraXP
   @cache = {}
   @order = []
   @transport = nil
+
+  # File-only transport for old Ruby, no sockets, JSON, gems or external
+  # services. Lab callers attach it explicitly after the worker starts.
+  class FileBridge
+    SIDECAR=File.join('IA Traductora','.local','Rpg')
+    LIMIT=96*1024
+    def initialize
+      @token=nil
+      @serial=0
+      @pending={}
+      @rejected={}
+    end
+    def safe_dir(path)
+      current='.'
+      path.split('/').each do |part|
+        return false if part.empty? || part=='.' || part=='..'
+        current=File.join(current,part)
+        return false if File.symlink?(current) || !File.directory?(current)
+      end
+      true
+    end
+    def read(path,limit)
+      return nil if File.symlink?(path) || !File.file?(path) || File.size(path)>limit
+      value=File.open(path,'rb') { |f| f.read(limit+1) }
+      value && value.length<=limit ? value : nil
+    rescue StandardError
+      nil
+    end
+    def session
+      return nil unless safe_dir(SIDECAR)
+      raw=read(File.join(SIDECAR,'rpgxp-session.txt'),512)
+      return nil unless raw
+      fields=raw.split("\n")
+      return nil unless fields.length==4 && fields[0]=='IA-RPGXP-SESSION-1' &&
+        fields[1] =~ /\A[0-9a-f]{64}\z/ && fields[2] =~ /\A[1-9][0-9]*\z/ &&
+        fields[3]==Process.pid.to_s
+      directory=File.join(SIDECAR,'rpgxp-ipc',fields[1])
+      return nil unless safe_dir(directory)
+      [fields[1],directory]
+    rescue StandardError
+      nil
+    end
+    def poll(lang,text)
+      return nil unless (lang=='ja' || lang=='en') && text.is_a?(String) &&
+        text.length<=MAX_BYTES && IATraductoraXP.codepoints(text)
+      descriptor=session
+      return nil unless descriptor
+      token,dir=descriptor
+      if @token!=token
+        @token=token
+        @serial=0
+        @pending.clear
+        @rejected.clear
+      end
+      key=[lang,text]
+      return nil if @rejected.has_key?(key)
+      now=Time.now.to_f
+      @pending.delete_if { |k,v| now-v[2]>60.0 }
+      old=@pending[key]
+      if old
+        file=old[0]+'.res'
+        raw=read(file,LIMIT)
+        return nil unless raw
+        lines=raw.split("\n")
+        File.delete(file) unless File.symlink?(file)
+        @pending.delete(key)
+        if lines.length==4 && lines[0]=='IA-RPGXP-RESPONSE-1' && lines[1]==token &&
+            lines[2]==old[1] && lines[3] =~ /\A(?:[0-9a-f]{2})+\z/
+          value=[lines[3]].pack('H*')
+          points=IATraductoraXP.codepoints(value)
+          return points.pack('U*') if points && IATraductoraXP.valid?(lang,text,value)
+        end
+        @rejected.clear if @rejected.size>=4096
+        @rejected[key]=true
+        return nil
+      end
+      return nil if @pending.size>=32
+      @serial+=1
+      ident=sprintf('%016x',@serial)
+      base=File.join(dir,ident)
+      return nil if File.exist?(base+'.req') || File.exist?(base+'.res') || File.symlink?(base+'.req') || File.symlink?(base+'.res')
+      temp=base+'.tmp'
+      created=false
+      begin
+        payload=['IA-RPGXP-REQUEST-1',token,lang,text.unpack('H*')[0]].join("\n")+"\n"
+        return nil if payload.length>LIMIT
+        File.open(temp,File::WRONLY|File::CREAT|File::EXCL|File::BINARY) do |f|
+          created=true
+          f.write(payload)
+        end
+        File.rename(temp,base+'.req')
+        @pending[key]=[base,ident,now]
+      ensure
+        File.delete(temp) if created && File.file?(temp) && !File.symlink?(temp)
+      end
+      nil
+    rescue StandardError
+      nil
+    end
+  end
   class << self
     def attach(transport)
       @transport = transport
@@ -39,7 +139,10 @@ module IATraductoraXP
       nil
     end
     def signature(value)
-      value.scan(/[0-9]+/).map { |n| n.sub(/\A0+(?=[0-9])/,'') }.sort
+      points=codepoints(value)
+      return nil unless points
+      normalized=points.map { |c| c>=0xff10 && c<=0xff19 ? c-0xff10+48 : c }.pack('U*')
+      normalized.scan(/[0-9]+/).map { |n| n.sub(/\A0+(?=[0-9])/,'') }.sort
     end
     def valid?(lang, original, value)
       return false unless value.is_a?(String) && value.length<=MAX_BYTES && codepoints(value)
@@ -58,7 +161,9 @@ module IATraductoraXP
       return nil unless @transport && raw.is_a?(String) && raw.length<=MAX_BYTES && codepoints(raw)
       pieces=raw.split(CONTROL,-1)
       # Unknown control syntax is not prose. Preserve this whole message.
-      return nil if pieces.each_with_index.any? { |p,i| i%2==0 && p =~ /[\\\x00-\x1f<>]/ }
+      pieces.each_with_index do |piece,i|
+        return nil if i%2==0 && piece =~ /[\\\x00-\x1f<>]/
+      end
       entries=[]
       pieces.each_with_index do |piece,i|
         next if i%2==1

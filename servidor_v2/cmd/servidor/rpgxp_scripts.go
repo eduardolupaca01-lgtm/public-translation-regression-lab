@@ -132,7 +132,7 @@ func xpEncodeRows(rows [][]byte) ([]byte,error){
 // Insert immediately before the only Main section. Original row bytes
 // (IDs, raw encoded names and compressed code) are copied verbatim.
 func xpPatchScripts(original,plugin []byte)([]byte,error){
-    if len(plugin)==0||len(plugin)>1024*1024||!bytes.HasPrefix(plugin,[]byte(xpScriptMarker+"\n"))||
+    if len(plugin)==0||len(plugin)>1024*1024||(!bytes.HasPrefix(plugin,[]byte(xpScriptMarker+"\n"))&&!bytes.HasPrefix(plugin,[]byte(xpScriptMarker+"\r\n")))||
         bytes.IndexByte(plugin,0)>=0{return nil,errors.New("IA_RPGXP_PLUGIN_NO_VERIFICADO")}
     rows,e:=xpParseScripts(original);if e!=nil{return nil,e}
     if len(rows)>=xpMaxSections{return nil,xpInvalidMarshal}
