@@ -72,14 +72,17 @@ func xpHashFile(file,want string)error{
  digest,e:=digestFile(file);if e!=nil||digest!=want{return xpError("SHA_NO_COINCIDE")}
  return nil
 }
+func xpReceiptValid(r xpReceipt)bool{
+ return r.Schema=="ia-rpgxp-install-v1"&&r.Build==xpLabBuild&&
+  r.Target=="Data/Scripts.rxdata"&&xpSHA(r.Before)&&xpSHA(r.After)&&r.Before!=r.After&&
+  xpSHA(r.Plugin)&&xpSHA(r.Worker)&&xpSHA(r.Launcher)&&
+  (r.Status=="PREPARED"||r.Status=="INSTALLED"||r.Status=="RESTORED")
+}
 func xpReadReceipt(file string)(xpReceipt,bool,error){
  var r xpReceipt
  if _,e:=os.Lstat(file);os.IsNotExist(e){return r,false,nil}else if e!=nil{return r,false,e}
  b,e:=xpRead(file,8192)
- if e!=nil||json.Unmarshal(b,&r)!=nil||r.Schema!="ia-rpgxp-install-v1"||r.Build!=xpLabBuild||
-  r.Target!="Data/Scripts.rxdata"||!xpSHA(r.Before)||!xpSHA(r.After)||r.Before==r.After||
-  !xpSHA(r.Plugin)||!xpSHA(r.Worker)||!xpSHA(r.Launcher)||
-  (r.Status!="PREPARED"&&r.Status!="INSTALLED"&&r.Status!="RESTORED"){
+ if e!=nil||json.Unmarshal(b,&r)!=nil||!xpReceiptValid(r){
   return r,false,xpError("RECIBO_INVALIDO")
  }
  return r,true,nil
@@ -107,6 +110,11 @@ func xpInstallLab(exe string,pkg *packageReader)error{
  plugin,e:=readZip(pkg.files[xpPluginAsset],1024*1024)
  if e!=nil||hash(plugin)!=pkg.manifest.Files[xpPluginAsset]||!bytes.Contains(plugin,[]byte(xpLabBuild)){return xpError("PLUGIN_NO_VERIFICADO")}
  sidecar,engine,journal,backup,receiptFile:=xpPaths(root)
+ // Retain the already installed, verified protocol-compatible engine and
+ // memory when replacing only our XP presentation adapter.
+ if _,exists,e:=xpReadReceipt(receiptFile);e!=nil{return e}else if exists{
+  return xpInstallExisting(root,target,pkg,plugin)
+ }
  // Inspect and validate an original archive before extracting a new sidecar.
  current,e:=xpRead(target,xpMaxArchive);if e!=nil{return e}
  if _,e=os.Lstat(receiptFile);os.IsNotExist(e){
@@ -159,18 +167,29 @@ func xpInstalledIdentity(exe string,pkg *packageReader)(string,error){
  sidecar,_,_,backup,receiptFile:=xpPaths(root)
  r,ok,e:=xpReadReceipt(receiptFile)
  if e!=nil||!ok||r.Status!="INSTALLED"{return "",xpError("INSTALACION_NO_VERIFICADA")}
- if r.Plugin!=pkg.manifest.Files[xpPluginAsset]||r.Worker!=pkg.manifest.Files["IATraductora.exe"]||r.Launcher!=pkg.manifest.Files[xpLauncherAsset]{return "",xpError("VERSION_DISTINTA")}
+ if r.Plugin!=pkg.manifest.Files[xpPluginAsset]{return "",xpError("VERSION_DISTINTA")}
  if e=xpVerifiedAssets(root,r);e!=nil{return "",e}
- if e=iaCheckEngine(sidecar,pkg);e!=nil{return "",e}
+ retained:=r.Worker!=pkg.manifest.Files["IATraductora.exe"]||r.Launcher!=pkg.manifest.Files[xpLauncherAsset]
+ if retained{
+  plugin,e:=readZip(pkg.files[xpPluginAsset],1024*1024)
+  if e!=nil||hash(plugin)!=r.Plugin||!bytes.Contains(plugin,[]byte(xpCoverageRevision)){return "",xpError("VERSION_DISTINTA")}
+  if e=xpCheckRetainedModels(root,pkg);e!=nil{return "",e}
+ }else if e=iaCheckEngine(sidecar,pkg);e!=nil{return "",e}
  if e=xpHashFile(target,r.After);e!=nil{return "",e}
  if e=xpHashFile(backup,r.Before);e!=nil{return "",e}
- return xpLabBuild+" SHA256="+r.After,nil
+ label:=xpLabBuild+" SHA256="+r.After
+ if retained{label+=" MOTOR=CONSERVADO"}
+ if plugin,e:=readZip(pkg.files[xpPluginAsset],1024*1024);e==nil&&bytes.Contains(plugin,[]byte(xpCoverageRevision)){label+=" ADAPTADOR="+xpCoverageRevision}
+ return label,nil
 }
 func xpRecoverLab(exe string)error{
  root,target,e:=xpTarget(exe);if e!=nil{return e}
  _,engine,journal,backup,receiptFile:=xpPaths(root)
  unlock,e:=xpLock(journal);if e!=nil{return e};defer unlock()
  if e=xpNoSession(engine);e!=nil{return e}
+ if transition,exists,e:=xpReadTransition(journal);e!=nil{return e}else if exists{
+  return xpApplyTransition(root,target,transition,true)
+ }
  r,ok,e:=xpReadReceipt(receiptFile);if e!=nil||!ok{return xpError("RECIBO_INVALIDO")}
  if e=xpHashFile(backup,r.Before);e!=nil{return e}
  current,e:=xpRead(target,xpMaxArchive);if e!=nil{return e}

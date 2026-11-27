@@ -523,7 +523,7 @@ module IATraductoraXPUI
       nil
     end
     def invalidate(bitmap,rect=nil)
-      return if @painting
+      return if @painting || @jobs.empty?
       @jobs.dup.each { |job| drop(job) if job[:bitmap].equal?(bitmap) && overlap?(job[:rect],rect) }
     rescue StandardError
       nil
@@ -633,6 +633,13 @@ module IATraductoraXPUI
         set_font(bitmap.font,job[:font])
         bitmap.ia_xp_bitmap_draw_text(x,y,w,h,translated,job[:align])
         @applied+=1
+      rescue StandardError
+        # If the replacement text is rejected by the native renderer,
+        # restore the original draw rather than leaving a blank region.
+        bitmap.fill_rect(x,y,w,h,Color.new(0,0,0,0))
+        bitmap.blt(x,y,job[:snapshot],Rect.new(0,0,w,h))
+        set_font(bitmap.font,job[:font])
+        bitmap.ia_xp_bitmap_draw_text(x,y,w,h,job[:raw],job[:align])
       ensure
         set_font(bitmap.font,saved)
         @painting=false

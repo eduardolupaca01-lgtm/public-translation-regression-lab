@@ -82,7 +82,8 @@ class MockXP
      'Please turn the wheel.'=>'Gira la rueda.',
      'Sentinel'=>'Centinela',
      'This is a secret passage.'=>'Este es un pasadizo secreto.',
-     'Open the gate.'=>'Abre la puerta.'}[text]
+     'Open the gate.'=>'Abre la puerta.',
+     'Please lower the bridge.'=>'Baja el puente.'}[text]
   end
 end
 transport=MockXP.new
@@ -145,7 +146,7 @@ check(db.font.size==25 && db.font.color.red==100,'font restored')
 check(db.fills.size==2,'only own region restored')
 transport.ready=false
 stale=Window_Base.new
-stale.contents.draw_text(0,0,200,32,'Open the gate.')
+stale.contents.draw_text(0,0,200,32,'Please lower the bridge.')
 stale.contents.fill_rect(0,0,200,32,Color.new(0,0,0))
 before=stale.contents.draws.length
 sleep 0.06;IATraductoraXPUI.tick

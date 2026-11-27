@@ -73,7 +73,7 @@ def main():
                 raise AssertionError("XP real worker fixture failed: "+run.stderr.decode("utf8","replace")[-1000:])
             wait_closed(engine)
             count=read_translation_count(engine.parent/"cache"/"translation-memory-v2.sqlite3")
-            assert count==3, "missing or duplicate memory keys"
+            assert count==4, "missing or duplicate memory keys"
         invoke(exe,"--recover","--game",game)
         assert target.read_bytes()==original
         assert json.loads(receipt.read_text("utf8"))["status"]=="RESTORED"

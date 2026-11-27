@@ -85,4 +85,14 @@ raise 'XP content untranslated' unless shown && shown!=raw && shown =~ /puerta|p
 raise 'XP control changed' unless shown.start_with?('\\C[2]') && shown.include?("\\C[0]\n")
 raise 'XP source changed' unless $game_temp.message_text==raw
 raise 'XP choice changed' unless $game_temp.choice_proc.equal?(callback) && $game_temp.choice_start==2 && $game_temp.choice_max==1
+# This phrase lacks the former short list of English stopwords.
+$game_temp.choice_max=0
+$game_temp.message_text="Hear me, mighty king!"
+second=Window_Message.new
+deadline=Time.now.to_f+14
+while second.paints==0 && Time.now.to_f<deadline
+  second.update
+  sleep 0.02 if second.paints==0
+end
+raise 'XP expanded prose untranslated' unless second.paints==1 && second.painted!="Hear me, mighty king!" && second.painted =~ /rey/i && second.painted =~ /escuch|oye|oiga|o.d|o.r/i
 puts 'IA_RPGXP_REAL_OPUS_INSTALLED_NATIVE_CONTRACT_PASS'
