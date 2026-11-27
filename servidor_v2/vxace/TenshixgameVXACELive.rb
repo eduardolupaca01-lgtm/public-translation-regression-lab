@@ -209,8 +209,7 @@ module TenshixgameVXACELive
     def translatable_segment?(text)
       value = text.to_s.strip
       return false if value.empty? || value.length > 1800
-      return false unless value =~ (JAPANESE_PATTERN || LATIN_PATTERN)
-      return false if value !~ /[A-Za-zぁ-ゖァ-ヺ一-龯]/
+      return false unless value =~ /[A-Za-zぁ-ゖァ-ヺ一-龯]/
       return false if spanish_text?(value)
       true
     end
