@@ -36,6 +36,10 @@ type ownerManifest struct{
  Schema string `json:"schema"`
  WorkerSHA string `json:"worker_sha256"`
  PluginSHA string `json:"plugin_sha256"`
+ Product string `json:"product,omitempty"`
+ VXACEHelperSHA string `json:"vxace_helper_sha256,omitempty"`
+ VXACEPluginSHA string `json:"vxace_plugin_sha256,omitempty"`
+ VXACEPluginBuild string `json:"vxace_plugin_build,omitempty"`
 }
 type installReceipt struct{
  Schema string `json:"schema"`
@@ -94,6 +98,17 @@ func readPackage(filename string)(*packageReader,error){
    "models/opus_en_es/model.bin","models/opus_en_es/source.spm",
    "models/opus_en_es/target.spm"}{
   if files[name]==nil{return nil,errors.New("IA_MODELOS_NO_INCLUIDOS")}
+ }
+ // VX Ace support is optional for old MV/MZ packages, but the helper and
+ // Ruby runtime must arrive together; never accept a half-packaged adapter.
+ helperPresent:=files["vxace-helper.exe"]!=nil
+ pluginPresent:=files["vxace/TenshixgameVXACELive.rb"]!=nil
+ if helperPresent!=pluginPresent{return nil,errors.New("IA_VXACE_PAQUETE_INCOMPLETO")}
+ if helperPresent{
+  if len(manifest.Files["vxace-helper.exe"])!=64||
+     len(manifest.Files["vxace/TenshixgameVXACELive.rb"])!=64{
+   return nil,errors.New("IA_VXACE_MANIFIESTO_INVALIDO")
+  }
  }
  good=true
  return &packageReader{f:f,archive:zr,files:files,manifest:manifest},nil
@@ -267,6 +282,10 @@ func prepareSidecar(game string,pkg *packageReader)(string,error){
  return iaPrepareAndPublishSidecar(game,pkg)
 }
 func Install(gameEXE string,pkg *packageReader)error{
+ if fingerprint,matched,vxErr:=detectVXAce(gameEXE);matched{
+  if vxErr!=nil{return vxErr}
+  return installVXAce(fingerprint,pkg)
+ }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{
@@ -339,6 +358,10 @@ func Install(gameEXE string,pkg *packageReader)error{
 // The receipt may be valid for an older version. Verify the bytes against
 // the selected package before announcing successful installation.
 func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
+ if fingerprint,matched,vxErr:=detectVXAce(gameEXE);matched{
+  if vxErr!=nil{return "",vxErr}
+  return installedVXAceIdentity(fingerprint,pkg)
+ }
  root,content,err:=detectGame(gameEXE)
  if err!=nil{
   if packed,ok:=halvaRootFromDetection(gameEXE,err);ok{return halvaIdentity(packed,pkg)}
@@ -368,7 +391,7 @@ func installedPackageIdentity(gameEXE string,pkg *packageReader)(string,error){
  return build+" SHA256="+hash(source),nil
 }
 func main(){
- exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV o MZ")
+ exe:=flag.String("game","","Game.exe de una copia cerrada de RPG Maker MV, MZ o VX Ace")
  payload:=flag.String("package","","Ejecutable Servidor.exe con paquete firmado; por defecto el propio ejecutable")
  recoverGame:=flag.Bool("recover",false,"Recuperar el registro original de complementos MV/MZ (no necesita modelos)")
  inspect:=flag.Bool("inspect",false,"Diagnóstico RPG de solo lectura, sin modelos ni ejecución del juego")
