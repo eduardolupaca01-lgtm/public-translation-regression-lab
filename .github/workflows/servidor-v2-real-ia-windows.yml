@@ -45,6 +45,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_RUST_TEST_FAIL" }
           cargo build --release --manifest-path servidor_v2/vxace-helper/Cargo.toml --bins --examples
           if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_HELPER_BUILD_FAIL" }
+      - name: Verify actual native helper launch and Ruby startup before downloading OPUS
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/probe_vxace_launch.py --target servidor_v2/vxace-helper/target/release
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_NATIVE_LAUNCH_PREFLIGHT_FAIL" }
       - name: Exigir regresiones de presentacion MV/MZ antes de preparar el EXE
         shell: pwsh
         run: |
@@ -179,6 +184,11 @@ jobs:
             throw "IA_SERVIDOR_PROPIO_PAQUETE_INVALIDO"
           }
           Write-Host "IA_SERVIDOR_UNICO_EXE_CON_MODELOS_Y_PLUGIN_PROPIOS_CREADO"
+      - name: VX Ace - installed script, real OPUS IPC, cache and exact restoration
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/test_vxace_real_worker.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --fixture servidor_v2/vxace-helper/target/release/examples/vxace_fixture.exe
+          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_REAL_OPUS_ACCEPTANCE_FAIL" }
       - name: Instalar desde Servidor.exe propio en MV sintético y verificar nuevo puente con traducción neuronal REAL
         shell: pwsh
         run: |
@@ -349,11 +359,6 @@ jobs:
           if ($p.ExitCode -ne 0 -or (Get-FileHash -LiteralPath (Join-Path $packages "EnginePackage.halva")).Hash -ne $before) { throw "IA_HALVA_RECUPERACION_FAIL" }
           if (!(Test-Path -LiteralPath $cache)) { throw "IA_HALVA_CACHE_ELIMINADA" }
           Write-Host "IA_HALVA_NATIVE_OPUS_REAL_AND_RECOVERY_PASS"
-      - name: VX Ace - installed script, real OPUS IPC, cache and exact restoration
-        shell: pwsh
-        run: |
-          python servidor_v2/tests/test_vxace_real_worker.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --fixture servidor_v2/vxace-helper/target/release/examples/vxace_fixture.exe
-          if ($LASTEXITCODE -ne 0) { throw "IA_VXACE_REAL_OPUS_ACCEPTANCE_FAIL" }
       - name: Cifrar siempre la versión candidata antes de publicarla en GitHub
         shell: pwsh
         run: |

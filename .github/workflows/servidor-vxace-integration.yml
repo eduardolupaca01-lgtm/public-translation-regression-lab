@@ -63,7 +63,13 @@ jobs:
           Push-Location servidor_v2
           go build -trimpath -ldflags "-H=windowsgui" -o "$env:RUNNER_TEMP\Servidor-bootstrap.exe" ./cmd/servidor
           if ($LASTEXITCODE -ne 0) { throw 'SERVIDOR_BOOTSTRAP_BUILD_FAILED' }
-          cargo build --release --manifest-path vxace-helper/Cargo.toml
+          cargo build --release --manifest-path vxace-helper/Cargo.toml --bins --examples
           if ($LASTEXITCODE -ne 0) { throw 'VXACE_HELPER_BUILD_FAILED' }
           Pop-Location
+      - name: Prove installed native launcher and Ruby startup in Unicode paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python servidor_v2/tests/probe_vxace_launch.py --target servidor_v2/vxace-helper/target/release
+          if ($LASTEXITCODE -ne 0) { throw 'VXACE_NATIVE_LAUNCH_PREFLIGHT_FAIL' }
       # No fake-weight or unverified RGSS3 EXE is published.
