@@ -506,6 +506,17 @@ class VXAceWorkerTests(unittest.TestCase):
         root=self.make_game(packed=True)
         self.assertEqual(ia.vxace_game_root(root),(root.resolve(),root.resolve()))
 
+    def test_large_packed_archive_accepted_at_worker_startup(self):
+        root=self.make_game(packed=True)
+        archive=root/"Game.rgss3a"
+        with archive.open("r+b") as stream:
+            stream.truncate(1216546*1024)
+        self.assertEqual(ia.vxace_game_root(root),(root.resolve(),root.resolve()))
+        with archive.open("r+b") as stream:
+            stream.truncate(ia.VXACE_MAX_ARCHIVE_BYTES+1)
+        with self.assertRaisesRegex(ValueError,"IA_VXACE_RGSS3A_INVALIDO"):
+            ia.vxace_game_root(root)
+
     def test_vxace_service_uses_existing_game_local_memory_and_bridge(self):
         root=self.make_game()
         engine=root/"IA Traductora"/".local"/"Rpg"/"engine"

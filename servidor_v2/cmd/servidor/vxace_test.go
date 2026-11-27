@@ -73,6 +73,31 @@ func TestDetectVXAcePackedArchiveHeader(t *testing.T) {
 	}
 }
 
+func TestVXAceLargePackedArchiveSizeGate(t *testing.T) {
+	exe := vxaceFixture(t, true)
+	archive := filepath.Join(filepath.Dir(exe), "Game.rgss3a")
+	// Header-only detection is intentional here; the real CI acceptance
+	// separately builds and processes a valid archive larger than this.
+	if err := os.Truncate(archive, 1216546*1024); err != nil { t.Fatal(err) }
+	fp, matched, err := detectVXAce(exe)
+	if err != nil || !matched || !fp.Packed {
+		t.Fatalf("large packed game rejected: %v %v", matched, err)
+	}
+	if err = os.Truncate(archive, vxaceMaxArchive+1); err != nil { t.Fatal(err) }
+	if _, matched, err = detectVXAce(exe); !matched || err == nil {
+		t.Fatal("oversized legacy archive was accepted")
+	}
+}
+
+func TestVXAceArchiveSpaceIncludesBackupAndStaging(t *testing.T) {
+	const size = int64(1216546*1024)
+	with := vxaceArchiveSpaceNeeded(size,true)
+	without := vxaceArchiveSpaceNeeded(size,false)
+	if with-without != uint64(size) || without <= 2*uint64(size) {
+		t.Fatal("archive space estimate omitted backup or staging")
+	}
+}
+
 func TestVXAceDoesNotMisclassifyOtherEngines(t *testing.T) {
 	game := t.TempDir()
 	exe := filepath.Join(game, "Game.exe")

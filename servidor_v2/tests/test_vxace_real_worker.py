@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Windows candidate acceptance on generated resources + desktop Ruby, not RGSS3."""
-import argparse, ctypes, hashlib, json, os, re, sqlite3, subprocess, tempfile, time
+import argparse, ctypes, hashlib, json, os, re, shutil, sqlite3, subprocess, tempfile, time
 from contextlib import closing
 from pathlib import Path
 
@@ -160,20 +160,26 @@ def main():
     a=p.parse_args()
     ruby=Path(__file__).with_name("test_vxace_runtime.rb").resolve()
     with tempfile.TemporaryDirectory(prefix="IA VX Ace 日本語 ") as temp:
-        for mode in ("loose","packed"):
+        for mode in ("loose","packed","packed-large"):
             game=Path(temp)/mode
-            run([a.fixture,"create",game,mode])
+            large=mode=="packed-large"
+            # Allow disk I/O for the genuine 1.2+ GB fixture; keep existing
+            # translation, boot and shutdown deadlines unchanged.
+            budget=900 if large else 240
+            run([a.fixture,"create",game,mode],timeout=budget)
             target=game/("Data/Scripts.rvdata2" if mode=="loose" else "Game.rgss3a")
+            if large:
+                assert target.stat().st_size>=1216546*1024,"IA_VXACE_LARGE_FIXTURE_TOO_SMALL"
             save=game/"Save01.rvdata2"
             original=hash_file(target)
             save_sha=hash_file(save)
             game_exe=game/"Game.exe"
-            run([a.servidor,"--game",game_exe])
+            run([a.servidor,"--game",game_exe],timeout=budget)
             assert hash_file(target)!=original,"IA_VXACE_INSTALL_NO_CHANGE"
             installed=hash_file(target)
             plugin=game/"IA Traductora"/".local"/"Rpg"/"engine"/"vxace"/"IATraductoraVXACE.rb"
-            run([a.fixture,"verify",game,plugin])
-            run([a.servidor,"--game",game_exe])
+            run([a.fixture,"verify",game,plugin],timeout=budget)
+            run([a.servidor,"--game",game_exe],timeout=budget)
             assert hash_file(target)==installed,"IA_VXACE_REINSTALL_CHANGED"
             run_ruby_session(ruby,game)
             cache=game/"IA Traductora"/".local"/"Rpg"/"cache"/"translation-memory-v2.sqlite3"
@@ -182,7 +188,7 @@ def main():
             if mode=="loose":
                 run_ruby_session(ruby,game)
                 assert cache_rows(cache)==rows,"IA_VXACE_CACHE_NOT_REUSED"
-            run([a.servidor,"--recover","--game",game_exe])
+            run([a.servidor,"--recover","--game",game_exe],timeout=budget)
             assert hash_file(target)==original and hash_file(save)==save_sha,"IA_VXACE_RECOVERY_HASH"
             assert cache_rows(cache)==rows,"IA_VXACE_RECOVERY_LOST_CACHE"
             # This is a generated fixture, never a player's game. Verify the
@@ -192,7 +198,10 @@ def main():
             executable.unlink()
             assert not executable.exists(),"IA_VXACE_EXECUTABLE_NOT_RELEASED"
             print("IA_VXACE_EXECUTABLE_RELEASE_PASS",flush=True)
-            print("IA_VXACE_REAL_OPUS_INSTALL_ROUNDTRIP_"+mode.upper()+"_PASS",flush=True)
+            # Free only this synthetic fixture before starting another.
+            # Strict deletion still fails the build if any handle is left open.
+            shutil.rmtree(game)
+            print("IA_VXACE_REAL_OPUS_INSTALL_ROUNDTRIP_"+mode.upper().replace("-","_")+"_PASS",flush=True)
     # Reaching this point proves TemporaryDirectory cleanup was strict.
     print("IA_VXACE_STRICT_WORKSPACE_CLEANUP_PASS",flush=True)
 

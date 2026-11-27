@@ -17,9 +17,11 @@ use tempfile::Builder as TempDirBuilder;
 
 const MAX_PLUGIN_BYTES: u64 = 1024 * 1024;
 const MAX_SCRIPT_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const MAX_ARCHIVE_BYTES: u64 = 900 * 1024 * 1024;
+// Match Go detection and Python startup, including the output limit.
+const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024 - 1;
+// RGSS3A is not compressed. Stream large assets; only Scripts.rvdata2 is
+// deserialized in memory and retains the separate MAX_SCRIPT_BYTES cap.
+const MAX_ENTRY_BYTES: u64 = MAX_ARCHIVE_BYTES;
 const MAX_ENTRIES: usize = 200_000;
 const PLUGIN_NAME: &str = "IA Traductora RGSS3";
 const PLUGIN_MARKER: &str = "# IA_TRADUCTORA_VXACE_RGSS3_OWNER_V1";
@@ -348,14 +350,13 @@ fn extract_archive(
         let reader = archive
             .read_entry(index)
             .map_err(|_| fail("IA_VXACE_ARCHIVE_READ_FALLO"))?;
-        let allowance = MAX_ENTRY_BYTES.min(MAX_TOTAL_BYTES.saturating_sub(total));
+        // The decoded payload cannot legitimately exceed the encrypted
+        // container itself. Bound overlapping or malformed entry tables too.
+        let allowance = MAX_ENTRY_BYTES.min(archive_bytes.saturating_sub(total));
         let copied = io::copy(&mut reader.take(allowance + 1), &mut output).map_err(|_| fail("IA_VXACE_ARCHIVE_READ_FALLO"))?;
         if copied > allowance { return Err(fail("IA_VXACE_ARCHIVE_TOTAL_TOO_LARGE")); }
-        if copied > MAX_ENTRY_BYTES {
-            return Err(fail("IA_VXACE_ARCHIVE_ENTRY_TOO_LARGE"));
-        }
         total = total.checked_add(copied).ok_or_else(|| fail("IA_VXACE_ARCHIVE_TOTAL_TOO_LARGE"))?;
-        if total > MAX_TOTAL_BYTES {
+        if total > archive_bytes {
             return Err(fail("IA_VXACE_ARCHIVE_TOTAL_TOO_LARGE"));
         }
         output.sync_all().map_err(|_| fail("IA_VXACE_STAGING_FALLO"))?;
@@ -371,10 +372,27 @@ fn extract_archive(
     Ok(records)
 }
 
+fn archive_output_bound(records: &[EntryRecord]) -> Result<u64, String> {
+    // Conservative upper bound including RGSS3A's per-entry table overhead.
+    // Validate before handing offsets and sizes to the archive writer.
+    let mut total = 64u64;
+    for record in records {
+        total = total.checked_add(64)
+            .and_then(|n| n.checked_add(record.raw_path.len() as u64))
+            .and_then(|n| n.checked_add(record.size as u64))
+            .ok_or_else(|| fail("IA_VXACE_OUTPUT_TAMANO_INVALIDO"))?;
+        if total > MAX_ARCHIVE_BYTES {
+            return Err(fail("IA_VXACE_OUTPUT_TAMANO_INVALIDO"));
+        }
+    }
+    Ok(total)
+}
+
 fn write_archive(
     records: &[EntryRecord],
     output: &Path,
 ) -> Result<(), String> {
+    archive_output_bound(records)?;
     if output.exists() || output.is_symlink() {
         return Err(fail("IA_VXACE_OUTPUT_EXISTS"));
     }
@@ -397,6 +415,10 @@ fn write_archive(
     writer.flush().map_err(|_| fail("IA_VXACE_ARCHIVE_FLUSH_FALLO"))?;
     let file = writer.into_inner().map_err(|_| fail("IA_VXACE_ARCHIVE_FLUSH_FALLO"))?;
     file.sync_all().map_err(|_| fail("IA_VXACE_ARCHIVE_SYNC_FALLO"))?;
+    let size = file.metadata().map_err(|_| fail("IA_VXACE_OUTPUT_TAMANO_INVALIDO"))?.len();
+    if size == 0 || size > MAX_ARCHIVE_BYTES {
+        return Err(fail("IA_VXACE_OUTPUT_TAMANO_INVALIDO"));
+    }
     Ok(())
 }
 
@@ -878,6 +900,29 @@ mod tests {
             }
         }
         assert_eq!(keep, b"original-png");
+    }
+
+    #[test]
+    fn large_packed_size_gate_and_output_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = make_game(&temp.path().join("game"), true);
+        let path = root.join("Game.rgss3a");
+        let file = OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_len(1_216_546 * 1024).unwrap();
+        assert!(validate_game_root(&root).unwrap().archive.is_some());
+        file.set_len(MAX_ARCHIVE_BYTES + 1).unwrap();
+        assert!(validate_game_root(&root).is_err());
+        drop(file);
+        let mut record = EntryRecord {
+            raw_path: b"Graphics/large.bin".to_vec(),
+            decoded_path: "Graphics/large.bin".to_owned(),
+            file: path,
+            size: 1_216_546 * 1024,
+            sha256: String::new(),
+        };
+        assert!(archive_output_bound(&[record.clone()]).is_ok());
+        record.size = MAX_ARCHIVE_BYTES as usize;
+        assert!(archive_output_bound(&[record]).is_err());
     }
 
     #[test]

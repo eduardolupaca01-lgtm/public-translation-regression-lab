@@ -18,7 +18,10 @@ const (
 	vxacePluginBuildID = "VXACE-RGSS3-20261126-F"
 	vxaceLibraryName = "RGSS301.dll"
 	vxaceArchiveName = "Game.rgss3a"
-	vxaceMaxArchive  = int64(900 * 1024 * 1024)
+	// The original 900 MiB cap rejected otherwise valid packed games.
+	// Keep input AND output below the conservative signed 32-bit seek bound
+	// of the legacy runtime. This is not the installer ZIP size limit.
+	vxaceMaxArchive  = int64(2*1024*1024*1024 - 1)
 	vxaceMaxMarshal  = int64(512 * 1024 * 1024)
 )
 
@@ -361,6 +364,25 @@ func vxacePaths(fp vxaceFingerprint) (target, backupName, targetRel, mode, outpu
 	return fp.ScriptsFile, "original-Scripts.rvdata2", "Data/Scripts.rvdata2", "loose", "Scripts.rvdata2.new", vxaceMaxMarshal
 }
 
+// Worst additional on-disk footprint: backup (if not present), extracted
+// entries plus repacked archive, or repacked archive plus replacement temp.
+// Reserve extra room for the patched Marshal script and filesystem overhead.
+// The sidecar package has already been staged when this check runs.
+func vxaceArchiveSpaceNeeded(size int64, needBackup bool) uint64 {
+	copies := uint64(2)
+	if needBackup { copies++ }
+	return uint64(size)*copies + 2*uint64(vxaceMaxMarshal) + 128*1024*1024
+}
+
+func vxaceEnsureArchiveSpace(fp vxaceFingerprint, needBackup bool) error {
+	if !fp.Packed { return nil }
+	info, err := os.Stat(fp.ArchiveFile)
+	if err != nil || info.Size() <= 0 || info.Size() > vxaceMaxArchive {
+		return errors.New("IA_VXACE_TAMANO_INVALIDO")
+	}
+	return vxaceCheckDiskSpace(fp.Root, vxaceArchiveSpaceNeeded(info.Size(), needBackup))
+}
+
 func vxaceCopyFileNew(source, destination string) error {
 	if !ordinary(source) {
 		return errors.New("IA_VXACE_BACKUP_SOURCE_INVALID")
@@ -566,10 +588,12 @@ func installVXAce(fp vxaceFingerprint, pkg *packageReader) error {
 			if hashErr != nil || backupSHA != currentSHA {
 				return errors.New("IA_VXACE_BACKUP_EXISTENTE_NO_COINCIDE")
 			}
-		} else if err = vxaceCopyFileNew(target, backup); err != nil {
-			return err
+		} else {
+			if err = vxaceEnsureArchiveSpace(fp, true); err != nil { return err }
+			if err = vxaceCopyFileNew(target, backup); err != nil { return err }
 		}
 	}
+	if err = vxaceEnsureArchiveSpace(fp, false); err != nil { return err }
 	stagingRoot := filepath.Join(installDir, "staging")
 	stageDir, err := os.MkdirTemp(stagingRoot, ".vxace-run-")
 	if err != nil {

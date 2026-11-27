@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCHEMA="ia-traductora-bridge-v1"
 MAX_TEXT=1800
+# Conservative signed 32-bit seek boundary, shared with Go and Rust.
+VXACE_MAX_ARCHIVE_BYTES=2*1024*1024*1024-1
 MODELS={"ja":"opus_ja_es","en":"opus_en_es"}
 CACHE_SCHEMA=2
 
@@ -536,7 +538,7 @@ def vxace_game_root(exe_root:Path)->tuple[Path,Path]:
 
     archive=root/"Game.rgss3a"
     if archive.is_symlink() or archive.exists():
-        if archive.is_symlink() or not ordinary(archive,900*1024*1024):
+        if archive.is_symlink() or not ordinary(archive,VXACE_MAX_ARCHIVE_BYTES):
             raise ValueError("IA_VXACE_RGSS3A_INVALIDO")
         with archive.open("rb") as stream:
             header=stream.read(8)
