@@ -8,9 +8,11 @@ import tempfile
 import unittest
 import zipfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.pack import build, MAGIC, SCHEMA, MODELS, SUFFIX
-from tools.pack_vxace_assets import HELPER_NAME, PLUGIN_NAME, PLUGIN_MARKER, PLUGIN_BUILD
+# The repository also has a top-level tools package. Import the actual
+# Servidor packer by its directory, not through the ambiguous namespace.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from pack import build, MAGIC, SCHEMA, MODELS, SUFFIX
+from pack_vxace_assets import HELPER_NAME, PLUGIN_NAME, PLUGIN_MARKER, PLUGIN_BUILD
 
 
 def pe_amd64():
