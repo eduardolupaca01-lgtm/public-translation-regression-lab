@@ -135,3 +135,16 @@ func TestRenpyProgressAndFix1Receipt(t *testing.T){
  m:=renpyReceipt{Profile:renpyModernProfile,Client:"6cc0ddb46e62076329f2787886190bb58149c6fbc6b220f385cda2bde4808e59",Boot:"bbd6d7f60a19b2324ac9bb1010b7806dcc3bc3b84b73f8f7e1a848ad61b1988f"}
  if !renpyPriorModern(m){t.Fatal("Fix1 recovery rejected")}
 }
+
+func TestRenpyPreservePriorMemory(t *testing.T){
+ old:=t.TempDir();stage:=t.TempDir()
+ for _,name:=range []string{"memory-v1.sqlite3","memory-v1.sqlite3-wal","unrelated.txt"}{
+  if e:=os.WriteFile(filepath.Join(old,name),[]byte(name),0600);e!=nil{t.Fatal(e)}
+ }
+ if e:=renpyPreserveMemory(old,stage);e!=nil{t.Fatal(e)}
+ for _,name:=range []string{"memory-v1.sqlite3","memory-v1.sqlite3-wal"}{
+  a,e:=os.ReadFile(filepath.Join(old,name));if e!=nil{t.Fatal(e)}
+  b,e:=os.ReadFile(filepath.Join(stage,name));if e!=nil||!bytes.Equal(a,b){t.Fatal(name,e)}
+ }
+ if _,e:=os.Stat(filepath.Join(stage,"unrelated.txt"));!os.IsNotExist(e){t.Fatal("unrelated file copied")}
+}

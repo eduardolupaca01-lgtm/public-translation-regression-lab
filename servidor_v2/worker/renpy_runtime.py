@@ -8,6 +8,7 @@ import secrets
 import sqlite3
 import stat
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -182,8 +183,20 @@ class RenpyService:
         self.memory=Memory(side,identity);self.lock=threading.RLock()
         self.translated=0;self.cached=0;self.rejected=0
         self.token=secrets.token_hex(32)
+        self.status_lock=threading.Lock();self.last_publish=0;self.last_published=None
     def status(self):
         return {"schema":SCHEMA,"translated":self.translated,"cached":self.cached,"rejected":self.rejected}
+    def publish_status(self,force=False):
+        # Never turn an antivirus/file-sharing race on a diagnostic file
+        # into a failed translation response. Avoid a disk fsync per text.
+        with self.status_lock:
+            now=time.monotonic()
+            if not force and now-self.last_publish<.75:return
+            state=self.status()
+            if not force and state==self.last_published:return
+            try:atomic_json(self.side/"status.json",state)
+            except OSError:return
+            self.last_publish=now;self.last_published=state
     def translate(self,text):
         with self.lock:
             try:
@@ -196,8 +209,10 @@ class RenpyService:
             except (RuntimeError,ValueError,TypeError):
                 self.rejected+=1;return text
             finally:
-                atomic_json(self.side/"status.json",self.status())
-    def close(self):self.memory.close()
+                self.publish_status()
+    def close(self):
+        self.publish_status(force=True)
+        self.memory.close()
 
 def handler(service):
     class Handler(BaseHTTPRequestHandler):
@@ -241,17 +256,27 @@ def run_renpy(root,engine,nonce,parent,neural_factory,quality,monitor,checkpoint
     session=side/("session-"+nonce+".json")
     if session.exists():raise ValueError("IA_RENPY_SESION_EXISTENTE")
     service=RenpyService(side,identity,neural_factory(engine),quality)
-    server=None
+    server=None;window=None;status_thread=None;stop_status=threading.Event()
     try:
         server=ThreadingHTTPServer(("127.0.0.1",0),handler(service))
         server.daemon_threads=False;server.block_on_close=True
         monitor(server,parent)
         atomic_json(session,{"schema":SCHEMA,"nonce":nonce,"port":server.server_port,"token":service.token,"parent":parent})
-        atomic_json(side/"status.json",service.status())
+        service.publish_status(force=True)
         checkpoint("IA_RENPY_MOTOR_LISTO")
+        def publish_status():
+            while not stop_status.wait(.75):service.publish_status()
+        status_thread=threading.Thread(target=publish_status,daemon=True,name="IA-RenPy-Status")
+        status_thread.start()
+        from renpy_progress_window import ProgressWindow
+        window=ProgressWindow(side,service,read_json,atomic_json)
+        window.start()
         server.serve_forever(poll_interval=.25)
     finally:
         if server is not None:server.server_close()
+        stop_status.set()
+        if status_thread is not None:status_thread.join(timeout=2)
+        if window is not None:window.close()
         service.close()
         try:
             if read_json(session).get("nonce")==nonce:session.unlink()

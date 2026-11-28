@@ -25,6 +25,13 @@ define config.sound = False
 label main_menu:
     return
 
+label ia_inventory_only:
+    "This archived dialogue is never played."
+    menu:
+        "Open the archived door":
+            "A second archived dialogue."
+    return
+
 label start:
     python:
         import os
@@ -48,8 +55,18 @@ label start:
             if not engine.config.say_menu_text_filter:
                 raise RuntimeError("Say/menu hook missing")
             mode=os.environ["IA_RENPY_NATIVE_MODE"]
+            c=module.active_client
+            expected_inventory=(u"This archived dialogue is never played.",u"Open the archived door",u"A second archived dialogue.")
+            if not c.snapshot()["scan_complete"] or not all(s in c.seen for s in expected_inventory):
+                raise RuntimeError("Native inventory did not discover archived dialogue and menu")
+            if mode=="preflight":
+                # Actual native constructors while no worker binary exists.
+                begin=time.time()
+                for i in range(200):
+                    native(u"Cold undiscovered display text %d."%i)
+                if time.time()-begin>2.0:
+                    raise RuntimeError("Native constructors blocked without worker")
             if mode=="real":
-                c=module.active_client
                 deadline=time.time()+90
                 # Observe the production automatic startup, without calling
                 # get_session() to start or reconnect it from the test.
@@ -57,6 +74,29 @@ label start:
                     time.sleep(.25)
                 if not c.connection:
                     raise RuntimeError("Packaged worker did not connect automatically")
+                # Observe the actual independent, non-modal worker window.
+                import ctypes
+                import json
+                user=ctypes.WinDLL("user32",use_last_error=True)
+                user.FindWindowW.argtypes=[ctypes.c_wchar_p,ctypes.c_wchar_p]
+                user.FindWindowW.restype=ctypes.c_void_p
+                end=time.time()+20
+                hwnd=None
+                while time.time()<end:
+                    try:
+                        with open(os.path.join(c.side,"window-status.json"),"rb") as report:
+                            window=json.loads(report.read(8192))
+                        if window.get("schema")=="ia-renpy-progress-window-v1" and window.get("state")=="visible":
+                            hwnd=user.FindWindowW(u"IA_RENPY_PROGRESS_"+str(window["pid"]),None)
+                            if hwnd:break
+                    except (IOError,ValueError,KeyError):pass
+                    time.sleep(.1)
+                if not hwnd:raise RuntimeError("Independent IA Traductora window missing")
+                # Closing the progress window MUST NOT close the worker.
+                user.PostMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
+                user.PostMessageW.restype=ctypes.c_int
+                if not user.PostMessageW(hwnd,0x0010,0,0):
+                    raise RuntimeError("Unable to close independent progress view")
                 pairs=[(u"Thank you for your help.",u"gracias|agradezco|ayuda|asistencia"),
                        (u"\u304a\u306f\u3088\u3046\u3054\u3056\u3044\u307e\u3059\u3002",u"buenos|buen|d\u00edas|d\u00eda|hola"),
                        (u'{b}"Thank you for your help."{/b}',u"gracias|agradezco|ayuda|asistencia")]
@@ -208,9 +248,9 @@ def main():
             if "IA_RENPY_MOTOR_CONECTADO" not in status:raise RuntimeError("Missing real connection diagnostic")
             if not (side/"memory-v1.sqlite3").is_file():raise RuntimeError("Missing real translation memory")
             progress=json.loads((side/"client-progress.json").read_text("utf-8"))
-            if not progress["scan_complete"] or progress["discovered"]<3:
+            if not progress["scan_complete"] or progress["inventory"]<3 or progress["discovered"]<3:
                 raise RuntimeError("Missing real native scan/progress evidence")
-            print("NATIVE_RENPY_NONBLOCKING_VISIBLE_REFRESH_PASS",flush=True)
+            print("NATIVE_RENPY_NONBLOCKING_VISIBLE_REFRESH_AND_INDEPENDENT_WINDOW_PASS",flush=True)
             end=time.monotonic()+90
             while list(side.glob("session-*.json")) and time.monotonic()<end:time.sleep(.25)
             command(args.servidor,"--renpy-recover","--game",launcher)

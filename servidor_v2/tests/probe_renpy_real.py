@@ -70,6 +70,10 @@ def probe(exe,root,classic):
             if "[" in source:assert "[player_name]" in target and "{b}" in target and "{/b}" in target
             if '"' in source:assert target.count('"')==source.count('"')
         first=SAMPLES[0][0];before=request(first);assert request(first)==before
+        def counts_published():
+            try:return json.loads((side/"status.json").read_text("utf-8"))["translated"]>=len(SAMPLES)
+            except (OSError,ValueError,KeyError):return False
+        assert wait_until(counts_published,5),"Throttled status did not publish"
         state=json.loads((side/"status.json").read_text("utf-8"))
         assert state["translated"]>=len(SAMPLES),state
         with sqlite3.connect(side/"memory-v1.sqlite3") as db:

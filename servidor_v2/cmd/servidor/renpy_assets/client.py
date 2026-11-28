@@ -199,12 +199,15 @@ class Client(object):
         with self.lock:
             self.inventory_count=len(self.seen);self.scan_complete=bool(complete)
             self.phase="CONECTANDO"
-    def start_prefetch(self):
-        if self.thread:return
-        self.thread=threading.Thread(target=self.prefetch,name="IA-RenPy-inventory")
-        self.thread.daemon=True;self.thread.start()
+    def start_progress(self):
+        if self.progress_thread:return
         self.progress_thread=threading.Thread(target=self.progress_loop,name="IA-RenPy-progress")
         self.progress_thread.daemon=True;self.progress_thread.start()
+    def start_prefetch(self):
+        if self.thread:return
+        self.start_progress()
+        self.thread=threading.Thread(target=self.prefetch,name="IA-RenPy-inventory")
+        self.thread.daemon=True;self.thread.start()
     def prefetch(self):
         # Only this thread performs I/O, process creation and inference calls.
         # Never hold the cache lock while doing any of those operations.
@@ -375,7 +378,8 @@ def install(engine,client=None):
             if now-last_refresh[0]<.20 or not foreground():return
             last_refresh[0]=now
             for _ in range(min(64,len(waiters))):
-                key,record=waiters.popitem(last=False)
+                try:key,record=waiters.popitem(last=False)
+                except KeyError:break
                 ref,source,args,kwargs,missing,snapshot=record
                 obj=ref()
                 if obj is None or getattr(obj,"locked",False) or getattr(obj,"text",None) is not snapshot:continue
@@ -393,6 +397,7 @@ def install(engine,client=None):
                 refresh_pending()
             config.periodic_callback=periodic
     complete=True
+    if live_client:client.start_progress()
     try:
         for text in inventory(engine):client.enqueue(text)
     except Exception:

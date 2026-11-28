@@ -88,6 +88,17 @@ class RenpyR1(unittest.TestCase):
             s=RenpyService(Path(d),"m",Neural(),lambda *_:"reject")
             self.assertEqual(s.translate("Continue"),"Continue")
             self.assertEqual(s.rejected,1);self.assertIsNone(s.memory.get("Continue"));s.close()
+    def test_status_write_failure_does_not_break_translation(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            s=RenpyService(Path(d),"m",Neural(),quality)
+            try:
+                with patch("renpy_runtime.atomic_json",side_effect=PermissionError("temporary sharing violation")):
+                    self.assertEqual(s.translate("Continue"),"Continuar")
+                    self.assertEqual(s.status()["translated"],1)
+                s.publish_status(force=True)
+                self.assertEqual(json.loads((Path(d)/"status.json").read_text("utf-8"))["translated"],1)
+            finally:s.close()
     def test_loopback_authenticated(self):
         with tempfile.TemporaryDirectory() as d:
             s=RenpyService(Path(d),"m",Neural(),quality)
@@ -154,7 +165,7 @@ class RenpyR1(unittest.TestCase):
         eng=NS(config=cfg,game=NS(script=NS(all_stmts=[]),context=lambda:NS(init_phase=False)),
             predicting=lambda:False,text=NS(text=NS(Text=Text)),display=NS(behavior=NS(Input=Input)))
         client._installed=False
-        with patch.object(c,"start_prefetch"),patch.object(c,"request",side_effect=AssertionError("network in native setter")):
+        with patch.object(c,"start_prefetch"),patch.object(c,"start_progress"),patch.object(c,"request",side_effect=AssertionError("network in native setter")):
             client.install(eng,c)
             obj=Text();obj.set_text("Cold dialogue.")
             self.assertEqual(obj.text,"Cold dialogue.")
