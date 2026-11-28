@@ -42,20 +42,20 @@ init 999:
                         u'{b}Save{/b}':u'{b}Guardar{/b}'
                     }.get(value,value)
             version=str(getattr(engine,"version",""))
-            assert os.environ["IA_CLASSIC_VERSION"] in version,repr(version)
+            if os.environ["IA_CLASSIC_VERSION"] not in version: raise AssertionError(repr(version))
             cls=module.native_text_class(engine)
-            assert cls is not None
+            if cls is None: raise AssertionError('native Text missing')
             actual=module.Client(os.environ["IA_CLASSIC_TEST_ROOT"])
-            assert len(actual.nonce)==32
+            if len(actual.nonce)!=32: raise AssertionError('invalid classic client nonce')
             actual.close()
             module.install(engine,Fixture())
             # python hide uses separate globals and locals in classic engines.
             # Capture the module as a default argument, not a store global.
             def check(value,expected,py_builtins=builtins):
                 if isinstance(value,(py_builtins.list,py_builtins.tuple)):
-                    assert py_builtins.tuple(value)==(expected,),repr(value)
+                    if py_builtins.tuple(value)!=(expected,): raise AssertionError(repr(value))
                 else:
-                    assert value==expected,repr(value)
+                    if value!=expected: raise AssertionError(repr(value))
             for original,expected in ((u'Hello world',u'Hola mundo'),(u'She said "Hello"',u'Ella dijo "Hola"'),(u'Continue',u'Continuar'),(u'{b}Save{/b}',u'{b}Guardar{/b}')):
                 obj=cls(original)
                 check(obj.text,expected)
@@ -64,7 +64,7 @@ init 999:
             check(obj.text,u'Continuar')
             from renpy.display.behavior import Input
             entered=Input(default=u'Hello world')
-            assert entered.content==u'Hello world'
+            if entered.content!=u'Hello world': raise AssertionError('player input altered')
             report=open(os.environ["IA_CLASSIC_RESULT"],"wb")
             try:
                 report.write("CLASSIC_NATIVE_INIT_OK "+version)
@@ -93,6 +93,7 @@ def record(value):
         f.close()
 try:
     import codecs
+    record("PYTHON_DEBUG_FLAG "+str(__debug__))
     sdk=os.environ["IA_CLASSIC_SDK"]
     project=os.environ["IA_CLASSIC_PROJECT"]
     namespace={"__name__":"ia_renpy_classic_start"}
@@ -105,7 +106,7 @@ try:
     expected=u"first\nsecond\nthird\n"
     f=open(path,"rU")
     try:
-        assert f.read().decode("utf-8")==expected
+        if f.read().decode("utf-8")!=expected: raise AssertionError("native universal newline mismatch")
     finally:
         f.close()
     try:
@@ -114,15 +115,15 @@ try:
         record("ORIGINAL_CODEC_OPEN_SUPPORTED")
     except IOError:
         record("ORIGINAL_CODEC_RUB_REPRODUCED_EXISTING_FILE")
-    assert namespace["install_codec_compat"]()
+    if not namespace["install_codec_compat"](): raise AssertionError("classic codec compatibility was not installed")
     f=codecs.open(path,"rU","utf-8")
     try:
-        assert f.read()==expected
+        if f.read()!=expected: raise AssertionError("compatible newline mismatch")
     finally:
         f.close()
     f=open(path,"rb")
     try:
-        assert f.read()==raw
+        if f.read()!=raw: raise AssertionError("original file changed")
     finally:
         f.close()
     os.unlink(path)
@@ -183,7 +184,7 @@ def run_phase(command,env,base,project,root,launcher,phase,marker,expected,secon
         try:
             end=time.monotonic()+seconds
             while time.monotonic()<end:
-                if (root/"error.txt").exists():
+                if (root/"error.txt").is_file() and (root/"error.txt").stat().st_size>0:
                     diagnostics(base,project,root,launcher,phase)
                     raise RuntimeError("Historical script reported an exception")
                 if marker.is_file() and expected(marker.read_text("utf-8",errors="replace")):
