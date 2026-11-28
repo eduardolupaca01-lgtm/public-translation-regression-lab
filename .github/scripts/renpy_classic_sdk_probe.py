@@ -60,11 +60,35 @@ init 999:
                 obj=cls(original)
                 check(obj.text,expected)
             obj=cls(u'Hello world')
-            obj.set_text(u'Continue')
-            check(obj.text,u'Continuar')
-            from renpy.display.behavior import Input
-            entered=Input(default=u'Hello world')
-            if entered.content!=u'Hello world': raise AssertionError('player input altered')
+            # During --lint Ren'Py 5.6.7 has no graphics interface yet,
+            # but its genuine setter unconditionally schedules a redraw
+            # using game.interface.frame_time. Supply only that clock in
+            # this initialization fixture, not a fake setter or renderer.
+            saved_interface=engine.game.interface
+            clock_needed=version.startswith("Ren'Py 5.6.7") and saved_interface is None
+            if clock_needed:
+                import renpy.display.render as native_render
+                queue=native_render.redraw_queue
+                saved_queue=queue[:]
+                class FixtureFrameClock(object):
+                    frame_time=123.0
+                engine.game.interface=FixtureFrameClock()
+            try:
+                obj.set_text(u'Continue')
+                check(obj.text,u'Continuar')
+                if clock_needed:
+                    scheduled=False
+                    for item in queue[len(saved_queue):]:
+                        if item[0]==123.0 and item[1] is obj:
+                            scheduled=True
+                    if not scheduled: raise AssertionError('native redraw was not scheduled')
+                from renpy.display.behavior import Input
+                entered=Input(default=u'Hello world')
+                if entered.content!=u'Hello world': raise AssertionError('player input altered')
+            finally:
+                if clock_needed:
+                    engine.game.interface=saved_interface
+                    queue[:]=saved_queue
             report=open(os.environ["IA_CLASSIC_RESULT"],"wb")
             try:
                 report.write("CLASSIC_NATIVE_INIT_OK "+version)
