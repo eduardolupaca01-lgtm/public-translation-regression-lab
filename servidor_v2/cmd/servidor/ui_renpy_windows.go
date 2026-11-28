@@ -100,5 +100,5 @@ func iaRenpyStatus(ui *iaUI){
 func iaRenpyTick(ui *iaUI){
  if !ui.renpyActive||ui.renpyFile==""{return}
  side:=filepath.Join(filepath.Dir(ui.renpyFile),renpySide)
- if p,ok:=renpyReadProgress(side);ok{iaSet(ui.renpyStatus,renpyProgressLine(p))}
+ if p,ok:=renpyReadProgress(side);ok&&(!ui.busy||p.PreparationID!=""){iaSet(ui.renpyStatus,renpyProgressLine(p))}
 }

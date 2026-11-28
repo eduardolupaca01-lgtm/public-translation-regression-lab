@@ -1,6 +1,6 @@
 """A local, non-modal Win32 progress window owned by the Ren'Py worker.
 No interaction with the game thread, game windows, external services or input.
-Closing this window closes ONLY the progress view.
+Closing live view does not stop translation; closing preparation requests cancellation.
 """
 import os
 import re
@@ -39,10 +39,15 @@ class ProgressWindow:
         state=self.service.status()
         phases={"ESCANEO":"Escaneando textos","CONECTANDO":"Conectando motor local",
                 "ESPERANDO_MOTOR":"Esperando motor local","TRADUCIENDO":"Traduciendo en segundo plano","LISTO":"Cola al día"}
+        scan=p.get("scan",{})
+        files=scan.get("script_files",0) if isinstance(scan,dict) else 0
+        if type(files) is not int or not 0<=files<2**53:files=0
+        phase=phases.get(p.get("phase"),"IA Traductora iniciada")
+        if p.get("preparation_id"):phase="Preparación previa: "+phase
         return (
-            phases.get(p.get("phase"),"IA Traductora iniciada"),
-            "Inventario: {:,} | Detectados: {:,}".format(count("inventory"),count("discovered")),
-            "Nuevas: {:,} | Memoria: {:,}".format(state["translated"],state["cached"]),
+            phase,
+            "Archivos: {:,} | Textos detectados: {:,}".format(files,count("discovered")),
+            "Nuevas: {:,} | Memoria: {:,}".format(state["translated"],state["cached"]+count("preloaded")),
             "Pendientes: {:,} | Sin cambio: {:,}".format(count("pending"),count("unchanged")),
             "Errores: {:,} | Aplicaciones: {:,}".format(count("transport_failed"),count("applied")),
             "Cierra para detener la preparación." if p.get("preparation_id") else "Puedes cerrar esta ventana; la traducción continúa.",
@@ -112,7 +117,7 @@ class ProgressWindow:
                         p=self.read_json(self.side/"client-progress.json",8192)
                         ticket=self.read_json(self.side/"prepare-request.json",4096)
                         nonce=p.get("preparation_id","")
-                        if re.fullmatch("[0-9a-f]{32}",nonce) and ticket.get("schema")=="ia-servidor-renpy-v1" and ticket.get("id")==nonce:
+                        if not self.stop.is_set() and re.fullmatch("[0-9a-f]{32}",nonce) and ticket.get("schema")=="ia-servidor-renpy-v1" and ticket.get("id")==nonce:
                             try:
                                 with (self.side/("prepare-cancel-"+nonce+".txt")).open("x",encoding="ascii") as marker:marker.write("cancel")
                             except FileExistsError:pass

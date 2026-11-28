@@ -15,6 +15,7 @@ import threading
 import time
 import binascii
 import weakref
+import hashlib
 try:
     import http.client as http_client
 except ImportError:
@@ -41,6 +42,67 @@ def as_text(value):
 def eligible(value):
     return (isinstance(value,text_type) and 0<len(value)<=32768 and bool(LETTERS.search(value))
             and not TECH.search(value.strip()) and not re.match(r"^[A-Z0-9_]+_\w+$",value.strip()))
+PREPARED_SCHEMA="ia-renpy-prepared-v1"
+PREPARED_LIMIT=32*1024*1024
+CONTROL_PERCENT=re.compile(r"%(?:\([A-Za-z_][A-Za-z0-9_]*\))?[-+ #0]*\d*(?:\.\d+)?[diouxXeEfFgGcrsa%]")
+CONTROL_QUOTES=set(u'"\u201c\u201d\u300c\u300d\u300e\u300f\u00ab\u00bb')
+def control_signature(text):
+    # Same conservative control grammar as the worker, independently checked
+    # before accepting any persistent fast-start text.
+    if not isinstance(text,text_type) or not 0<len(text)<=32768 or "\x00" in text:raise ValueError("invalid text")
+    result=[];i=0
+    while i<len(text):
+        ch=text[i];end=None
+        if text.startswith(("{{","[[","%%",u"\u3016\u3016"),i):end=i+2
+        elif ch==u"\u3016":
+            j=text.find(u"\u3017",i+1)
+            if j<0:raise ValueError("invalid ruby")
+            end=j+1
+        elif ch in CONTROL_QUOTES or ch in "\n\r\t":end=i+1
+        elif ch=="\\":
+            if i+1>=len(text):raise ValueError("invalid escape")
+            end=i+2
+        elif ch=="{":
+            j=text.find("}",i+1)
+            if j<0 or "{" in text[i+1:j]:raise ValueError("invalid tag")
+            end=j+1
+        elif ch=="[":
+            depth=1;j=i+1;quote=None
+            while j<len(text) and depth:
+                x=text[j]
+                if quote:
+                    if x=="\\":j+=2;continue
+                    if x==quote:quote=None
+                elif x in "\"'":quote=x
+                elif x=="[":depth+=1
+                elif x=="]":depth-=1
+                j+=1
+            if depth or quote:raise ValueError("invalid interpolation")
+            end=j
+        elif ch=="%":
+            m=CONTROL_PERCENT.match(text,i)
+            if m:end=m.end()
+        if end is not None:
+            result.append(text[i:end]);i=end
+        else:i+=1
+    return result
+
+def prepared_pair(source,target):
+    try:
+        return (eligible(source) and isinstance(target,text_type) and target!=source
+                and control_signature(source)==control_signature(target))
+    except (ValueError,TypeError):return False
+
+def prepared_identity(side):
+    with io.open(os.path.join(side,"owner-v1.json"),"r",encoding="utf-8") as inp:
+        receipt=json.loads(inp.read(65537))
+    if receipt.get("schema")!=SCHEMA:raise ValueError("invalid receipt")
+    model={n:h for n,h in receipt.get("engine_sha256",{}).items()
+           if n.startswith(("models/opus_en_es/","models/opus_ja_es/"))}
+    if not model or any(not isinstance(v,text_type) or not re.match(r"^[0-9a-f]{64}$",v) for v in model.values()):
+        raise ValueError("invalid models")
+    return hashlib.sha256(("surface-v2-models:"+json.dumps(model,sort_keys=True)).encode("utf-8")).hexdigest()
+
 class Client(object):
     def __init__(self,root):
         self.root=root;self.side=os.path.join(root,SIDECAR);self.nonce=new_nonce()
@@ -57,7 +119,8 @@ class Client(object):
         self.accepted=0;self.failed=0;self.deferred=0
         self.phase="ESCANEO"
         self.scan_report={}
-        self.prepare_id=""
+        self.prepare_id="";self.preloaded=0;self.snapshot_saved=0
+        self.progress_lock=threading.Lock()
         self.worker_diag=os.path.join(self.side,"worker-startup.json")
         self.diagnostics=set()
     def note(self,code):
@@ -157,9 +220,10 @@ class Client(object):
     def enqueue(self,value,priority=False):
         if not eligible(value):return
         with self.lock:
-            if value in self.cache or value in self.negative or value in self.outputs:return
             if value not in self.seen:
                 self.seen.add(value);self.detected+=1
+                if value in self.cache:self.accepted+=1
+            if value in self.cache or value in self.negative or value in self.outputs:return
             if value in self.queued:
                 if priority and value in self.pending:
                     self.pending.pop(value,None);self.urgent[value]=None
@@ -183,23 +247,75 @@ class Client(object):
                     "accepted":self.accepted,"unchanged":self.rejected,
                     "transport_failed":self.failed,"deferred":self.deferred,
                     "applied":self.applied,"updated":int(time.time()),
-                    "preparation_id":self.prepare_id,"scan":dict(self.scan_report)}
-    def publish_progress(self):
-        # Per-session temporary file; no dialogue or credentials in the report.
-        path=os.path.join(self.side,"client-progress.json")
-        temp=path+".tmp-"+self.nonce
+                    "preparation_id":self.prepare_id,"scan":dict(self.scan_report),
+                    "preloaded":self.preloaded,"snapshot_saved":self.snapshot_saved}
+    def load_prepared(self):
+        # Startup only, BEFORE any display hook is installed. No SQLite DLL is
+        # needed in the bundled Python. Authoritative memory remains SQLite.
+        path=os.path.join(self.side,"prepared-cache-v1.jsonl")
         try:
-            raw=json.dumps(self.snapshot(),ensure_ascii=True).encode("ascii")
-            with open(temp,"wb") as out:out.write(raw)
-            if hasattr(os,"replace"):os.replace(temp,path)
-            else:
-                if os.path.isfile(path):os.unlink(path)
-                os.rename(temp,path)
-        except (IOError,OSError,ValueError):pass
+            identity=prepared_identity(self.side)
+            if not os.path.isfile(path) or os.path.getsize(path)>PREPARED_LIMIT:return
+            with open(path,"rb") as inp:
+                header=json.loads(inp.readline(4096).decode("utf-8"))
+                if header.get("schema")!=PREPARED_SCHEMA or header.get("model")!=identity:return
+                for row in inp:
+                    if len(row)>400000:continue
+                    try:
+                        pair=json.loads(row.decode("utf-8"))
+                        if not isinstance(pair,list) or len(pair)!=2 or not prepared_pair(pair[0],pair[1]):continue
+                        if pair[0] not in self.cache:self.remember(pair[0],pair[1])
+                        if len(self.cache)>=65536:break
+                    except (ValueError,TypeError,UnicodeError):continue
+            self.preloaded=len(self.cache)
+            # Inventory accounting counts a cached text once it is discovered.
+            self.accepted=0
+        except (IOError,OSError,ValueError,TypeError,AttributeError):pass
+    def save_prepared(self):
+        if not self.cache:return 0
+        path=os.path.join(self.side,"prepared-cache-v1.jsonl")
+        temp=path+".tmp-"+new_nonce()
+        count=0
+        try:
+            identity=prepared_identity(self.side)
+            with self.lock:entries=list(self.cache.items())
+            with open(temp,"wb") as out:
+                line=json.dumps({"schema":PREPARED_SCHEMA,"model":identity},ensure_ascii=True).encode("ascii")+b"\n"
+                out.write(line);total=len(line)
+                for source,target in entries:
+                    if not prepared_pair(source,target):continue
+                    line=json.dumps([source,target],ensure_ascii=True).encode("ascii")+b"\n"
+                    if total+len(line)>PREPARED_LIMIT:break
+                    out.write(line);total+=len(line);count+=1
+                out.flush()
+            if count:
+                if hasattr(os,"replace"):os.replace(temp,path)
+                else:
+                    if os.path.isfile(path):os.unlink(path)
+                    os.rename(temp,path)
+            return count
+        except (IOError,OSError,ValueError,TypeError,AttributeError):return 0
         finally:
             try:
                 if os.path.isfile(temp):os.unlink(temp)
             except (IOError,OSError):pass
+    def publish_progress(self):
+        # Serialize both startup and heartbeat writers. No game text in report.
+        with self.progress_lock:
+            path=os.path.join(self.side,"client-progress.json")
+            temp=path+".tmp-"+new_nonce()
+            try:
+                raw=json.dumps(self.snapshot(),ensure_ascii=True).encode("ascii")
+                with open(temp,"wb") as out:out.write(raw)
+                if hasattr(os,"replace"):os.replace(temp,path)
+                else:
+                    if os.path.isfile(path):os.unlink(path)
+                    os.rename(temp,path)
+            except (IOError,OSError,ValueError):pass
+            finally:
+                try:
+                    if os.path.isfile(temp):os.unlink(temp)
+                except (IOError,OSError):pass
     def progress_loop(self):
         while not self.stopped:
             self.publish_progress()
@@ -259,6 +375,8 @@ class Client(object):
         if not eligible(value):return value
         with self.lock:
             if value in self.cache:
+                if value not in self.seen:
+                    self.seen.add(value);self.detected+=1;self.accepted+=1
                 self.applied+=1
                 return self.cache[value]
             if value in self.outputs or value in self.negative:return value
@@ -452,6 +570,8 @@ def prepare_ticket(engine,client):
                 if progress!=last:last=progress;changed=CLOCK()
                 if (not client.connection and CLOCK()-started>60) or CLOCK()-changed>180:break
                 time.sleep(.25)
+            client.snapshot_saved=client.save_prepared()
+            client.publish_progress()
             data=client.snapshot();data["result"]=state;data["id"]=nonce
             # Ticket-specific result written atomically; zero launcher exit
             # alone is never a completion signal.
@@ -476,7 +596,9 @@ def install(engine,client=None):
         return True
     waiters=collections.OrderedDict()
     live_client=isinstance(client,Client)
-    if live_client:prepare_ticket(engine,client)
+    if live_client:
+        prepare_ticket(engine,client)
+        client.load_prepared()
     last_refresh=[0]
     def transform(value,missing=None,live=None):
         source=as_text(value)

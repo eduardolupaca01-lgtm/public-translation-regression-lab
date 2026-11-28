@@ -33,6 +33,7 @@ screen ia_unvisited_screen():
 label ia_inventory_only:
     $ renpy.notify("Quest completed.")
     "This archived dialogue is never played."
+    "Thank you for your help."
     menu:
         "Open the archived door":
             "A second archived dialogue."
@@ -61,6 +62,7 @@ label start:
             if not engine.config.say_menu_text_filter:
                 raise RuntimeError("Say/menu hook missing")
             mode=os.environ["IA_RENPY_NATIVE_MODE"]
+            if mode=="prepare_forbidden":raise RuntimeError("Preparation entered gameplay")
             c=module.active_client
             expected_inventory=(u"This archived dialogue is never played.",u"Open the archived door",u"A second archived dialogue.",u"Inventory is empty.",u"Open settings",u"Quest completed.")
             if not c.snapshot()["scan_complete"] or not all(s in c.seen for s in expected_inventory):
@@ -75,6 +77,13 @@ label start:
                 if time.time()-begin>2.0:
                     raise RuntimeError("Native constructors blocked without worker")
             if mode=="real":
+                # The actual previous preparation must already have made
+                # this archived sentence available BEFORE any worker wait.
+                first=native(u"Thank you for your help.")
+                value=first.text
+                if isinstance(value,(py_builtins.list,py_builtins.tuple)):value=value[0]
+                if c.snapshot()["preloaded"]<1 or not re.search(u"gracias|agradezco|ayuda|asistencia",value,re.I):
+                    raise RuntimeError("Prepared dialogue unavailable on first native display")
                 deadline=time.time()+90
                 # Observe the production automatic startup, without calling
                 # get_session() to start or reconnect it from the test.
@@ -164,7 +173,7 @@ def command(exe,*args):
     if p.returncode:raise RuntimeError("Installer/SDK command failed: "+str(p.returncode)+" "+p.stderr.decode("utf-8","replace")[-1500:])
 
 def diagnostics(root,result):
-    for path in [result/"error.txt",root/"traceback.txt",root/"errors.txt",root/"log.txt",root/SIDE/"client-startup.txt",root/SIDE/"worker-startup.json",root/SIDE/"status.json"]:
+    for path in [result/"error.txt",root/"traceback.txt",root/"errors.txt",root/"log.txt",root/SIDE/"client-startup.txt",root/SIDE/"worker-startup.json",root/SIDE/"status.json",root/SIDE/"client-progress.json"]:
         if path.is_file():print(path.name,path.read_text("utf-8-sig",errors="replace")[-12000:],flush=True)
 
 def wait_marker(proc,root,result,expected,seconds=180):
@@ -243,6 +252,63 @@ def main():
             (side/"owner-v1.json").write_text(json.dumps({"schema":"ia-servidor-renpy-v1","client_sha256":sha(side/"client.py"),"boot_sha256":sha(hook),"profile":"modern","game_rel":"game"}),encoding="utf-8")
             mode="preflight"
         result=base/"results";result.mkdir()
+        # Explicitly verify the actual registered native command before
+        # normal gameplay. The source preflight cancels without a worker;
+        # packaged acceptance performs the whole real OPUS preparation.
+        prep_env=dict(env,IA_RENPY_NATIVE_MODE="prepare_forbidden",
+                      IA_RENPY_NATIVE_RESULT=str(result/"forbidden-result.txt"),
+                      IA_RENPY_NATIVE_ERROR=str(result/"forbidden-error.txt"))
+        if args.servidor:
+            prep=subprocess.run([str(args.servidor),"--renpy-prepare","--game",str(launcher)],
+                                env=prep_env,capture_output=True,timeout=900)
+            if prep.returncode:
+                diagnostics(root,result)
+                raise RuntimeError("Packaged native preparation failed: "+prep.stderr.decode("utf-8","replace")[-2000:])
+            reports=list(side.glob("prepare-result-*.json"))
+            if len(reports)!=1:raise RuntimeError("Missing preparation completion report")
+            data=json.loads(reports[0].read_text("utf-8"))
+            if data["result"]!="IA_RENPY_PREPARACION_LISTA" or data["pending"] or not data["scan_complete"] or not data["snapshot_saved"]:
+                raise RuntimeError("Preparation did not complete: "+repr(data))
+            if not (side/"prepared-cache-v1.jsonl").is_file():raise RuntimeError("Prepared fast-start cache missing")
+            import sqlite3
+            with sqlite3.connect(side/"memory-v1.sqlite3") as db:
+                rows=db.execute("SELECT output FROM memory WHERE original=?",("Thank you for your help.",)).fetchall()
+                if not rows or not any(x[0]!="Thank you for your help." for x in rows):
+                    raise RuntimeError("Unvisited archived dialogue missing from real prepared memory")
+            print("NATIVE_PREPLAY_REAL_OPUS_INVENTORY_PASS",data["inventory"],data["accepted"],data["unchanged"],flush=True)
+        else:
+            import secrets
+            nonce=secrets.token_hex(16)
+            request=side/"prepare-request.json"
+            cancel=side/("prepare-cancel-"+nonce+".txt")
+            marker=side/("prepare-result-"+nonce+".json")
+            request.write_text(json.dumps({"schema":"ia-servidor-renpy-v1","id":nonce}),encoding="utf-8")
+            cancel.write_text("cancel",encoding="ascii")
+            save=side/("prepare-saves-"+nonce);save.mkdir()
+            prep_env["IA_RENPY_PREPARE_ID"]=nonce
+            proc=subprocess.Popen([str(launcher),str(root),"ia_renpy_prepare","--savedir",str(save)],cwd=root,env=prep_env)
+            try:
+                until=time.monotonic()+90
+                while not marker.is_file() and time.monotonic()<until:
+                    if (result/"forbidden-error.txt").is_file() or (root/"traceback.txt").is_file():break
+                    time.sleep(.25)
+                if not marker.is_file():
+                    diagnostics(root,result);raise RuntimeError("Native preparation command did not execute")
+                data=json.loads(marker.read_text("utf-8"))
+                if data["result"]!="IA_RENPY_PREPARACION_CANCELADA" or not data["scan_complete"] or data["inventory"]<6:
+                    raise RuntimeError("Native preparation command/cancellation failed: "+repr(data))
+                print("NATIVE_PREPLAY_COMMAND_AND_CANCEL_PASS",data["inventory"],flush=True)
+                try:proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:pass
+            finally:
+                if proc.poll() is None:
+                    subprocess.run(["taskkill","/PID",str(proc.pid),"/T","/F"],capture_output=True)
+                    proc.wait(timeout=15)
+                request.unlink(missing_ok=True);cancel.unlink(missing_ok=True)
+            time.sleep(1)
+        if (result/"forbidden-result.txt").is_file() or (result/"forbidden-error.txt").is_file():
+            raise RuntimeError("Preparation unexpectedly entered the game's start label")
+        if any(sha(p)!=v for p,v in before.items()):raise RuntimeError("Preparation changed original archive/launcher/save")
         env.update(IA_RENPY_NATIVE_MODE=mode,IA_RENPY_NATIVE_RESULT=str(result/"result.txt"),IA_RENPY_NATIVE_ERROR=str(result/"error.txt"))
         # Exactly how the user opens the game: original executable, no flags,
         # no extra launch button or special injection from a host interpreter.

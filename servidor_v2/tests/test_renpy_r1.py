@@ -158,6 +158,27 @@ class RenpyR1(unittest.TestCase):
         self.assertEqual(list(c.pending),["Inventory one."])
         self.assertEqual(c.snapshot()["inventory"],2)
         self.assertEqual(c.snapshot()["discovered"],2)
+    def test_prepared_fast_start_checks_model_and_protected_controls(self):
+        with tempfile.TemporaryDirectory() as d:
+            side=Path(d)/client.SIDECAR;side.mkdir()
+            receipt={"schema":client.SCHEMA,"engine_sha256":{"models/opus_en_es/model.bin":"a"*64,"models/opus_ja_es/model.bin":"b"*64}}
+            (side/"owner-v1.json").write_text(json.dumps(receipt),encoding="utf-8")
+            c=client.Client(d)
+            c.remember('{b}Save [player]{/b}','{b}Guardar [player]{/b}')
+            c.remember("Continue","Continuar")
+            c.remember("Danger","Peligro [malicious()]")
+            self.assertEqual(c.save_prepared(),2)
+            next_client=client.Client(d);next_client.load_prepared()
+            self.assertEqual(next_client.preloaded,2)
+            next_client.enqueue("Continue");next_client.finish_inventory(True)
+            self.assertEqual(next_client.snapshot()["inventory"],1)
+            self.assertEqual(next_client.snapshot()["accepted"],1)
+            self.assertEqual(next_client.translate('{b}Save [player]{/b}'),'{b}Guardar [player]{/b}')
+            self.assertNotIn("Danger",next_client.cache)
+            receipt["engine_sha256"]["models/opus_en_es/model.bin"]="c"*64
+            (side/"owner-v1.json").write_text(json.dumps(receipt),encoding="utf-8")
+            incompatible=client.Client(d);incompatible.load_prepared()
+            self.assertEqual(incompatible.preloaded,0)
     def test_preplay_inventory_compiled_screen_and_python_literals(self):
         from types import SimpleNamespace as NS
         def make(kind,**attrs):

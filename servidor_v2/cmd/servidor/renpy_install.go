@@ -337,7 +337,8 @@ type renpyProgress struct{
  Phase string
  PreparationID string `json:"preparation_id"`
  ScanComplete bool `json:"scan_complete"`
- Inventory,Discovered,Pending,Accepted,Unchanged,Deferred,Applied uint64
+ Inventory,Discovered,Pending,Accepted,Unchanged,Deferred,Applied,Preloaded uint64
+ Scan struct{ScriptFiles uint64 `json:"script_files"`;ArchivedScripts uint64 `json:"archived_scripts"`;LooseScripts uint64 `json:"loose_scripts"`}
  TransportFailed uint64 `json:"transport_failed"`
  Updated int64
 }
@@ -353,14 +354,15 @@ func renpyReadProgress(side string)(renpyProgress,bool){
 func renpyProgressLine(p renpyProgress)string{
  phase:=p.Phase
  if time.Now().Unix()-p.Updated>15{phase="ULTIMO REGISTRO"}
- return fmt.Sprintf("IA Traductora | %s | Detectados %d | Traducidos %d | Pendientes %d",phase,p.Discovered,p.Accepted,p.Pending)
+ if p.PreparationID!=""&&phase!="ULTIMO REGISTRO"{phase="PREPARACION "+phase}
+ return fmt.Sprintf("IA Traductora | %s | Archivos %d | Textos %d | Listos %d | Pendientes %d",phase,p.Scan.ScriptFiles,p.Discovered,p.Accepted,p.Pending)
 }
 func renpyStatusText(exe string)(string,error){
  d,e:=detectRenpy(exe);if e!=nil{return "",e};side:=filepath.Join(d.Root,renpySide)
  if _,e=renpyReadReceipt(side);e!=nil{return "",e}
  startup:=renpyStartupText(side)
  if p,ok:=renpyReadProgress(side);ok{
-  startup+=fmt.Sprintf(" | %s | inventario=%d (completo=%t) | aplicaciones=%d | sin cambio=%d | errores de transporte=%d | cola saturada=%d",renpyProgressLine(p),p.Inventory,p.ScanComplete,p.Applied,p.Unchanged,p.TransportFailed,p.Deferred)
+  startup+=fmt.Sprintf(" | %s | inventario=%d (completo=%t) | scripts en RPA=%d | scripts sueltos=%d | memoria precargada=%d | aplicaciones=%d | sin cambio=%d | errores de transporte=%d | cola saturada=%d",renpyProgressLine(p),p.Inventory,p.ScanComplete,p.Scan.ArchivedScripts,p.Scan.LooseScripts,p.Preloaded,p.Applied,p.Unchanged,p.TransportFailed,p.Deferred)
  }
  p:=filepath.Join(side,"status.json");if !renpyFile(p){return startup+" | Todavía no hay sesión de traducción registrada.",nil}
  st,e:=os.Stat(p);if e!=nil||st.Size()>8192{return "",errors.New("IA_RENPY_ESTADO_INVALIDO")}
@@ -438,7 +440,6 @@ func renpyPrepare(exe string)(err error){
  done:=make(chan error,1);go func(){done<-cmd.Wait()}()
  result:=filepath.Join(side,"prepare-result-"+id+".json")
  cancel:=filepath.Join(side,"prepare-cancel-"+id+".txt")
- defer os.Remove(cancel)
  initial:=time.Now().Add(120*time.Second)
  deadline:=time.Now().Add(24*time.Hour)
  for time.Now().Before(deadline){
@@ -450,6 +451,7 @@ func renpyPrepare(exe string)(err error){
    end:=time.Now().Add(45*time.Second)
    for time.Now().Before(end)&&renpyCheckSessions(side)!=nil{time.Sleep(250*time.Millisecond)}
    if e=renpyCheckSessions(side);e!=nil{return errors.New("IA_RENPY_PREPARACION_MOTOR_ACTIVO")}
+   _=os.Remove(cancel)
    if state.Result=="IA_RENPY_PREPARACION_LISTA"&&state.ScanComplete&&state.Pending==0&&state.Deferred==0&&state.TransportFailed==0{return nil}
    if state.Result=="IA_RENPY_PREPARACION_CANCELADA"{return errors.New(state.Result)}
    return errors.New("IA_RENPY_PREPARACION_INCOMPLETA")
