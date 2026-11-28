@@ -36,3 +36,41 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: '0'
         run: go build -o Servidor-RenPy-lab.exe ./cmd/servidor
+
+  native-sdk:
+    name: RenPy official SDK ${{ matrix.version }} - native text contract
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '6.99.14'
+            sha: 495d66b461c79d833c55da24d2c043ee2e6f99d3b78d863bf84c1a109278b9f6
+          - version: '7.8.7'
+            sha: 51d5936c61d1d57626fa79f8b4839b0f4cc41c5e27f0632ae8e3fa6cbb0c5853
+          - version: '8.3.7'
+            sha: 7722e17aed8c174307c1e69d087d74ef009bc164a4de4830149794f8da3f7ecf
+          - version: '8.6.2'
+            sha: a740bb9c3268ebf9d78ea5f121c63ea6bcdfd7bd4ff6e5b139b8a8dbc56b6e97
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download official SDK and verify published SHA-256
+        shell: pwsh
+        env:
+          SDK_VERSION: ${{ matrix.version }}
+          SDK_SHA256: ${{ matrix.sha }}
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'renpy-sdk.zip'
+          $dst = Join-Path $env:RUNNER_TEMP 'renpy-sdk'
+          curl.exe -L --fail --retry 2 --max-time 300 "https://www.renpy.org/dl/$env:SDK_VERSION/renpy-$env:SDK_VERSION-sdk.zip" -o $zip
+          if ($LASTEXITCODE -ne 0) { throw "Official SDK download failed" }
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() -ne $env:SDK_SHA256) { throw "SDK SHA-256 mismatch" }
+          Expand-Archive -LiteralPath $zip -DestinationPath $dst
+          "RENPY_SDK_ROOT=$dst" >> $env:GITHUB_ENV
+      - name: Run a new original synthetic scene using the actual SDK
+        shell: pwsh
+        run: python servidor_v2/tests/renpy_native_probe.py --sdk-root "$env:RENPY_SDK_ROOT" --version "${{ matrix.version }}"
