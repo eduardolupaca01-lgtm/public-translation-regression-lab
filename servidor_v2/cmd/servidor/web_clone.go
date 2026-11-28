@@ -69,7 +69,13 @@ func webClonePlan(root string)([]webCopyEntry,uint64,error){
  if e!=nil{return nil,0,e}
  return entries,total,nil
 }
+type webProgressFunc func(string)
+func webNotify(report webProgressFunc,line string){if report!=nil{report(line)}}
 func webCloneInstall(folder,parent string,pkg *packageReader)(string,error){
+ return webCloneInstallProgress(folder,parent,pkg,nil)
+}
+func webCloneInstallProgress(folder,parent string,pkg *packageReader,report webProgressFunc)(string,error){
+ webNotify(report,"[IA_WEB_VALIDANDO_RECURSOS] Verificando index.html y recursos del juego.")
  root,e:=webValidateFolder(folder)
  if e!=nil{return "",e}
  if pkg==nil{return "",errors.New("IA_WEB_HOST_NO_INCLUIDO")}
@@ -85,6 +91,7 @@ func webCloneInstall(folder,parent string,pkg *packageReader)(string,error){
  if e==nil&&rel!=".."&&!strings.HasPrefix(rel,".."+string(filepath.Separator)){
   return "",errors.New("IA_WEB_COPIA_DESTINO_DENTRO_DEL_ORIGEN")
  }
+ webNotify(report,"[IA_WEB_INVENTARIO] Inventariando recursos y comprobando espacio de destino.")
  entries,total,e:=webClonePlan(root)
  if e!=nil{return "",e}
  if e=vxaceCheckDiskSpace(parent,total+2*1024*1024*1024);e!=nil{return "",e}
@@ -92,6 +99,7 @@ func webCloneInstall(folder,parent string,pkg *packageReader)(string,error){
  if e!=nil{return "",errors.New("IA_WEB_COPIA_DESTINO_INVALIDO")}
  marker:=filepath.Join(dest,webCopyMarker)
  if e=createNew(marker,[]byte("Copia incompleta. No ejecutar. El origen permanece intacto.\n"));e!=nil{return "",e}
+ webNotify(report,"[IA_WEB_COPIANDO] Copiando recursos a una carpeta independiente.")
  for _,entry:=range entries{
   from,to:=filepath.Join(root,entry.rel),filepath.Join(dest,entry.rel)
   info,e:=os.Lstat(from)
@@ -106,8 +114,10 @@ func webCloneInstall(folder,parent string,pkg *packageReader)(string,error){
    if e!=nil||!vxaceSameReplaceFile(info,entry.info){return "",errors.New("IA_WEB_COPIA_ORIGEN_CAMBIADO")}
   }
  }
+ webNotify(report,"[IA_WEB_PREPARANDO_OPUS] Instalando y verificando el motor local y sus modelos.")
  _,engine,e:=webPrepare(dest,pkg)
  if e!=nil{return "",e}
+ webNotify(report,"[IA_WEB_PREPARANDO_HOST] Preparando WebView2 y verificando las bibliotecas de la ventana.")
  hostSHA:=map[string]string{}
  // The host executable is created last. No original game binary is copied.
  for _,name:=range webHostFiles[1:]{
@@ -124,6 +134,7 @@ func webCloneInstall(folder,parent string,pkg *packageReader)(string,error){
  hostSHA[webPlayer]=pkg.manifest.Files["webhost/"+webPlayer]
  engineSHA:=map[string]string{}
  for _,name:=range iaSortedFiles(pkg){engineSHA[name]=pkg.manifest.Files[name]}
+ webNotify(report,"[IA_WEB_VERIFICANDO_COPIA] Guardando el manifiesto y verificando Jugar-IA.exe.")
  receipt:=webReceipt{"ia-web-desktop-v1",port,indexSHA,engineSHA,hostSHA}
  raw,e:=json.MarshalIndent(receipt,"","  ");if e!=nil{return "",e}
  if e=createNew(filepath.Join(dest,webCopyReceipt),raw);e!=nil{return "",e}

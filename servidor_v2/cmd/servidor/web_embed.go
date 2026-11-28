@@ -232,6 +232,10 @@ func webExtractMember(f io.ReaderAt,root string,m webEmbedMember)error{
  return nil
 }
 func webCloneFromEXE(filename,parent string,pkg *packageReader)(string,error){
+ return webCloneFromEXEProgress(filename,parent,pkg,nil)
+}
+func webCloneFromEXEProgress(filename,parent string,pkg *packageReader,report webProgressFunc)(string,error){
+ webNotify(report,"[IA_WEB_EXE_ANALISIS] Analizando EXE de forma estática; no se ejecuta el original.")
  exe,e:=filepath.Abs(filename)
  if e!=nil||!strings.EqualFold(filepath.Ext(exe),".exe")||!ordinary(exe)||
     !vxaceCloneOrdinaryPath(exe)||vxaceCloneCheckAncestors(filepath.Dir(exe))!=nil{return "",errors.New("IA_WEB_EXE_RUTA_INVALIDA")}
@@ -245,15 +249,17 @@ func webCloneFromEXE(filename,parent string,pkg *packageReader)(string,error){
  defer f.Close()
  before,e:=f.Stat();if e!=nil||!before.Mode().IsRegular(){return "",errors.New("IA_WEB_EXE_NO_LEIBLE")}
  plan,e:=webFindEmbedded(f,before.Size());if e!=nil{return "",e}
+ webNotify(report,"[IA_WEB_EXE_RECURSOS_DETECTADOS] Recursos integrados encontrados. Comprobando espacio.")
  if e=vxaceCheckDiskSpace(parent,2*plan.total+2*1024*1024*1024);e!=nil{return "",e}
  stage,e:=os.MkdirTemp(parent,".ia-web-extract-");if e!=nil{return "",errors.New("IA_WEB_EXE_EXTRACCION_FALLO")}
  // This is a new private scratch directory, never the original game.
  defer os.RemoveAll(stage)
+ webNotify(report,"[IA_WEB_EXE_EXTRAYENDO] Extrayendo y verificando los recursos en una carpeta temporal.")
  for _,m:=range plan.members{
   if e=webExtractMember(f,stage,m);e!=nil{return "",e}
  }
  after,e:=os.Lstat(exe)
  if e!=nil||!vxaceSameReplaceFile(before,after){return "",errors.New("IA_WEB_COPIA_ORIGEN_CAMBIADO")}
  if _,e=webValidateFolder(stage);e!=nil{return "",e}
- return webCloneInstall(stage,parent,pkg)
+ return webCloneInstallProgress(stage,parent,pkg,report)
 }

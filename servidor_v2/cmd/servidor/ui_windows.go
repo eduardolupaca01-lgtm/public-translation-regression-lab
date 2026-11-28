@@ -30,6 +30,8 @@ const(
     iaWMDestroy=0x0002
     iaWMClose=0x0010
     iaWMAppDone=0x8001
+    iaWMWebProgress=0x8002
+    iaWMWebDone=0x8003
     iaWMDrawItem=0x002B
     iaWMPaint=0x000F
     iaWMEraseBk=0x0014
@@ -42,6 +44,8 @@ const(
     iaCmdRecover=104
     iaCmdClone=105
     iaCmdJSONCopy=106
+    iaCmdWebBrowse=107
+    iaCmdWebInstall=108
 )
 var(
     iaUser32=syscall.NewLazyDLL("user32.dll")
@@ -124,6 +128,12 @@ type iaUI struct{
     cloneBtn uintptr
     jsonBtn uintptr
     webBtn uintptr
+    rpgBtn uintptr
+    webActive bool
+    webInfo,webInput,webBrowse,webInstall,webLogs,webStatus uintptr
+    webFile,webLogText,webOutput string
+    webResult,webResultGame string
+    webPending []string
     cloneAllowed bool
     jsonPilot bool
     jsonRecovery bool
@@ -327,7 +337,7 @@ func iaChooseFile(owner uintptr,filter []uint16,caption string)(selected string,
 // Keep action availability independent from control captions. In particular,
  // a recognized offline-only layout must never dispatch the normal installer.
 func iaRPGActionAllowed(ui *iaUI,command int)bool{
-    if ui.busy||ui.gameFile==""{return false}
+    if ui.busy||ui.webActive||ui.gameFile==""{return false}
     if ui.jsonPilot{
         switch command{
         case iaCmdInstall,iaCmdJSONCopy:return !ui.jsonRecovery
@@ -514,54 +524,6 @@ func iaStartClone(){
 }
 
 
-func iaStartWebClone(){
- ui:=&iaCurrentUI
- if ui.busy{return}
- file,e:=iaChooseIndex(ui.hwnd)
- if e!=nil{iaLog("[IA_SELECTOR_ERROR] "+iaSafeInstallCode(e.Error()));return}
- if file==""{return}
- fromEXE:=strings.EqualFold(filepath.Ext(file),".exe")
- root:=""
- if !fromEXE{
-  if !strings.EqualFold(filepath.Base(file),"index.html"){
-   iaSet(ui.status,"Selecciona el EXE original o el index.html de una carpeta web extraída.");return
-  }
-  root,e=webValidateFolder(filepath.Dir(file))
-  if e!=nil{code:=iaSafeInstallCode(e.Error());iaLog("["+code+"] Carpeta web no admitida.");iaSet(ui.status,iaFriendlyInstall(code));return}
- }
- executable,e:=os.Executable()
- if e!=nil{iaLog("[IA_NO_SE_PUEDE_LEER_SERVIDOR]");return}
- parent:=filepath.Dir(executable)
- yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
-  uintptr(unsafe.Pointer(iaUTF16("Se buscarán los recursos web y se creará una carpeta Juego-IA-WEB junto al Servidor. El EXE original no se ejecuta ni modifica. Las partidas anteriores no se importan. ¿Continuar?"))),
-  uintptr(unsafe.Pointer(iaUTF16("Crear copia web jugable"))),0x24|0x100)
- if yes!=6{return}
- ui.busy=true
- iaRefreshRPGActions(ui)
- iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
- if fromEXE{
-  iaSet(ui.status,"Analizando EXE y verificando recursos web...")
-  iaLog("[IA_WEB_EXE_ANALISIS] Lectura estática. No se ejecutará el original.")
- }else{
-  iaSet(ui.status,"Creando copia web con ventana propia...")
-  iaLog("[IA_WEB_COPIA_INICIADA] Recursos de origen intactos.")
- }
- go func(){
-  info:="IA_ERROR_NO_CLASIFICADO";final:=""
-  defer func(){
-   if recover()!=nil{info="IA_WEB_COPIA_FALLO";final=""}
-   ui.mu.Lock();ui.result=info;ui.resultGame=final;ui.mu.Unlock()
-   iaPostMessage.Call(ui.hwnd,iaWMAppDone,0,0)
-  }()
-  pkg,e:=readPackage(executable)
-  if e!=nil{info=e.Error();return}
-  defer pkg.Close()
-  if fromEXE{final,e=webCloneFromEXE(file,parent,pkg)}else{final,e=webCloneInstall(root,parent,pkg)}
-  if e!=nil{info=e.Error();final="";return}
-  info="IA_WEB_COPIA_LISTA"
- }()
-}
-
 func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
     defer func(){
         if recover()!=nil{
@@ -588,10 +550,16 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         return iaColorControl(wparam,lparam)
     case iaWMCommand:
         switch int(wparam&0xFFFF){
+        case 301:
+            if lparam==ui.rpgBtn{iaSwitchSection(ui,false)}
         case 302:
-            if lparam==ui.webBtn&&!ui.busy{iaStartWebClone()}
+            if lparam==ui.webBtn{iaSwitchSection(ui,true)}
+        case iaCmdWebBrowse:
+            if lparam==ui.webBrowse&&ui.webActive&&!ui.busy{iaWebSelect(ui)}
+        case iaCmdWebInstall:
+            if lparam==ui.webInstall&&iaWebActionAllowed(ui){iaWebInstallAction()}
         case iaCmdBrowse:
-            if lparam!=ui.browse || ui.busy{return 0}
+            if lparam!=ui.browse || ui.busy || ui.webActive{return 0}
             file,err:=iaSelectFile(hwnd)
             if err!=nil{
                 iaLog("[IA_SELECTOR_ERROR] "+err.Error())
@@ -650,16 +618,21 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 iaLog("[IA_SELECTOR_CANCELADO] Puedes volver a pulsar EXE.")
             }
         case iaCmdInstall:
-            if lparam==ui.install {iaStartInstall()}
+            if lparam==ui.install&&!ui.webActive {iaStartInstall()}
         case iaCmdRecover:
-            if lparam==ui.recoverBtn {iaStartRecover()}
+            if lparam==ui.recoverBtn&&!ui.webActive {iaStartRecover()}
         case iaCmdClone:
-            if lparam==ui.cloneBtn {iaStartClone()}
+            if lparam==ui.cloneBtn&&!ui.webActive {iaStartClone()}
         case iaCmdJSONCopy:
             if lparam==ui.jsonBtn&&iaRPGActionAllowed(ui,iaCmdJSONCopy){iaJSONPilotAction(false)}
         case iaCmdCopy:
             if lparam==ui.copyBtn{
-                if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{
+                if ui.webActive{
+                    if err:=iaCopyDiagnostics(hwnd,ui.webLogText);err!=nil{
+                        iaWebLog(ui,"[IA_WEB_COPIAR_ERROR] "+iaSafeInstallCode(err.Error()))
+                        iaSet(ui.webStatus,"No se pudo copiar el diagnóstico WEB.")
+                    }else{iaSet(ui.webStatus,"Diagnóstico WEB copiado.")}
+                }else if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{
                     iaLog("[IA_COPIAR_ERROR] "+iaSafeInstallCode(err.Error()))
                     iaSet(ui.status,"No se pudo copiar. Revisa el diagnóstico en pantalla.")
                 }else{
@@ -670,11 +643,16 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             if lparam==ui.closeBtn && !ui.busy{iaDestroyWindow.Call(hwnd)}
         }
         return 0
+    case iaWMWebProgress:
+        iaWebDrain(ui);return 0
+    case iaWMWebDone:
+        iaWebFinish(ui);return 0
     case iaWMAppDone:
         ui.mu.Lock();result:=ui.result;newGame:=ui.resultGame;ui.resultGame="";ui.mu.Unlock()
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
         iaEnableWindow.Call(ui.webBtn,1)
+        if ui.rpgBtn!=0{iaEnableWindow.Call(ui.rpgBtn,1)}
         if ui.jsonPilot{ui.jsonRecovery=mvJSONDirectNeedsRecovery(ui.gameFile)}
         iaRefreshRPGActions(ui)
         code:=iaSafeInstallCode(result)
@@ -700,17 +678,6 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             iaSet(ui.status,"Copia JSON lista. F10 en Servidor: estado.")
             iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16("Copia de prueba lista:\n"+ui.jsonSummary+"\n\nAbre el EXE de la copia. El original permanece intacto."))),uintptr(unsafe.Pointer(iaUTF16("Servidor R44"))),0x40)
             // Open the completed folder only; never start the selected game.
-            shell:=syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
-            folder:=iaUTF16(filepath.Dir(newGame));verb:=iaUTF16("open")
-            shell.Call(hwnd,uintptr(unsafe.Pointer(verb)),uintptr(unsafe.Pointer(folder)),0,0,1)
-            runtime.KeepAlive(folder);runtime.KeepAlive(verb)
-        }else if code=="IA_WEB_COPIA_LISTA"&&newGame!=""{
-            ui.gameFile="";ui.jsonPilot=false;ui.jsonRecovery=false;ui.cloneAllowed=false;iaSet(ui.input,newGame)
-            iaRefreshRPGActions(ui)
-            iaLog("[IA_WEB_COPIA_LISTA] Abre Jugar-IA.exe en la nueva carpeta. Ventana propia, sin navegador externo.")
-            iaSet(ui.status,"Copia web preparada. Abre Jugar-IA.exe y prueba F10.")
-            iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16("Copia lista:\n"+newGame+"\n\nAbre Jugar-IA.exe desde esa carpeta."))),uintptr(unsafe.Pointer(iaUTF16("IA Traductora"))),0x40)
-            // Open only the newly created local directory, not a URL.
             shell:=syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
             folder:=iaUTF16(filepath.Dir(newGame));verb:=iaUTF16("open")
             shell.Call(hwnd,uintptr(unsafe.Pointer(verb)),uintptr(unsafe.Pointer(folder)),0,0,1)
@@ -753,8 +720,8 @@ func runUI(){
     reg,_,_:=iaRegClass.Call(uintptr(unsafe.Pointer(&class)))
     if reg==0{fmt.Fprintln(os.Stderr,"IA_VENTANA_NO_REGISTRADA");return}
     hwnd,_,_:=iaCreateWindow.Call(0,uintptr(unsafe.Pointer(className)),
-        uintptr(unsafe.Pointer(iaUTF16("Servidor R44 — prueba JSON"))),iaWSOverlappedWindow|iaWSVisible,
-        100,60,1050,760,0,0,instance,0)
+        uintptr(unsafe.Pointer(iaUTF16("Servidor R44 — panel WEB"))),iaWSOverlappedWindow,
+        100,60,1050,800,0,0,instance,0)
     if hwnd==0{fmt.Fprintln(os.Stderr,"IA_NO_SE_PUEDE_ABRIR_VENTANA");return}
     ui:=&iaCurrentUI;ui.hwnd=hwnd
     ui.titleLabel=iaControl(hwnd,"STATIC","Servidor R44",0,30,20,360,55,0)
@@ -764,6 +731,7 @@ func runUI(){
         if label!="RPG"&&label!="WEB"{style|=iaWSDisabled}
         control:=iaControl(hwnd,"BUTTON",label,style,20,127+i*70,169,54,300+i)
         if label=="WEB"{ui.webBtn=control}
+        if label=="RPG"{ui.rpgBtn=control}
     }
     ui.infoLabel=iaControl(hwnd,"STATIC","1. Selecciona el archivo EXE del juego (una copia cerrada):",0,230,187,780,34,0)
     ui.input=iaControl(hwnd,"EDIT","",iaWSBorder|iaESReadOnly,230,227,597,44,0)
@@ -784,8 +752,9 @@ func runUI(){
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
-    iaRefreshRPGActions(ui)
-    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental, SOLData. Acciones separadas: INSTALAR TRADUCTOR, CREAR COPIA VX ACE y CREAR COPIA MV/JSON. Botón WEB: seleccionar EXE original o index.html extraído y crear copia. Motor local OPUS.")
+    iaCreateWebControls(ui)
+    iaSwitchSection(ui,false)
+    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental, SOLData. Acciones separadas: INSTALAR TRADUCTOR, CREAR COPIA VX ACE y CREAR COPIA MV/JSON. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {
@@ -793,7 +762,7 @@ func runUI(){
         if int32(success)<=0{break}
         // F10 is local to this UI message loop. No global hotkey,
         // hooks, process injection, or interception inside a game.
-        if msg.Message==0x0100&&msg.WParam==0x79&&ui.jsonSummary!=""&&!ui.busy{
+        if msg.Message==0x0100&&msg.WParam==0x79&&ui.jsonSummary!=""&&!ui.busy&&!ui.webActive{
             if msg.LParam&(1<<30)==0{
                 iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16(ui.jsonSummary))),uintptr(unsafe.Pointer(iaUTF16("IA Traductora · Estado JSON"))),0x40)
             }

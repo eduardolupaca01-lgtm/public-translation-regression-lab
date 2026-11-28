@@ -100,14 +100,14 @@ func iaThemeDestroy(){
 }
 func iaApplyControlFont(window uintptr,klass string,id int,title string){
     var font=iaThemeFontNormal
-    if id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
+    if id==iaCmdWebBrowse||id==iaCmdWebInstall||id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
         font=iaThemeFontButton
     }
     if klass=="STATIC"&&font!=0{
         font=iaThemeFontBold
         if title=="Servidor"{font=iaThemeFontTitle}
         if title=="RPG"{font=iaThemeFontSection}
-        if title=="Listo para instalar el traductor."{font=iaThemeFontNormal}
+        if title=="Listo para instalar el traductor."||title=="Listo para seleccionar un juego WEB."{font=iaThemeFontNormal}
     }
     if font!=0{iaSendMessage.Call(window,iaWMSetFont,font,1)}
 }
@@ -139,11 +139,11 @@ func iaColorControl(device,window uintptr)uintptr{
         iaSetTextColor.Call(device,iaRGB(255,255,255))
         return iaThemeBrushHeader
     }
-    if window==ui.statusLabel{
+    if window==ui.statusLabel||window==ui.webStatus{
         iaSetTextColor.Call(device,iaRGB(6,53,128))
         return iaThemeBrushStatus
     }
-    if window==ui.input||window==ui.logs{
+    if window==ui.input||window==ui.logs||window==ui.webInput||window==ui.webLogs{
         iaSetTextColor.Call(device,iaRGB(19,42,75))
         return iaThemeBrushWhite
     }
@@ -174,6 +174,8 @@ func iaDrawButton(param uintptr)bool{
     case 304: text="05"
     case 305: text="+"
     case iaCmdBrowse: text="EXE"
+    case iaCmdWebBrowse: text="EXE"
+    case iaCmdWebInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdClone: text="CREAR COPIA VX ACE"
     case iaCmdJSONCopy: text="CREAR COPIA MV/JSON"
@@ -182,7 +184,8 @@ func iaDrawButton(param uintptr)bool{
     case iaCmdRecover: text="Recuperar inicio RPG"
     default: return false
     }
-    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdBrowse||id==301||id==302{
+    activeNav:=(id==301&&!iaCurrentUI.webActive)||(id==302&&iaCurrentUI.webActive)
+    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdBrowse||id==iaCmdWebBrowse||id==iaCmdWebInstall||activeNav{
         background=iaRGB(0,96,225)
     }else if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{
         background=iaRGB(221,230,244)
@@ -193,7 +196,7 @@ func iaDrawButton(param uintptr)bool{
             foreground=iaRGB(205,219,240)
         }
     }
-    if data.ItemState&4!=0&&(id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdRecover||id==iaCmdBrowse||id==302){
+    if data.ItemState&4!=0&&(id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdRecover||id==iaCmdBrowse||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==301||id==302){
         // Win32 ODS_DISABLED: visibly unavailable, not merely unclickable.
         background=iaRGB(219,227,238);foreground=iaRGB(91,106,127)
     }else if data.ItemState&1!=0{
