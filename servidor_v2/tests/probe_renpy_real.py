@@ -64,12 +64,31 @@ def probe(exe,root,classic):
             time.sleep(.5)
         raise AssertionError("No accepted translation from real packaged worker")
     try:
+        if not classic:
+            # This direct transport probe deliberately does not execute the
+            # native boot. Reproduce its real lifecycle: inventory, then
+            # start the nonblocking client's background consumer. Since
+            # Fix2 translate() only enqueues a cold miss, it no longer starts
+            # a subprocess or performs synchronous HTTP by itself.
+            for source,_ in SAMPLES:client.enqueue(source)
+            client.finish_inventory(True)
+            cold=SAMPLES[0][0]
+            assert client.translate(cold)==cold,"Cold cache unexpectedly seeded"
+            assert client.snapshot()["pending"]==len(SAMPLES)
+            client.start_prefetch()
+            assert wait_until(lambda:client.connection is not None,75),"Modern worker did not connect automatically"
+            print("REAL_RENPY_ASYNC_WORKER_CONNECTED",flush=True)
         for source,expected in SAMPLES:
             target=request(source)
             assert re.search(expected,target,re.I),repr(target)
             if "[" in source:assert "[player_name]" in target and "{b}" in target and "{/b}" in target
             if '"' in source:assert target.count('"')==source.count('"')
         first=SAMPLES[0][0];before=request(first);assert request(first)==before
+        if not classic:
+            assert wait_until(lambda:client.snapshot()["pending"]==0,10),"Modern queue did not drain"
+            progress=client.snapshot()
+            assert progress["accepted"]>=len(SAMPLES) and progress["transport_failed"]==0,progress
+            print("REAL_RENPY_ASYNC_QUEUE_DRAINED",progress["accepted"],flush=True)
         def counts_published():
             try:return json.loads((side/"status.json").read_text("utf-8"))["translated"]>=len(SAMPLES)
             except (OSError,ValueError,KeyError):return False
@@ -81,7 +100,22 @@ def probe(exe,root,classic):
         assert all(any(x==source and y!=source for x,y in rows) for source,_ in SAMPLES)
         assert all(sha(path)==digest for path,digest in hashes.items())
         print("REAL_RENPY_PACKAGED_OPUS",profile,"PASS",flush=True)
-    finally:client.close()
+    except Exception:
+        # Fixture-only diagnostics: no session token, raw dialogue, or
+        # process command line. Distinguish launch, handshake and queue faults.
+        for name in ("client-startup.txt","worker-startup.json","client-progress.json","status.json","window-status.json"):
+            path=side/name
+            try:
+                if path.is_file() and path.stat().st_size<=16384:
+                    print(name,path.read_text("utf-8-sig",errors="replace"),flush=True)
+            except OSError:pass
+        if not classic:print("ASYNC_CLIENT_SNAPSHOT",client.snapshot(),flush=True)
+        raise
+    finally:
+        client.close()
+        if not classic:
+            if client.thread is not None:client.thread.join(timeout=2)
+            if client.progress_thread is not None:client.progress_thread.join(timeout=2)
 
 def main():
     p=argparse.ArgumentParser()

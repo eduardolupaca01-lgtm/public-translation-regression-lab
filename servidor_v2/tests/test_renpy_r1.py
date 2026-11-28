@@ -147,6 +147,48 @@ class RenpyR1(unittest.TestCase):
         c.remember("No change.","No change.")
         c.translate("No change.")
         self.assertNotIn("No change.",c.queued)
+    def test_background_consumer_lifecycle_and_cache_miss_stays_nonblocking(self):
+        import time
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d)/client.SIDECAR).mkdir()
+            c=client.Client(d)
+            caller=threading.current_thread()
+            entered=threading.Event()
+            release=threading.Event()
+            calls=[]
+            def delayed_request(value,deadline):
+                calls.append((value,threading.current_thread()))
+                entered.set()
+                if not release.wait(4):
+                    raise RuntimeError("test transport not released")
+                return "Dialogo listo."
+            try:
+                with patch.object(c,"get_session",return_value={"ready":True}),patch.object(c,"request",side_effect=delayed_request):
+                    source="Cold dialogue."
+                    c.enqueue(source)
+                    c.finish_inventory(True)
+                    self.assertEqual(c.translate(source),source)
+                    self.assertEqual(c.snapshot()["pending"],1)
+                    self.assertEqual(calls,[])
+                    c.start_prefetch()
+                    self.assertTrue(entered.wait(3),"Background consumer never started")
+                    before=time.perf_counter()
+                    self.assertEqual(c.translate(source),source)
+                    self.assertLess(time.perf_counter()-before,.25)
+                    self.assertIsNot(calls[0][1],caller)
+                    release.set()
+                    until=time.monotonic()+3
+                    while c.snapshot()["pending"] and time.monotonic()<until:
+                        time.sleep(.02)
+                    self.assertEqual(c.snapshot()["pending"],0)
+                    self.assertEqual(c.translate(source),"Dialogo listo.")
+                    self.assertEqual(len(calls),1)
+            finally:
+                release.set()
+                c.close()
+                if c.thread is not None:c.thread.join(3)
+                if c.progress_thread is not None:c.progress_thread.join(3)
     def test_visible_priority_and_no_duplicate_queue(self):
         c=client.Client("synthetic")
         c.enqueue("Inventory one.")
