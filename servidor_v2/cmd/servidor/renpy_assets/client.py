@@ -28,8 +28,14 @@ def new_nonce():
     return binascii.hexlify(os.urandom(16)).decode("ascii")
 TECH=re.compile(r"^(?:https?://|[A-Za-z]:[\\/]|(?:[\w.-]+[/\\])+[\w.-]+$)|\.(?:rpyc?|rpa|png|jpe?g|webp|ogg|mp3|wav|ttf|otf|json|py|exe)$",re.I)
 LETTERS=re.compile(u"[A-Za-z\u00c0-\u024f\u3040-\u30ff\u3400-\u9fff\uff66-\uff9d]")
+def as_text(value):
+    if isinstance(value,text_type):return value
+    if isinstance(value,bytes):
+        try:return value.decode("utf-8")
+        except UnicodeError:return None
+    return None
 def eligible(value):
-    return (isinstance(value,text_type) and 0<len(value)<=1800 and bool(LETTERS.search(value))
+    return (isinstance(value,text_type) and 0<len(value)<=32768 and bool(LETTERS.search(value))
             and not TECH.search(value.strip()) and not re.match(r"^[A-Z0-9_]+_\w+$",value.strip()))
 class Client(object):
     def __init__(self,root):
@@ -80,7 +86,7 @@ class Client(object):
             connection.request("POST","/translate",raw,{"Authorization":"Bearer "+state["token"],"Content-Type":"application/json"})
             response=connection.getresponse()
             if response.status!=200:return None
-            result=json.loads(response.read(65536).decode("utf-8"));target=result.get("text")
+            result=json.loads(response.read(400000).decode("utf-8"));target=result.get("text")
             return target if isinstance(target,text_type) else None
         except Exception:return None
         finally:connection.close()
@@ -166,7 +172,9 @@ def install(engine,client=None):
         except Exception:pass
         return True
     def transform(value):
-        try:return client.translate(value,foreground())
+        source=as_text(value)
+        if not eligible(source):return value
+        try:return client.translate(source,foreground())
         except Exception:return value
     config=engine.config
     if hasattr(config,"say_menu_text_filter"):
@@ -184,11 +192,22 @@ def install(engine,client=None):
         input_cls=getattr(behavior,"Input",None)
         def set_text(obj,text,*args,**kwargs):
             value=text
-            if (getattr(obj,"tokenized",False) or (input_cls is not None and isinstance(obj,input_cls))
+            if ((input_cls is not None and isinstance(obj,input_cls))
                 or any(c.__name__=="Input" for c in type(obj).__mro__)):
                 return previous(obj,value,*args,**kwargs)
-            if isinstance(value,text_type):value=transform(value)
-            elif isinstance(value,list):value=[transform(x) if isinstance(x,text_type) else x for x in value]
+            if getattr(obj,"tokenized",False):
+                # Only an explicit native visible-text token is eligible.
+                kind=getattr(engine,"TEXT_TEXT",None)
+                if kind is not None and isinstance(value,(list,tuple)):
+                    items=[]
+                    for token in value:
+                        if isinstance(token,tuple) and len(token)==2 and token[0]==kind:
+                            token=(token[0],transform(token[1]))
+                        items.append(token)
+                    value=tuple(items) if isinstance(value,tuple) else items
+                return previous(obj,value,*args,**kwargs)
+            if as_text(value) is not None:value=transform(value)
+            elif isinstance(value,list):value=[transform(x) if as_text(x) is not None else x for x in value]
             return previous(obj,value,*args,**kwargs)
         text_cls.set_text=set_text
     for text in inventory(engine):client.enqueue(text)

@@ -70,7 +70,7 @@ def as_text(value):
 
 def visible(value):
     s=as_text(value)
-    if s is None or not 0<len(s)<=1800:
+    if s is None or not 0<len(s)<=32768:
         return False
     v=s.strip()
     if not v or v.startswith("http://") or v.startswith("https://"):
@@ -187,7 +187,7 @@ class Client(object):
         write_new(req,prefix+value.encode("utf-8"))
         while time.time()<deadline and not self.stopped:
             try:
-                raw=read_small(answer,65536)
+                raw=read_small(answer,140000)
                 if raw.startswith(prefix):
                     result=raw[len(prefix):].decode("utf-8")
                     os.unlink(answer)

@@ -1,5 +1,5 @@
 # IA_SERVIDOR_RENPY_R1_OWNED
-init 999 python:
+init 999 python hide:
     try:
         import os as _iasr_os
         import sys as _iasr_sys

@@ -13,12 +13,15 @@ from pathlib import Path
 
 SCHEMA="ia-servidor-renpy-v1"
 SIDECAR="IA Traductora RenPy"
-MAX_TEXT=1800
+MAX_TEXT=32768
+MODEL_CHUNK=900
+MAX_BODY=400000
 JA=re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9d]")
 LETTERS=re.compile(r"[A-Za-z\u00c0-\u024f\u3040-\u30ff\u3400-\u9fff\uff66-\uff9d]")
 PERCENT=re.compile(r"%(?:\([A-Za-z_][A-Za-z0-9_]*\))?[-+ #0]*\d*(?:\.\d+)?[diouxXeEfFgGcrsa%]")
 PATH=re.compile(r"^(?:[A-Za-z]:[\\/]|https?://|(?:[\w.-]+[/\\])+[\w.-]+$)|\.(?:rpyc?|rpa|png|jpe?g|webp|ogg|mp3|wav|ttf|otf|json|py|exe)$",re.I)
 QUOTES=set('"“”「」『』«»')
+CODE=re.compile(r"^(?:\$\s+|(?:jump|call|label)\s+[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*:?\s*$|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*(?:=|\+=|-=|==|!=)\s*[^=]|[A-Za-z_][\w.]*\([^\n]*\)\s*$)")
 
 def protected_parts(text):
     """Never interpret or send Ren'Py interpolation, formatting or escapes."""
@@ -30,7 +33,11 @@ def protected_parts(text):
             parts.append((False,"".join(plain)));plain.clear()
     while i<len(text):
         ch=text[i];end=None
-        if text.startswith(("{{","[[","%%"),i):end=i+2
+        if text.startswith(("{{","[[","%%","〖〖"),i):end=i+2
+        elif ch=="〖":
+            j=text.find("〗",i+1)
+            if j<0:raise ValueError("IA_RENPY_CONTROL_AMBIGUO")
+            end=j+1
         elif ch in QUOTES or ch in "\n\r\t":end=i+1
         elif ch=="\\":
             if i+1>=len(text):raise ValueError("IA_RENPY_CONTROL_AMBIGUO")
@@ -63,30 +70,43 @@ def protected_parts(text):
 
 def language(text):
     s=text.strip()
-    if not LETTERS.search(s) or PATH.search(s):return None
+    if not LETTERS.search(s) or PATH.search(s) or CODE.match(s):return None
     if re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+",s) or re.fullmatch(r"[A-Z0-9_]+_\w+",s):return None
     if JA.search(s):return "ja"
     if not re.search("[A-Za-z]",s):return None
     return "en"
 
+def model_chunks(value):
+    """Split long visible text, never discard the tail or separator."""
+    while len(value)>MODEL_CHUNK:
+        window=value[:MODEL_CHUNK]
+        matches=list(re.finditer(r"[。！？.!?](?:\s+|(?=[^\s]))|\s+",window))
+        end=matches[-1].end() if matches and matches[-1].end()>=MODEL_CHUNK//3 else MODEL_CHUNK
+        yield value[:end]
+        value=value[end:]
+    if value:yield value
+
 def translate_surface(text,neural,quality):
-    if not isinstance(text,str) or not LETTERS.search(text) or PATH.search(text.strip()) or re.fullmatch(r"[A-Z0-9_]+_\w+",text.strip()):return text
+    if not isinstance(text,str) or not LETTERS.search(text) or PATH.search(text.strip()) or CODE.match(text.strip()) or re.fullmatch(r"[A-Z0-9_]+_\w+",text.strip()):return text
     parts=protected_parts(text)
     output=[]
     for control,value in parts:
         if control:
             output.append(value);continue
-        left=len(value)-len(value.lstrip());right=len(value.rstrip())
-        if right<=left:
-            output.append(value);continue
-        source=value[left:right];lang=language(source)
-        if lang is None:
-            output.append(value);continue
-        candidate=neural.translate(lang,source)
-        if quality(lang,source,candidate):raise ValueError("IA_RENPY_CALIDAD_RECHAZADA")
-        if any(flag for flag,_ in protected_parts(candidate)) or any(c in candidate for c in "{}[]\\\x00\r\n\t"):
-            raise ValueError("IA_RENPY_CONTROL_INVENTADO")
-        output.append(value[:left]+candidate+value[right:])
+        for chunk in model_chunks(value):
+            left=len(chunk)-len(chunk.lstrip());right=len(chunk.rstrip())
+            if right<=left:
+                output.append(chunk);continue
+            source=chunk[left:right];lang=language(source)
+            if lang is None:
+                output.append(chunk);continue
+            candidate=neural.translate(lang,source)
+            if candidate==source:
+                output.append(chunk);continue
+            if quality(lang,source,candidate):raise ValueError("IA_RENPY_CALIDAD_RECHAZADA")
+            if any(flag for flag,_ in protected_parts(candidate)) or any(c in candidate for c in "{}[]\\\x00\r\n\t"):
+                raise ValueError("IA_RENPY_CONTROL_INVENTADO")
+            output.append(chunk[:left]+candidate+chunk[right:])
     result="".join(output)
     if [v for c,v in protected_parts(result) if c]!=[v for c,v in parts if c]:
         raise ValueError("IA_RENPY_CONTROL_ALTERADO")
@@ -132,7 +152,7 @@ def installation(root,engine):
     models=receipt.get("engine_sha256",{})
     if not isinstance(models,dict) or not models or not all(isinstance(v,str) and re.fullmatch(r"[0-9a-f]{64}",v) for v in models.values()):
         raise ValueError("IA_RENPY_MANIFIESTO_INVALIDO")
-    return side,hashlib.sha256(json.dumps(models,sort_keys=True).encode()).hexdigest(),receipt
+    return side,hashlib.sha256(("surface-v2:"+json.dumps(models,sort_keys=True)).encode()).hexdigest(),receipt
 
 class Memory:
     def __init__(self,folder,identity):
@@ -199,7 +219,7 @@ def handler(service):
             if self.path!="/translate":return self.send_json(404,{"error":"IA_RENPY_RUTA"})
             try:
                 n=int(self.headers.get("Content-Length","0"))
-                if not 0<n<=16384:raise ValueError()
+                if not 0<n<=MAX_BODY:raise ValueError()
                 text=json.loads(self.rfile.read(n))["text"]
                 if not isinstance(text,str) or not 0<len(text)<=MAX_TEXT:raise ValueError()
             except (ValueError,KeyError,TypeError):return self.send_json(400,{"error":"IA_RENPY_SOLICITUD"})

@@ -7,8 +7,8 @@ import threading
 REQUEST=re.compile(r"request-(\d{8})\.txt\Z")
 OWNED=re.compile(r"(?:ready\.txt|(?:request|response)-\d{8}\.txt(?:\.tmp)?|\.ia-write-[0-9a-f]{32})\Z")
 SCHEMA="ia-renpy-classic-v1"
-MAX_REQUEST=8192
-MAX_TEXT=1800
+MAX_REQUEST=140000
+MAX_TEXT=32768
 
 def publish(path,raw):
     if path.exists() or path.is_symlink():

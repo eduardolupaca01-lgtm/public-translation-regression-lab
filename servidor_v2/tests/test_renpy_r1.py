@@ -53,6 +53,28 @@ class RenpyR1(unittest.TestCase):
         for s in ("images/hero.png","http://example.org","FLAG_QUEST","123"):
             self.assertEqual(translate_surface(s,Neural(),quality),s)
             self.assertFalse(client.eligible(s))
+    def test_long_visible_text_is_not_truncated(self):
+        from renpy_runtime import MODEL_CHUNK,model_chunks
+        original=("Hello world. "*220)+"[player_name]\n{b}Continue{/b}"
+        class EchoSpanish:
+            def __init__(self):self.calls=[]
+            def translate(self,lang,source):
+                self.calls.append(source)
+                return source.replace("Hello world.","Hola mundo.").replace("Continue","Continuar")
+        n=EchoSpanish()
+        result=translate_surface(original,n,quality)
+        self.assertEqual(result.count("Hola mundo."),220)
+        self.assertIn("[player_name]\n{b}Continuar{/b}",result)
+        self.assertTrue(all(len(x)<=MODEL_CHUNK for x in n.calls))
+        self.assertEqual("".join(model_chunks(original)),original)
+        self.assertTrue(client.eligible(original))
+    def test_code_and_ruby_controls(self):
+        n=Neural()
+        for s in ("score = 12","player.hp += 3","jump chapter_2","renpy.quit()","$ score = 2"):
+            self.assertEqual(translate_surface(s,n,quality),s)
+        self.assertFalse(n.calls)
+        source="Hello 〖東京｜とうきょう〗 [player] {image=star.png}"
+        self.assertEqual(translate_surface(source,n,quality),"Hola 〖東京｜とうきょう〗 [player] {image=star.png}")
     def test_persistent_reopen_and_model_identity(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d);a=Neural();s=RenpyService(p,"model-a",a,quality)
@@ -107,6 +129,11 @@ class RenpyR1(unittest.TestCase):
         v=Text();self.assertEqual(v.set_text("Hola"),"native");self.assertEqual(v.value,"Hola")
         v.set_text("Save");self.assertEqual(v.value,"Guardar")
         i=Input();i.set_text("Hello");self.assertEqual(i.value,"Hello")
+        e.TEXT_TEXT=1;v.tokenized=True
+        tokens=[(1,"Save"),(2,"b"),(3,object())]
+        v.set_text(tokens)
+        self.assertEqual(v.value[0],(1,"Guardar"));self.assertEqual(v.value[1:],tokens[1:])
+        v.tokenized=False
         e.predicting=lambda:True
         v.set_text("Continue");self.assertIn(("Continue",False),fake.seen)
 class ClassicRenpyR1(unittest.TestCase):
