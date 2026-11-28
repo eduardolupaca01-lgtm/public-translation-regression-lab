@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R42-20261127"
- packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-DIRECTO-FIX2"
+ packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-DIRECTO-FIX3"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -84,14 +84,14 @@ func readPackage(filename string)(*packageReader,error){
  if err!=nil{return nil,errors.New("IA_PAQUETE_ZIP_INVALIDO")}
  files:=map[string]*zip.File{};var sum int64
  ordinaryCount,offlineCount:=0,0
- offlineNames:=map[string]bool{}
+ offlineNames:=map[string]mvJSONRuntimePathEntry{}
  for _,item:=range zr.File{
   if !safeFile(item.Name)||item.FileInfo().IsDir()||item.Mode()&os.ModeSymlink!=0||
     item.UncompressedSize64>uint64(maxArchive){return nil,errors.New("IA_PAQUETE_RUTA_PELIGROSA")}
   if _,exists:=files[item.Name];exists{return nil,errors.New("IA_PAQUETE_REPETIDO")}
   if strings.HasPrefix(strings.ToLower(item.Name),"json-runtime/"){
-   if !mvJSONRuntimeName(item.Name)||offlineNames[strings.ToLower(item.Name)]||item.UncompressedSize64==0{return nil,mvJSONError("RUNTIME_PAQUETE_INVALIDO")}
-   offlineNames[strings.ToLower(item.Name)]=true;offlineCount++
+   if !item.Mode().IsRegular()||!mvJSONRuntimeName(item.Name)||!mvJSONRuntimeSizeValid(item.Name,item.UncompressedSize64)||!mvJSONRuntimeAddPath(offlineNames,item.Name){return nil,mvJSONError("RUNTIME_PAQUETE_INVALIDO")}
+   offlineCount++
   }else{ordinaryCount++}
   sum+=int64(item.UncompressedSize64)
   if sum>maxArchive||ordinaryCount>66||offlineCount>1024{return nil,errors.New("IA_PAQUETE_EXPANSION")}

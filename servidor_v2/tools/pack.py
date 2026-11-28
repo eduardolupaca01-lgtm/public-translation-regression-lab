@@ -23,29 +23,59 @@ def digest(file:Path):
 WEB_HOST=("Jugar-IA.exe","Jugar-IA.exe.config","Microsoft.Web.WebView2.Core.dll",
           "Microsoft.Web.WebView2.WinForms.dll","WebView2Loader.dll","WebView2-LICENSE.txt")
 
+JSON_RUNTIME_REQUIRED={"IATraductora.exe","_internal/python311.dll","_internal/base_library.zip"}
+JSON_RUNTIME_NONEMPTY={".exe",".dll",".pyd",".zip",".lib",".sys",".ocx",".so",".dylib",".bin",".pyc",".pyo",".dat",".spm",".whl"}
+JSON_RUNTIME_RESERVED={"CON","PRN","AUX","NUL","CONIN$","CONOUT$"}|{p+str(n) for p in ("COM","LPT") for n in range(10)}
+
+def json_runtime_error(reason,relative=""):
+ # Only names inside the locally built runtime are reported, never
+ # absolute paths, file contents, credentials or game resources.
+ raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO:"+reason+
+                  (":"+json.dumps(relative[:240],ensure_ascii=True) if relative else ""))
+
+def json_runtime_name(relative):
+ if len("json-runtime/"+relative)>240 or not (relative=="IATraductora.exe" or relative.startswith("_internal/")):
+  return False
+ for part in relative.split("/"):
+  if (not part or part in (".","..") or part.endswith(("."," ")) or
+      any(not 32<=ord(c)<=126 or c in '<>:"\\|?*' for c in part) or
+      part.split(".",1)[0].rstrip(" ").upper() in JSON_RUNTIME_RESERVED):
+   return False
+ return True
+
+def json_runtime_size_valid(relative,size):
+ # Empty typing markers, metadata, and Python package initializers
+ # are legitimate. Empty native code, archives, bytecode and required
+ # bootstrap assets are still rejected.
+ if size>0:return True
+ return size==0 and relative not in JSON_RUNTIME_REQUIRED and Path(relative).suffix.lower() not in JSON_RUNTIME_NONEMPTY
+
 def json_runtime_assets(root:Path):
- required={"IATraductora.exe","_internal/python311.dll","_internal/base_library.zip"}
  if not root.is_dir() or root.is_symlink() or getattr(root.lstat(),"st_file_attributes",0)&0x400:
-  raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO")
+  json_runtime_error("RAIZ")
  assets={}
- seen=set()
+ seen={}
  for source in sorted(root.rglob("*")):
+  rel=source.relative_to(root).as_posix()
   st=source.lstat()
   if source.is_symlink() or getattr(st,"st_file_attributes",0)&0x400:
-   raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO")
+   json_runtime_error("ENLACE",rel)
   if source.is_dir():continue
-  rel=source.relative_to(root).as_posix()
+  if not stat.S_ISREG(st.st_mode):json_runtime_error("TIPO",rel)
+  if not json_runtime_name(rel):json_runtime_error("NOMBRE",rel)
+  if not json_runtime_size_valid(rel,st.st_size):json_runtime_error("VACIO",rel)
   name="json-runtime/"+rel
-  if (not stat.S_ISREG(st.st_mode) or st.st_size<=0 or len(name)>200 or
-      (rel!="IATraductora.exe" and not rel.startswith("_internal/")) or
-      any(not re.fullmatch(r"[A-Za-z0-9_.+ @()-]+",part) or part.endswith(("."," ")) or
-          re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])",part.split(".",1)[0],re.I)
-          for part in name.split("/")) or name.casefold() in seen):
-   raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO")
-  seen.add(name.casefold())
+  # Detect file/directory collisions and case-insensitive aliases.
+  parts=name.split("/")
+  for i in range(1,len(parts)+1):
+   prefix="/".join(parts[:i])
+   entry=(prefix,i==len(parts))
+   old=seen.setdefault(prefix.lower(),entry)
+   if old!=entry:json_runtime_error("COLISION",rel)
+  if name in assets:json_runtime_error("DUPLICADO",rel)
   assets[name]=source
   if len(assets)>1024:raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_EXCESIVO")
- if not all("json-runtime/"+name in assets for name in required):
+ if not all("json-runtime/"+name in assets for name in JSON_RUNTIME_REQUIRED):
   raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INCOMPLETO")
  return assets
 

@@ -17,6 +17,9 @@ func r44RuntimeFixture()map[string][]byte{
 
 func TestR44JSONRuntimePackageIsolatedFromLegacy(t *testing.T){
  files:=r44RuntimeFixture()
+ files["json-runtime/_internal/ctranslate2/py.typed"]=[]byte{}
+ files["json-runtime/_internal/sample.dist-info/REQUESTED"]=[]byte{}
+ files["json-runtime/_internal/sample.dist-info/license [extra].txt"]=[]byte("test license")
  for i:=0;i<80;i++{files[fmt.Sprintf("json-runtime/_internal/test/module%03d.pyd",i)]=[]byte("test-only")}
  pkg,e:=readPackage(fakePackageWith(t,[]byte("test plugin"),[]byte("test worker"),files))
  if e!=nil{t.Fatal(e)};defer pkg.Close()
@@ -31,6 +34,11 @@ func TestR44JSONRuntimePackageIsolatedFromLegacy(t *testing.T){
   if e=os.WriteFile(path,raw,0600);e!=nil{t.Fatal(e)}
  }
  if e=mvJSONVerifyRuntime(engine,offline);e!=nil{t.Fatal(e)}
+ marker:=filepath.Join(engine,"json-runtime","_internal","ctranslate2","py.typed")
+ if h,e:=digestFile(marker);e!=nil||h!=hash(nil){t.Fatal("empty marker hash",e)}
+ if e=os.WriteFile(marker,[]byte("changed"),0600);e!=nil{t.Fatal(e)}
+ if e=mvJSONVerifyRuntime(engine,offline);e==nil{t.Fatal("modified marker accepted")}
+ if e=os.WriteFile(marker,nil,0600);e!=nil{t.Fatal(e)}
  foreign:=filepath.Join(engine,"json-runtime","_internal","foreign.dll")
  if e=os.WriteFile(foreign,[]byte("unexpected"),0600);e!=nil{t.Fatal(e)}
  if e=mvJSONVerifyRuntime(engine,offline);e==nil{t.Fatal("foreign runtime file accepted")}
@@ -72,4 +80,35 @@ func TestR44JSONDirectAccessDeniedKeepsOriginalAndRecovery(t *testing.T){
  if e=RecoverGame(exe);e!=nil{t.Fatal(e)}
  if mvJSONDirectNeedsRecovery(exe){t.Fatal("recovery did not retire failed operation")}
  r44DirectUnchanged(t,root,before,system);mvnwbinSame(t,original)
+}
+
+func TestR44JSONRuntimeEmptyDataPreservedDuringInstallation(t *testing.T){
+ files:=r44RuntimeFixture()
+ marker:="json-runtime/_internal/ctranslate2/py.typed"
+ files[marker]=[]byte{}
+ pkg,e:=readPackage(fakePackageWith(t,[]byte("test plugin"),[]byte("test worker"),files))
+ if e!=nil{t.Fatal(e)};defer pkg.Close()
+ offline,e:=mvJSONPackageForOffline(pkg);if e!=nil{t.Fatal(e)}
+ root:=t.TempDir()
+ sidecar,e:=iaPrepareAndPublishSidecar(root,offline);if e!=nil{t.Fatal(e)}
+ engine:=filepath.Join(sidecar,".local","Rpg","engine")
+ if e=mvJSONVerifyRuntime(engine,offline);e!=nil{t.Fatal(e)}
+ st,e:=os.Stat(filepath.Join(engine,filepath.FromSlash(marker)))
+ if e!=nil||st.Size()!=0{t.Fatal("empty data was not preserved",e)}
+}
+func TestR44JSONRuntimeRejectsEmptyNativeAndPathCollisions(t *testing.T){
+ for _,name:=range []string{mvJSONRuntimeEXE,"json-runtime/_internal/python311.dll","json-runtime/_internal/base_library.zip","json-runtime/_internal/mod.PYD","json-runtime/_internal/lib.dll","json-runtime/_internal/archive.zip"}{
+  files:=r44RuntimeFixture();files[name]=[]byte{}
+  if p,e:=readPackage(fakePackageWith(t,[]byte("test plugin"),[]byte("test worker"),files));e==nil{p.Close();t.Fatal("accepted empty native or essential file",name)}
+ }
+ for _,names:=range [][2]string{
+  {"json-runtime/_internal/Package/a.txt","json-runtime/_internal/package/b.txt"},
+  {"json-runtime/_internal/file","json-runtime/_internal/file/child.txt"},
+  {"json-runtime/_internal/CON .txt","json-runtime/_internal/good.txt"},
+  {"json-runtime/_internal/a?.txt","json-runtime/_internal/good.txt"},
+ }{
+  files:=r44RuntimeFixture()
+  for _,name:=range names{files[name]=[]byte("test")}
+  if p,e:=readPackage(fakePackageWith(t,[]byte("test plugin"),[]byte("test worker"),files));e==nil{p.Close();t.Fatal("accepted unsafe names",names)}
+ }
 }

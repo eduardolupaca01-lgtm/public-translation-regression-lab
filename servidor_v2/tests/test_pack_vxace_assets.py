@@ -11,7 +11,7 @@ import zipfile
 # The repository also has a top-level tools package. Import the actual
 # Servidor packer by its directory, not through the ambiguous namespace.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-from pack import build, MAGIC, SCHEMA, MODELS, SUFFIX
+from pack import build, MAGIC, SCHEMA, MODELS, SUFFIX, json_runtime_assets, json_runtime_name, json_runtime_size_valid
 from pack_vxace_assets import HELPER_NAME, PLUGIN_NAME, PLUGIN_MARKER, PLUGIN_BUILD
 
 
@@ -75,6 +75,54 @@ class PackVXAssetsTests(unittest.TestCase):
         self.assertEqual(files["IATraductora.exe"], self.worker.read_bytes())
         self.assertEqual(files["IATraductora.js"], self.js.read_bytes())
         self.assertEqual(len(files), 2 + len(MODELS) * (len(SUFFIX) + 1) + 2)
+
+    def make_json_runtime(self):
+        root = self.root / "json-runtime"
+        for name in ("IATraductora.exe", "_internal/python311.dll", "_internal/base_library.zip"):
+            f = root / name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"synthetic build fixture; never execute")
+        return root
+
+    def test_json_runtime_empty_metadata_is_hashed_and_preserved(self):
+        root = self.make_json_runtime()
+        for name, data in (
+            ("_internal/ctranslate2/py.typed", b""),
+            ("_internal/sample.dist-info/REQUESTED", b""),
+            ("_internal/sample.dist-info/license [extra].txt", b"fixture"),
+        ):
+            f = root / name
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(data)
+        self.pack(json_runtime_dir=root)
+        files = self.read_package()
+        self.assertEqual(files["json-runtime/_internal/ctranslate2/py.typed"], b"")
+        self.assertEqual(files["json-runtime/_internal/sample.dist-info/REQUESTED"], b"")
+        self.assertEqual(files["json-runtime/_internal/sample.dist-info/license [extra].txt"], b"fixture")
+        self.assertEqual(files["IATraductora.exe"], self.worker.read_bytes())
+
+    def test_json_runtime_empty_binary_still_rejected(self):
+        root = self.make_json_runtime()
+        for name in ("IATraductora.exe", "_internal/python311.dll", "_internal/base_library.zip", "_internal/extension.PYD"):
+            with self.subTest(name=name):
+                f = root / name
+                old = f.read_bytes() if f.exists() else None
+                f.write_bytes(b"")
+                with self.assertRaisesRegex(ValueError, "IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO:VACIO"):
+                    json_runtime_assets(root)
+                if old is None:
+                    f.unlink()
+                else:
+                    f.write_bytes(old)
+        self.assertFalse(self.out.exists())
+
+    def test_json_runtime_path_rules(self):
+        for name in ("_internal/../a.txt", "_internal/CON .txt", "_internal/CONOUT$.txt",
+                     "_internal/a?.txt", "_internal/space .", "_internal/a:b", "another.exe"):
+            self.assertFalse(json_runtime_name(name), name)
+        self.assertTrue(json_runtime_name("_internal/sample.dist-info/license [extra].txt"))
+        self.assertTrue(json_runtime_size_valid("_internal/py.typed", 0))
+        self.assertFalse(json_runtime_size_valid("_internal/PYTHON311.DLL", 0))
 
     def test_legacy_mv_mz_package_is_unchanged(self):
         self.pack()
