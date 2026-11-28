@@ -1,6 +1,7 @@
 package main
 import (
  "encoding/json"
+ "fmt"
  "os"
  "os/exec"
  "path/filepath"
@@ -28,23 +29,38 @@ func TestR44JSONPilotRealOPUS(t *testing.T){
  packaged:=os.Getenv("IA_R44_REAL_PACKAGE")
  if packaged==""{t.Skip("frozen real OPUS supplied by Windows acceptance")}
  sdk:=os.Getenv("IA_R44_NWBIN_SDK");if sdk==""{t.Fatal("missing SDK")}
- root:=mvnwbinFixture(t,false)
+ for _,profile:=range []string{"two_active","one_retained","one_absent"}{
+  t.Run(profile,func(t *testing.T){r44JSONPilotProfile(t,sdk,packaged,profile)})
+ }
+}
+func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
+ t.Helper()
+ var root string
+ if profile=="two_active"{root=mvnwbinFixture(t,false)}else{root=mvnwbinSingleFixture(t,profile=="one_retained")}
  content:=filepath.Join(root,"www");js:=filepath.Join(content,"js")
- mvnwbinWrite(t,filepath.Join(root,"package.json"),"{\"name\":\"ia-r44-json-trial\",\"main\":\"www/index.html\",\"window\":{\"show\":false}}")
+ mvnwbinWrite(t,filepath.Join(root,"package.json"),fmt.Sprintf("{\"name\":\"ia-r44-json-trial-%d\",\"main\":\"www/index.html\",\"window\":{\"show\":false}}",time.Now().UnixNano()))
  mvnwbinWrite(t,filepath.Join(content,"data","System.json"),"{\"startMapId\":1}")
  mapPath:=filepath.Join(content,"data","Map001.json")
  mvnwbinWrite(t,mapPath,mvJSONFixtureMap)
- for _,item:=range []struct{name,source string}{
-  {"guard","if(!window.coreReady)throw Error('core not ready');window.originalGuardRan=true;"},
-  {"plugins","if(!window.originalGuardRan)throw Error('guard not run');window.originalPluginsRan=true;"},
- }{
+ fixtures:=[]struct{name,source string}{}
+ if profile=="two_active"||profile=="one_retained"{
+  fixtures=append(fixtures,struct{name,source string}{"guard","if(!window.coreReady)throw Error('core not ready');window.originalGuardRan=true;"})
+ }
+ pluginSource:="if(!window.coreReady)throw Error('core not ready');window.originalPluginsRan=true;"
+ if profile=="two_active"{pluginSource="if(!window.originalGuardRan)throw Error('guard not run');window.originalPluginsRan=true;"}
+ fixtures=append(fixtures,struct{name,source string}{"plugins",pluginSource})
+ for _,item:=range fixtures{
   bin:=filepath.Join(js,item.name+".bin")
   if e:=os.Remove(bin);e!=nil{t.Fatal(e)}
   mvnwbinCompileFixture(t,sdk,item.name,item.source,bin)
  }
  // Authored original loader reads the ordinary data file. It is copied
  // byte-for-byte and never replaced by the localizer.
- mvnwbinWrite(t,filepath.Join(js,"main.js"),"var fs=require('fs'),p=require('path');var map=JSON.parse(fs.readFileSync(p.join(nw.App.startPath,'www','data','Map001.json'),'utf8'));var list=map.events[1].pages[0].list;var canvas=document.createElement('canvas');canvas.width=700;canvas.height=100;document.body.appendChild(canvas);var ctx=canvas.getContext('2d');ctx.fillText(list[1].parameters[0],10,20);ctx.fillText(list[2].parameters[0],10,50);var pixels=ctx.getImageData(0,0,700,100).data;var ok=window.originalGuardRan&&window.originalPluginsRan&&/puerta|port[oó]n|verja/i.test(list[1].parameters[0])&&/puente/i.test(list[2].parameters[0])&&pixels.some(function(v,i){return i%4===3&&v>0;});fs.writeFileSync(p.join(nw.App.startPath,'r44-json-native.txt'),ok?'PASS':'FAIL');nw.App.quit();\n")
+ mainSource:="var fs=require('fs'),p=require('path');var map=JSON.parse(fs.readFileSync(p.join(nw.App.startPath,'www','data','Map001.json'),'utf8'));var list=map.events[1].pages[0].list;var canvas=document.createElement('canvas');canvas.width=700;canvas.height=100;document.body.appendChild(canvas);var ctx=canvas.getContext('2d');ctx.fillText(list[1].parameters[0],10,20);ctx.fillText(list[2].parameters[0],10,50);var pixels=ctx.getImageData(0,0,700,100).data;var ok=window.originalGuardRan&&window.originalPluginsRan&&/puerta|port[oó]n|verja/i.test(list[1].parameters[0])&&/puente/i.test(list[2].parameters[0])&&pixels.some(function(v,i){return i%4===3&&v>0;});fs.writeFileSync(p.join(nw.App.startPath,'r44-json-native.txt'),ok?'PASS':'FAIL');nw.App.quit();\n"
+ if profile!="two_active"{
+  mainSource=strings.Replace(mainSource,"window.originalGuardRan&&window.originalPluginsRan","window.coreReady&&!window.originalGuardRan&&!window.extraFixtureRan&&window.originalPluginsRan",1)
+ }
+ mvnwbinWrite(t,filepath.Join(js,"main.js"),mainSource)
  original:=mvnwbinSnapshot(t,root);mapSHA,e:=digestFile(mapPath);if e!=nil{t.Fatal(e)};original[mapPath]=mapSHA
  pkg,e:=readPackage(packaged);if e!=nil{t.Fatal(e)};defer pkg.Close()
  // Use the executable's public CLI, not a mocked worker. The clone
@@ -69,6 +85,12 @@ func TestR44JSONPilotRealOPUS(t *testing.T){
   if src==mapPath{continue}
   rel,e:=filepath.Rel(root,src);if e!=nil{t.Fatal(e)}
   got,e:=digestFile(filepath.Join(dest,rel));if e!=nil||got!=want{t.Fatal("copied startup changed",rel,e)}
+ }
+ for _,n:=range []string{"guard.bin","plugins.js"}{
+  src:=filepath.Join(root,"www","js",n)
+  if _,e=os.Lstat(src);os.IsNotExist(e){
+   if _,e=os.Lstat(filepath.Join(dest,"www","js",n));!os.IsNotExist(e){t.Fatal("unexpected file in clone",n)}
+  }
  }
  mvnwbinSame(t,original)
  ctx2,stop:=context.WithTimeout(context.Background(),90*time.Second);defer stop()

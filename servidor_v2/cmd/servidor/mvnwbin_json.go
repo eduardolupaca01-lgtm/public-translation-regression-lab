@@ -198,9 +198,20 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  exeInfo,e:=os.Lstat(exe);if e!=nil{return "",report,e}
  rel,e:=filepath.Rel(root,content);if e!=nil||rel!="www"&&rel!="."{return "",report,mvJSONError("RUTA_NO_VERIFICADA")}
  // Verify the unmodified original startup independently before and
- // after the copy. The user's guard remains byte-identical.
+ // after the copy. Optional resources remain exactly as originally
+ // provided: never manufacture a missing guard or replace a registry.
  protected:=map[string]string{}
- for _,p:=range []string{exe,filepath.Join(root,"package.json"),filepath.Join(content,"index.html"),filepath.Join(content,"js","main.js"),filepath.Join(content,"js","guard.bin"),filepath.Join(content,"js","plugins.bin"),sourceMap}{
+ required:=[]string{exe,filepath.Join(root,"package.json"),filepath.Join(content,"index.html"),filepath.Join(content,"js","main.js"),filepath.Join(content,"js","plugins.bin"),sourceMap}
+ for _,name:=range mvnwbinCore{required=append(required,filepath.Join(content,"js",name))}
+ absent:=[]string{}
+ for _,name:=range []string{"guard.bin","plugins.js"}{
+  p:=filepath.Join(content,"js",name)
+  _,e:=os.Lstat(p)
+  if os.IsNotExist(e){absent=append(absent,p);continue}
+  if e!=nil||!ordinary(p)||!vxaceCloneOrdinaryPath(p){return "",report,mvJSONError("ARCHIVO_NO_VERIFICADO")}
+  required=append(required,p)
+ }
+ for _,p:=range required{
   h,e:=digestFile(p);if e!=nil{return "",report,e};protected[p]=h
  }
  dest,e:=os.MkdirTemp(parent,"Juego-IA-MV-JSON-");if e!=nil{return "",report,mvJSONError("DESTINO_INVALIDO")}
@@ -241,6 +252,11 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
   if strings.EqualFold(src,exe)||src==sourceMap{continue}
   p,e:=filepath.Rel(root,src);if e!=nil{return "",report,e}
   if e=xpHashFile(filepath.Join(dest,p),want);e!=nil{return "",report,mvJSONError("ARRANQUE_CAMBIADO")}
+ }
+ for _,src:=range absent{
+  p,e:=filepath.Rel(root,src);if e!=nil{return "",report,e}
+  if _,e=os.Lstat(src);!os.IsNotExist(e){return "",report,mvJSONError("ORIGEN_CAMBIADO")}
+  if _,e=os.Lstat(filepath.Join(dest,p));!os.IsNotExist(e){return "",report,mvJSONError("ARRANQUE_CAMBIADO")}
  }
  instructions:=fmt.Sprintf("PRUEBA R44 JSON, mapa %s: %d lineas traducidas. No es traduccion completa ni complemento F10.\nAbra el ejecutable original COPIADO desde esta carpeta. Si el juego no admite los datos localizados, cierre y utilice su original intacto. No se modificaron los binarios ni sus verificaciones.\nRespaldo exacto del mapa en IA Traductora/install/mv-json/original-%s.\n",mapName,report.Lines,mapName)
  if e=createNew(filepath.Join(journal,"LEEME.txt"),[]byte(instructions));e!=nil{return "",report,e}

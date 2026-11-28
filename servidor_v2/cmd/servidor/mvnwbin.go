@@ -1,9 +1,10 @@
 package main
 
 // Read-only recognition of a compiled MV loader. Never deserialize, evaluate,
-// alter, replace or bypass the binaries or their guard. A different game is
-// eligible only when its own original startup already supports an explicitly
-// publisher-prepared plaintext add-on registry; no registry is manufactured.
+// alter, replace or bypass the binaries or their guard. Recognize the
+// original one- and two-binary layouts independently. Only the existing
+// two-binary authorized add-on profile is eligible for live installation;
+// other recognized layouts can use the independent JSON localization trial.
 import (
  "bytes"
  "encoding/json"
@@ -47,7 +48,7 @@ func mvnwbinMarker(file string)bool{
 }
 
 func mvnwbinRegular(file string,max int64)bool{
- if !ordinary(file){return false}
+ if !ordinary(file)||!vxaceCloneOrdinaryPath(file){return false}
  s,e:=os.Stat(file);return e==nil&&s.Size()>0&&s.Size()<=max
 }
 
@@ -69,8 +70,13 @@ func mvnwbinProfile(root,content string)(bool,error){
  for _,name:=range append(append([]string{},mvnwbinCore...),"main.js"){
   if !mvnwbinRegular(filepath.Join(js,name),8*1024*1024){return true,invalid}
  }
- // Do not read opaque binaries at detection time.
- if !mvnwbinRegular(guard,64*1024*1024)||!mvnwbinRegular(plugins,64*1024*1024){return true,invalid}
+ // The binary registry must exist in either profile. A guard may be
+ // absent only if the ORIGINAL startup has no active guard call. If
+ // the original still contains a guard file, require an ordinary file
+ // and preserve it even when the loader does not reference it.
+ // Do not read or execute opaque binaries at detection time.
+ if !mvnwbinRegular(plugins,64*1024*1024){return true,invalid}
+ if mvnwbinMarker(guard)&&!mvnwbinRegular(guard,64*1024*1024){return true,invalid}
  for _,name:=range []string{"System.json","Actors.json","CommonEvents.json","MapInfos.json"}{
   raw,e:=mvnwbinRead(filepath.Join(data,name),16*1024*1024)
   if e!=nil||!json.Valid(raw){return true,invalid}
@@ -108,11 +114,19 @@ func mvnwbinProfile(root,content string)(bool,error){
    }
   }
  }
- if calls!=2||guardAt==0||pluginsAt<=guardAt||pos["js/main.js"]*100<=pluginsAt{return true,invalid}
+ // A single compiled registry is a separate deployment layout, not a
+ // missing guard in the original two-call layout. Closed HTML comments
+ // were removed before scanning; never change the input HTML.
+ if pluginsAt==0||pos["js/main.js"]*100<=pluginsAt{return true,invalid}
+ firstBinAt:=pluginsAt
+ if guardAt!=0{
+  if calls!=2||pluginsAt<=guardAt||!mvnwbinRegular(guard,64*1024*1024){return true,invalid}
+  firstBinAt=guardAt
+ }else if calls!=1{return true,invalid}
  last:=0
  for _,name:=range mvnwbinCore{
   at:=pos["js/"+name]
-  if at<=last||at*100>=guardAt{return true,invalid}
+  if at<=last||at*100>=firstBinAt{return true,invalid}
   last=at
  }
 
@@ -133,6 +147,10 @@ func mvnwbinProfile(root,content string)(bool,error){
  if !strings.EqualFold(root,content){want="www/index.html"}
  if strings.TrimPrefix(desc.Main,"./")!=want{return true,invalid}
 
+ // A single-binary deployment is recognized for the offline JSON trial
+ // only. The mere presence of plugins.js is not an authorized live
+ // extension and does not override an active compiled registry.
+ if guardAt==0{return true,errors.New(mvnwbinExtensionUnavailable)}
  // No file is created to satisfy this condition. The original index must
  // already load the independent plaintext registry after both binaries.
  at:=pos["js/plugins.js"]

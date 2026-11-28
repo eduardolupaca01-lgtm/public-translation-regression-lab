@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R42-20261127"
- packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-PRUEBA"
+ packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-DUAL"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{

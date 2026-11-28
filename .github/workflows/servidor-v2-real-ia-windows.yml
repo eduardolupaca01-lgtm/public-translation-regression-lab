@@ -1,4 +1,4 @@
-name: Servidor R44 - native NWBin and real OPUS acceptance
+name: Servidor R44 - dual NWBin profiles and real OPUS acceptance
 on:
   push:
     branches:
@@ -310,7 +310,7 @@ jobs:
           $env:IA_R44_REAL_PACKAGE=Join-Path $env:RUNNER_TEMP "Servidor.exe"
           Push-Location servidor_v2
           try {
-            go test ./cmd/servidor -run '^TestR44JSONPilotRealOPUS$' -count=1 -v -timeout=12m
+            go test ./cmd/servidor -run '^TestR44JSONPilotRealOPUS$' -count=1 -v -timeout=20m
             if ($LASTEXITCODE -ne 0) { throw "IA_R44_JSON_REAL_OPUS_ACCEPTANCE_FAIL" }
           } finally { Pop-Location }
       - name: XP lab - actual packaged installer, installed launcher, OPUS and restore
@@ -539,18 +539,18 @@ jobs:
           $stage=Join-Path $env:RUNNER_TEMP "IA-R44-Staging"
           New-Item -ItemType Directory -Force -Path $dir,$stage | Out-Null
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP "Servidor.exe") -Destination $stage
-          'R44 PRUEBA JSON. Selecciona el EXE MV/NWBin original, cierra el juego y pulsa Crear copia JSON. Se traducen solo los dialogos elegibles del mapa inicial; elecciones, eventos, scripts y binarios no se cambian. Abre el EXE de la carpeta nueva. No requiere F10. Si la copia no arranca, vuelve al original intacto. El modo no altera verificaciones del juego. Compatibilidad Edoriam pendiente; no es una traduccion completa.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
-          $package=Join-Path $dir "Servidor-R44-JSON-Prueba.7z"
+          'R44 PRUEBA JSON DUAL. Admite arranques originales con uno o dos binarios NWBin. Selecciona el EXE MV/NWBin original, cierra el juego y pulsa Crear copia JSON. Se traducen solo los dialogos elegibles del mapa inicial; elecciones, eventos, scripts y binarios no se cambian. Abre el EXE de la carpeta nueva. No requiere F10. Si la copia no arranca, vuelve al original intacto. El modo no altera verificaciones del juego. Compatibilidad Edoriam pendiente; no es una traduccion completa.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
+          $package=Join-Path $dir "Servidor-R44-JSON-Dual.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $stage "Servidor.exe") (Join-Path $stage "LEEME.txt") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-R44-JSON-Prueba.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
+          "$sha  Servidor-R44-JSON-Dual.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
       - name: Entregar solo candidato R44 experimental cifrado
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-R44-MV-NWBIN-JSON-PRUEBA-CIFRADO
+          name: SERVIDOR-R44-MV-NWBIN-JSON-DUAL-CIFRADO
           path: ${{ runner.temp }}/IA-R44-Cifrado/
           retention-days: 7
           if-no-files-found: error

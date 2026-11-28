@@ -53,11 +53,33 @@ func mvnwbinFixture(t *testing.T,approved bool)string{
  mvnwbinWrite(t,filepath.Join(js,"main.js"),"PluginManager.setup($plugins);\n")
  return root
 }
+// Independently authored one-binary fixture. It represents a publisher
+// that chose a single compiled registry in its original HTML. Never use
+// this helper on a supplied game or to alter any actual guard.
+func mvnwbinSingleFixture(t *testing.T,retainedGuard bool)string{
+ t.Helper()
+ root:=mvnwbinFixture(t,false)
+ content:=filepath.Join(root,"www")
+ js:=filepath.Join(content,"js")
+ var html strings.Builder
+ html.WriteString("<!doctype html><html><head><meta charset=\"UTF-8\"></head><body>\n")
+ for _,n:=range mvnwbinCore{fmt.Fprintf(&html,"<script src=\"js/%s\"></script>\n",n)}
+ html.WriteString("<script>\nvar w=nw.Window.get();\n<!-- w.evalNWBin(null,require('path').join(nw.App.startPath,'www','js','guard.bin')); -->\nw.evalNWBin(null,require('path').join(nw.App.startPath,'www','js','plugins.bin'));\n</script>\n<script src=\"js/main.js\"></script>\n</body></html>")
+ mvnwbinWrite(t,filepath.Join(content,"index.html"),html.String())
+ mvnwbinWrite(t,filepath.Join(js,"plugins.js"),`var $plugins = [{"name":"AuthoredExtra","status":true,"description":"Fixture","parameters":{}}];`)
+ mvnwbinWrite(t,filepath.Join(js,"plugins","AuthoredExtra.js"),"window.extraFixtureRan=true;\n")
+ if !retainedGuard{if e:=os.Remove(filepath.Join(js,"guard.bin"));e!=nil{t.Fatal(e)}}
+ return root
+}
 func mvnwbinProtectedFiles(root string)[]string{
- return []string{filepath.Join(root,"package.json"),filepath.Join(root,"Game.exe"),
-  filepath.Join(root,"www","index.html"),filepath.Join(root,"www","js","guard.bin"),
-  filepath.Join(root,"www","js","plugins.bin"),filepath.Join(root,"www","js","main.js"),
-  filepath.Join(root,"www","data","System.json")}
+ files:=[]string{filepath.Join(root,"package.json"),filepath.Join(root,"Game.exe"),
+  filepath.Join(root,"www","index.html"),filepath.Join(root,"www","js","plugins.bin"),
+  filepath.Join(root,"www","js","main.js"),filepath.Join(root,"www","data","System.json")}
+ for _,n:=range []string{"guard.bin","plugins.js","plugins/AuthoredExtra.js"}{
+  f:=filepath.Join(root,"www","js",filepath.FromSlash(n))
+  if mvnwbinMarker(f){files=append(files,f)}
+ }
+ return files
 }
 func mvnwbinSnapshot(t *testing.T,root string)map[string]string{
  t.Helper()
@@ -103,6 +125,40 @@ func TestR44NWBinEmptyManifestNameDoesNotEnableInstallation(t *testing.T){
    mvnwbinSame(t,before)
   })
  }
+}
+
+func TestR44NWBinSingleRegistryUsesOnlyJSONCopy(t *testing.T){
+ for _,retained:=range []bool{true,false}{
+  t.Run(fmt.Sprintf("guard_present_%t",retained),func(t *testing.T){
+   root:=mvnwbinSingleFixture(t,retained)
+   exe:=filepath.Join(root,"Game.exe")
+   // A blank deployed app name is not authorization for live install.
+   mvnwbinWrite(t,filepath.Join(root,"package.json"),`{"name":"","main":"www/index.html"}`)
+   before:=mvnwbinSnapshot(t,root)
+   if _,e:=detectInstallTarget(exe);e==nil||e.Error()!=mvnwbinExtensionUnavailable{t.Fatalf("expected JSON-only route: %v",e)}
+   source,content,e:=mvJSONSource(exe)
+   if e!=nil||source!=root||content!=filepath.Join(root,"www"){t.Fatalf("JSON copy not recognized: %v",e)}
+   pkg,e:=readPackage(fakePackage(t));if e!=nil{t.Fatal(e)};defer pkg.Close()
+   if e=Install(exe,pkg);e==nil||e.Error()!=mvnwbinExtensionUnavailable{t.Fatalf("live install must remain blocked: %v",e)}
+   if _,e=os.Lstat(filepath.Join(root,"IA Traductora"));!os.IsNotExist(e){t.Fatal("classifier wrote files")}
+   mvnwbinSame(t,before)
+   if !retained{if _,e=os.Lstat(filepath.Join(root,"www","js","guard.bin"));!os.IsNotExist(e){t.Fatal("guard manufactured")}}
+  })
+ }
+}
+func TestR44NWBinSingleRegistryRejectsIncompleteResources(t *testing.T){
+ for _,name:=range []string{"plugins.bin","rpg_windows.js","main.js"}{
+  t.Run(name,func(t *testing.T){
+   root:=mvnwbinSingleFixture(t,true)
+   if e:=os.Remove(filepath.Join(root,"www","js",name));e!=nil{t.Fatal(e)}
+   if _,e:=detectInstallTarget(filepath.Join(root,"Game.exe"));e==nil||e.Error()!=mvnwbinInvalid{t.Fatalf("accepted incomplete layout: %v",e)}
+  })
+ }
+ t.Run("active_guard_missing",func(t *testing.T){
+  root:=mvnwbinFixture(t,false)
+  if e:=os.Remove(filepath.Join(root,"www","js","guard.bin"));e!=nil{t.Fatal(e)}
+  if _,e:=detectInstallTarget(filepath.Join(root,"Game.exe"));e==nil||e.Error()!=mvnwbinInvalid{t.Fatalf("accepted broken two-call layout: %v",e)}
+ })
 }
 
 func TestR44NWBinPublisherRegistryInstallAndRestore(t *testing.T){
