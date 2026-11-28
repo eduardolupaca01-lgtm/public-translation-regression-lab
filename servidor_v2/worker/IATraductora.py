@@ -1199,6 +1199,7 @@ def safe_startup_code(error):
              "IA_WEB_ARGUMENTOS_INVALIDOS","IA_WEB_RUTA_INVALIDA","IA_WEB_INDEX_INVALIDO",
              "IA_WEB_MODULO_NO_ADMITIDO","IA_WEB_RECURSOS_INCOMPLETOS","IA_WEB_PUERTO_OCUPADO"}
     if str(error) in allowed:return str(error)
+    if re.fullmatch(r"IA_MV_JSON_[A-Z0-9_]{1,64}",str(error)):return str(error)
     if isinstance(error,sqlite3.Error):return "IA_CACHE_PERSISTENTE_INACCESIBLE"
     if "version" in raw and ("model" in raw or "binary" in raw):
         return "IA_MODELO_VERSION_INCOMPATIBLE"
@@ -1249,11 +1250,19 @@ def main():
     p.add_argument("--web-no-browser",action="store_true")
     p.add_argument("--parent-pid",type=int,default=0)
     p.add_argument("--rpgxp-lab",action="store_true")
+    p.add_argument("--mv-json-pilot",action="store_true")
     p.add_argument("--check-models",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
     args=p.parse_args()
     engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
     try:
+        if args.mv_json_pilot:
+            if args.rpgxp_lab or args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid:
+                raise ValueError("IA_MV_JSON_SOLICITUD_INVALIDA")
+            from mv_json_pilot import run_pilot
+            run_pilot(args.game_root,engine,NeuralOPUS,TranslationMemory,native_quality_reason)
+            write_startup_code(args.diagnostic_file,"IA_MV_JSON_CANDIDATO_LISTO")
+            return
         if args.rpgxp_lab:
             if args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid<=0:
                 raise ValueError("IA_RPGXP_INSTALACION_NO_VERIFICADA")

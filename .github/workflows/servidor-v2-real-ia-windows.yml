@@ -9,6 +9,8 @@ on:
       - "servidor_v2/tests/*rpgxp*"
       - "servidor_v2/tests/r44_nwbin_*"
       - "servidor_v2/worker/IATraductora.py"
+      - "servidor_v2/worker/mv_json_pilot.py"
+      - "servidor_v2/tests/test_mv_json_pilot.py"
       - "servidor_v2/worker/web_runtime.py"
       - "servidor_v2/tests/test_web_runtime.py"
       - "servidor_v2/tests/probe_web_real_worker.py"
@@ -302,6 +304,15 @@ jobs:
             go test ./cmd/servidor -run '^TestR44NWBinRealOPUS$' -count=1 -v -timeout=15m
             if ($LASTEXITCODE -ne 0) { throw "IA_R44_NWBIN_REAL_OPUS_ACCEPTANCE_FAIL" }
           } finally { Pop-Location }
+      - name: R44 offline JSON pilot - real packaged OPUS, independent copy, native NW.js paint
+        shell: pwsh
+        run: |
+          $env:IA_R44_REAL_PACKAGE=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          Push-Location servidor_v2
+          try {
+            go test ./cmd/servidor -run '^TestR44JSONPilotRealOPUS$' -count=1 -v -timeout=12m
+            if ($LASTEXITCODE -ne 0) { throw "IA_R44_JSON_REAL_OPUS_ACCEPTANCE_FAIL" }
+          } finally { Pop-Location }
       - name: XP lab - actual packaged installer, installed launcher, OPUS and restore
         shell: pwsh
         run: |
@@ -516,4 +527,30 @@ jobs:
         run: |
           python servidor_v2/tests/probe_web_desktop.py --servidor (Join-Path $env:RUNNER_TEMP "Servidor.exe") --auto-exe
           if ($LASTEXITCODE -ne 0) { throw "IA_WEB_AUTO_EXE_REAL_ACCEPTANCE_FAIL" }
-      # R44 is an authorized-profile laboratory. No executable or proprietary runtime artifacts are published.
+      # Encrypted experimental candidate; no game resources or runtime SDK.
+      # Publish only after the real-model and original preservation gates.
+      - name: Cifrar candidato R44 JSON de prueba
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:IA_PASSWORD)) { throw "IA_CIFRADO_CLAVE_FALTANTE" }
+          $seven="C:\Program Files\7-Zip\7z.exe"
+          if (!(Test-Path -LiteralPath $seven)) { $seven=(Get-Command 7z.exe -ErrorAction Stop).Source }
+          $dir=Join-Path $env:RUNNER_TEMP "IA-R44-Cifrado"
+          $stage=Join-Path $env:RUNNER_TEMP "IA-R44-Staging"
+          New-Item -ItemType Directory -Force -Path $dir,$stage | Out-Null
+          Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP "Servidor.exe") -Destination $stage
+          'R44 PRUEBA JSON. Selecciona el EXE MV/NWBin original, cierra el juego y pulsa Crear copia JSON. Se traducen solo los dialogos elegibles del mapa inicial; elecciones, eventos, scripts y binarios no se cambian. Abre el EXE de la carpeta nueva. No requiere F10. Si la copia no arranca, vuelve al original intacto. El modo no altera verificaciones del juego. Compatibilidad Edoriam pendiente; no es una traduccion completa.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
+          $package=Join-Path $dir "Servidor-R44-JSON-Prueba.7z"
+          & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $stage "Servidor.exe") (Join-Path $stage "LEEME.txt") | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_FALLO" }
+          & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_NO_VERIFICA" }
+          $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  Servidor-R44-JSON-Prueba.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
+      - name: Entregar solo candidato R44 experimental cifrado
+        uses: actions/upload-artifact@v6
+        with:
+          name: SERVIDOR-R44-MV-NWBIN-JSON-PRUEBA-CIFRADO
+          path: ${{ runner.temp }}/IA-R44-Cifrado/
+          retention-days: 7
+          if-no-files-found: error
