@@ -41,6 +41,7 @@ const(
     iaCmdCopy=103
     iaCmdRecover=104
     iaCmdClone=105
+    iaCmdJSONCopy=106
 )
 var(
     iaUser32=syscall.NewLazyDLL("user32.dll")
@@ -121,6 +122,7 @@ type iaUI struct{
     copyBtn uintptr
     recoverBtn uintptr
     cloneBtn uintptr
+    jsonBtn uintptr
     webBtn uintptr
     cloneAllowed bool
     jsonPilot bool
@@ -305,14 +307,36 @@ func iaChooseFile(owner uintptr,filter []uint16,caption string)(selected string,
     if path==""{return "",fmt.Errorf("IA_SELECTOR_SIN_RUTA")}
     return path,nil
 }
+// Keep action availability independent from control captions. In particular,
+ // a recognized offline-only layout must never dispatch the normal installer.
+func iaRPGActionAllowed(ui *iaUI,command int)bool{
+    if ui.busy||ui.gameFile==""{return false}
+    switch command{
+    case iaCmdInstall,iaCmdRecover:return !ui.jsonPilot
+    case iaCmdClone:return !ui.jsonPilot&&ui.cloneAllowed
+    case iaCmdJSONCopy:return ui.jsonPilot
+    }
+    return false
+}
+func iaRefreshRPGActions(ui *iaUI){
+    for _,item:=range []struct{handle uintptr;command int}{
+        {ui.install,iaCmdInstall},{ui.recoverBtn,iaCmdRecover},
+        {ui.cloneBtn,iaCmdClone},{ui.jsonBtn,iaCmdJSONCopy},
+    }{
+        if item.handle==0{continue}
+        enabled:=uintptr(0)
+        if iaRPGActionAllowed(ui,item.command){enabled=1}
+        iaEnableWindow.Call(item.handle,enabled)
+        iaInvalidateRect.Call(item.handle,0,1)
+    }
+}
 func iaStartInstall(){
     ui:=&iaCurrentUI
     if ui.gameFile==""{
         iaLog("[IA_EXE_REQUERIDO] Selecciona primero Game.exe.")
         return
     }
-    if ui.busy{return}
-    if ui.jsonPilot{iaStartJSONPilot();return}
+    if !iaRPGActionAllowed(ui,iaCmdInstall){return}
     if kind,e:=detectInstallTarget(ui.gameFile);e==nil&&kind==rpgxpTrialKind{
         yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
             uintptr(unsafe.Pointer(iaUTF16("RPG Maker XP experimental. Usa una copia cerrada del juego, no el original. Se respaldará Scripts.rxdata; podrás usar Recuperar inicio RPG. La compatibilidad con los scripts personalizados aún no está confirmada. ¿Instalar en la copia seleccionada?"))),
@@ -321,9 +345,8 @@ func iaStartInstall(){
         iaLog("[IA_RPGXP_PRUEBA] Instalación experimental autorizada en una copia cerrada.")
     }
     ui.busy=true
-    iaEnableWindow.Call(ui.install,0)
-    iaEnableWindow.Call(ui.browse,0)
-    iaEnableWindow.Call(ui.cloneBtn,0)
+    iaRefreshRPGActions(ui)
+    iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
     iaSet(ui.status,"Preparando IA Traductora...")
     iaLog("[IA_INICIANDO] Verificando el paquete propio y los modelos.")
     game:=ui.gameFile
@@ -355,12 +378,10 @@ func iaStartRecover(){
         iaLog("[IA_RECUPERACION_GAME_EXE_REQUERIDO] Selecciona Game.exe.")
         return
     }
-    if ui.busy{return}
+    if !iaRPGActionAllowed(ui,iaCmdRecover){return}
     ui.busy=true
-    iaEnableWindow.Call(ui.install,0)
-    iaEnableWindow.Call(ui.browse,0)
-    iaEnableWindow.Call(ui.recoverBtn,0)
-    iaEnableWindow.Call(ui.cloneBtn,0)
+    iaRefreshRPGActions(ui)
+    iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
     iaSet(ui.status,"Comprobando respaldo original...")
     iaLog("[IA_RECUPERACION_INICIADA] Restaurando el recurso original de esta copia RPG; se conserva la memoria.")
     game:=ui.gameFile
@@ -378,14 +399,14 @@ func iaStartRecover(){
 }
 func iaStartJSONPilot(){
     ui:=&iaCurrentUI
-    if ui.busy||!ui.jsonPilot||ui.gameFile==""{return}
+    if !iaRPGActionAllowed(ui,iaCmdJSONCopy){return}
     yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
-      uintptr(unsafe.Pointer(iaUTF16("Cierra el juego. Se creará una carpeta independiente junto al original, con sus archivos, menú nativo, diálogos y elecciones del mapa inicial traducidos. No se tocarán los binarios. F10 solo estará disponible en Servidor para ver el estado. Si el juego no admite estos datos, usa el original. ¿Crear copia de prueba?"))),
+      uintptr(unsafe.Pointer(iaUTF16("Cierra el juego. Se creará una carpeta con el nombre del juego seguido de - IA JSON, junto al original, con sus archivos, menú nativo, diálogos y elecciones del mapa inicial traducidos. No se tocarán los binarios. F10 solo estará disponible en Servidor para ver el estado. Si el juego no admite estos datos, usa el original. ¿Crear copia de prueba?"))),
       uintptr(unsafe.Pointer(iaUTF16("R44 - copia JSON de prueba"))),0x24|0x100)
     if yes!=6{return}
     ui.busy=true
-    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.browse,0)
-    iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0);iaEnableWindow.Call(ui.webBtn,0)
+    iaRefreshRPGActions(ui)
+    iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
     iaSet(ui.status,"Copiando recursos y traduciendo el mapa inicial con OPUS local...")
     iaLog("[IA_MV_JSON_INICIADA] El juego original queda intacto. No abras la copia incompleta.")
     game:=ui.gameFile
@@ -405,14 +426,14 @@ func iaStartJSONPilot(){
 }
 func iaStartClone(){
     ui:=&iaCurrentUI
-    if ui.busy||!ui.cloneAllowed||ui.gameFile==""{return}
+    if !iaRPGActionAllowed(ui,iaCmdClone){return}
     yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
         uintptr(unsafe.Pointer(iaUTF16("Cierra el juego y sus lanzadores. Se creará una carpeta Juego-IA-VXACE nueva junto al juego, con copia de recursos y partidas. No se cambiará el origen. No abras la copia si la instalación no termina. ¿Continuar?"))),
         uintptr(unsafe.Pointer(iaUTF16("Crear copia VX Ace"))),0x24|0x100)
     if yes!=6{return}
     ui.busy=true
-    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.browse,0)
-    iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
+    iaRefreshRPGActions(ui)
+    iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
     iaSet(ui.status,"Creando copia independiente. No abras el juego.")
     iaLog("[IA_VXACE_COPIA_INICIADA] El original no se reemplazará.")
     game:=ui.gameFile
@@ -459,8 +480,8 @@ func iaStartWebClone(){
   uintptr(unsafe.Pointer(iaUTF16("Crear copia web jugable"))),0x24|0x100)
  if yes!=6{return}
  ui.busy=true
- iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.browse,0)
- iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0);iaEnableWindow.Call(ui.webBtn,0)
+ iaRefreshRPGActions(ui)
+ iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
  if fromEXE{
   iaSet(ui.status,"Analizando EXE y verificando recursos web...")
   iaLog("[IA_WEB_EXE_ANALISIS] Lectura estática. No se ejecutará el original.")
@@ -519,11 +540,11 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 iaLog("[IA_SELECTOR_ERROR] "+err.Error())
                 iaSet(ui.status,"No se pudo abrir el selector. Servidor sigue abierto.")
             }else if file!=""{
-                ui.jsonPilot=false;iaSet(ui.install,"2. INSTALAR TRADUCTOR")
+                ui.jsonPilot=false
                 if kind,e:=detectInstallTarget(file);e!=nil{
                     // An invalid new selection must never leave a different game armed for installation.
                     ui.gameFile="";iaSet(ui.input,"");ui.cloneAllowed=false
-                    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
+                    iaRefreshRPGActions(ui)
                     code:=iaSafeInstallCode(e.Error())
                     if code==cookToolPackedCode||code==cookToolUnsafeCode{
                         iaLog("[IA_RPG_HALVA_DETECTADO] "+e.Error())
@@ -533,9 +554,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                         iaSet(ui.status,iaFriendlyInstall(code))
                         if code==mvnwbinExtensionUnavailable{
                             ui.gameFile=file;ui.jsonPilot=true;iaSet(ui.input,file)
-                            iaSet(ui.install,"2. CREAR COPIA JSON");iaEnableWindow.Call(ui.install,1)
-                            iaLog("[IA_MV_JSON_PRUEBA_DISPONIBLE] Traducción offline del mapa inicial, sin modificar el arranque.")
-                            iaSet(ui.status,"MV/NWBin: crea una copia JSON de prueba.")
+                            iaRefreshRPGActions(ui)
+                            iaLog("[IA_MV_JSON_PRUEBA_DISPONIBLE] Usa CREAR COPIA MV/JSON. El original no se modifica.")
+                            iaSet(ui.status,"MV/NWBin: pulsa CREAR COPIA MV/JSON.")
                         }
                     }else if strings.HasPrefix(code,"IA_RPGXP_"){
                         iaLog("[IA_RPGXP_DETECTADO] "+code)
@@ -548,8 +569,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                     ui.gameFile=file;iaSet(ui.input,file)
                     fp,matched,ve:=detectVXAce(file)
                     ui.cloneAllowed=matched&&ve==nil&&fp.Packed
-                    if ui.cloneAllowed{iaEnableWindow.Call(ui.cloneBtn,1)}else{iaEnableWindow.Call(ui.cloneBtn,0)}
-                    iaEnableWindow.Call(ui.install,1);iaEnableWindow.Call(ui.recoverBtn,1)
+                    iaRefreshRPGActions(ui)
                     iaSet(ui.status,"Juego "+kind+" seleccionado. Listo para instalar.")
                     iaLog("[IA_EXE_SELECCIONADO] Motor "+kind+" verificado.")
                     if kind==mvnwbinKind{
@@ -573,6 +593,8 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             if lparam==ui.recoverBtn {iaStartRecover()}
         case iaCmdClone:
             if lparam==ui.cloneBtn {iaStartClone()}
+        case iaCmdJSONCopy:
+            if lparam==ui.jsonBtn&&iaRPGActionAllowed(ui,iaCmdJSONCopy){iaStartJSONPilot()}
         case iaCmdCopy:
             if lparam==ui.copyBtn{
                 if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{
@@ -591,21 +613,25 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
         iaEnableWindow.Call(ui.webBtn,1)
-        if ui.jsonPilot{iaEnableWindow.Call(ui.recoverBtn,0)}else{iaEnableWindow.Call(ui.recoverBtn,1)}
-        if ui.cloneAllowed{iaEnableWindow.Call(ui.cloneBtn,1)}
+        iaRefreshRPGActions(ui)
         code:=iaSafeInstallCode(result)
         if code=="IA_MV_JSON_COPIA_LISTA"&&newGame!=""{
             ui.gameFile="";ui.jsonPilot=false;ui.cloneAllowed=false
-            iaSet(ui.input,newGame);iaSet(ui.install,"2. INSTALAR TRADUCTOR")
-            iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
+            iaSet(ui.input,newGame)
+            iaRefreshRPGActions(ui)
             lines:=strings.TrimPrefix(result,"IA_MV_JSON_COPIA_LISTA|")
             ui.jsonSummary=lines+"\n\n"+newGame+"\n\nModo JSON previo al juego. F10 en esta ventana consulta el estado; no es un complemento del juego."
             iaLog("[IA_MV_JSON_COPIA_LISTA] "+lines+". Abre el EXE de la nueva copia. F10 en Servidor: estado.")
             iaSet(ui.status,"Copia JSON lista. F10 en Servidor: estado.")
             iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16("Copia de prueba lista:\n"+ui.jsonSummary+"\n\nAbre el EXE de la copia. El original permanece intacto."))),uintptr(unsafe.Pointer(iaUTF16("Servidor R44"))),0x40)
+            // Open the completed folder only; never start the selected game.
+            shell:=syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+            folder:=iaUTF16(filepath.Dir(newGame));verb:=iaUTF16("open")
+            shell.Call(hwnd,uintptr(unsafe.Pointer(verb)),uintptr(unsafe.Pointer(folder)),0,0,1)
+            runtime.KeepAlive(folder);runtime.KeepAlive(verb)
         }else if code=="IA_WEB_COPIA_LISTA"&&newGame!=""{
-            ui.gameFile="";ui.jsonPilot=false;ui.cloneAllowed=false;iaSet(ui.install,"2. INSTALAR TRADUCTOR");iaSet(ui.input,newGame)
-            iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
+            ui.gameFile="";ui.jsonPilot=false;ui.cloneAllowed=false;iaSet(ui.input,newGame)
+            iaRefreshRPGActions(ui)
             iaLog("[IA_WEB_COPIA_LISTA] Abre Jugar-IA.exe en la nueva carpeta. Ventana propia, sin navegador externo.")
             iaSet(ui.status,"Copia web preparada. Abre Jugar-IA.exe y prueba F10.")
             iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16("Copia lista:\n"+newGame+"\n\nAbre Jugar-IA.exe desde esa carpeta."))),uintptr(unsafe.Pointer(iaUTF16("IA Traductora"))),0x40)
@@ -633,7 +659,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             text:=iaFriendlyInstall(code)
             iaLog("["+code+"] "+text)
             iaSet(ui.status,text)
-            iaEnableWindow.Call(ui.install,1)
+            iaRefreshRPGActions(ui)
         }
         return 0
     }
@@ -667,8 +693,11 @@ func runUI(){
     ui.infoLabel=iaControl(hwnd,"STATIC","1. Selecciona el archivo EXE del juego (una copia cerrada):",0,230,187,780,34,0)
     ui.input=iaControl(hwnd,"EDIT","",iaWSBorder|iaESReadOnly,230,227,597,44,0)
     ui.browse=iaControl(hwnd,"BUTTON","EXE",0,843,226,169,46,iaCmdBrowse)
-    ui.install=iaControl(hwnd,"BUTTON","2. INSTALAR TRADUCTOR",0,230,302,485,59,iaCmdInstall)
-    ui.cloneBtn=iaControl(hwnd,"BUTTON","CREAR COPIA VX ACE",0,725,302,287,59,iaCmdClone)
+    // Separate, fixed actions. The owner-draw captions no longer hide
+    // which operation the user is selecting.
+    ui.install=iaControl(hwnd,"BUTTON","2. INSTALAR TRADUCTOR",0,230,302,326,59,iaCmdInstall)
+    ui.cloneBtn=iaControl(hwnd,"BUTTON","CREAR COPIA VX ACE",0,566,302,218,59,iaCmdClone)
+    ui.jsonBtn=iaControl(hwnd,"BUTTON","CREAR COPIA MV/JSON",0,794,302,218,59,iaCmdJSONCopy)
     iaControl(hwnd,"STATIC","Estado de instalación:",0,230,379,760,31,0)
     ui.logs=iaControl(hwnd,"EDIT","",iaWSBorder|iaWSVScroll|iaESMultiline|
         iaESReadOnly|iaESAutoVScroll,230,414,782,236,0)
@@ -680,8 +709,8 @@ func runUI(){
     // The header STATIC is painted during CreateWindowExW, before titleLabel
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
-    iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
-    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental, SOLData y copia JSON experimental MV/NWBin. Botón WEB: seleccionar EXE original o index.html extraído y crear copia. Motor local OPUS.")
+    iaRefreshRPGActions(ui)
+    iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental, SOLData. Acciones separadas: INSTALAR TRADUCTOR, CREAR COPIA VX ACE y CREAR COPIA MV/JSON. Botón WEB: seleccionar EXE original o index.html extraído y crear copia. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
     var msg iaMsg
     for {

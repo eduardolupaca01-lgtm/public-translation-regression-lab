@@ -284,6 +284,24 @@ func mvJSONCopyEntry(from,to string,info os.FileInfo)error{
  now,e=os.Lstat(from);if e!=nil||!vxaceSameReplaceFile(now,info){return mvJSONError("ORIGEN_CAMBIADO")}
  return nil
 }
+// Use a recognizable sibling folder name. Creating a directory is atomic:
+// an existing file, directory or link is never opened for replacement.
+func mvJSONCopyFolder(root string)(string,error){
+ parent:=filepath.Dir(root)
+ if parent==root||vxaceCloneCheckAncestors(parent)!=nil{return "",mvJSONError("DESTINO_INVALIDO")}
+ name:=[]rune(filepath.Base(root))
+ if len(name)>48{name=name[:48]}
+ prefix:=strings.TrimRight(string(name)," .")
+ if prefix==""{prefix="Juego"}
+ prefix+=" - IA JSON"
+ for n:=1;n<=999;n++{
+  label:=prefix
+  if n>1{label=fmt.Sprintf("%s (%d)",prefix,n)}
+  dest:=filepath.Join(parent,label)
+  if e:=os.Mkdir(dest,0700);e==nil{return dest,nil}else if !os.IsExist(e){return "",mvJSONError("DESTINO_INVALIDO")}
+ }
+ return "",mvJSONError("DESTINO_NOMBRES_AGOTADOS")
+}
 func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  var report mvJSONReport
  root,content,e:=mvJSONSource(exe);if e!=nil{return "",report,e}
@@ -321,7 +339,7 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  for _,p:=range required{
   h,e:=digestFile(p);if e!=nil{return "",report,e};protected[p]=h
  }
- dest,e:=os.MkdirTemp(parent,"Juego-IA-MV-JSON-");if e!=nil{return "",report,mvJSONError("DESTINO_INVALIDO")}
+ dest,e:=mvJSONCopyFolder(root);if e!=nil{return "",report,e}
  marker:=filepath.Join(dest,mvJSONMarker)
  if e=createNew(marker,[]byte("Copia de prueba incompleta. No ejecutar. El original sigue intacto.\n"));e!=nil{return "",report,e}
  for _,entry:=range entries{

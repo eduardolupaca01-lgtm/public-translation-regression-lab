@@ -100,7 +100,7 @@ func iaThemeDestroy(){
 }
 func iaApplyControlFont(window uintptr,klass string,id int,title string){
     var font=iaThemeFontNormal
-    if id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
+    if id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
         font=iaThemeFontButton
     }
     if klass=="STATIC"&&font!=0{
@@ -176,12 +176,13 @@ func iaDrawButton(param uintptr)bool{
     case iaCmdBrowse: text="EXE"
     case iaCmdInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdClone: text="CREAR COPIA VX ACE"
+    case iaCmdJSONCopy: text="CREAR COPIA MV/JSON"
     case iaCmdClose: text="Cerrar"
     case iaCmdCopy: text="Copiar diagnóstico"
     case iaCmdRecover: text="Recuperar inicio RPG"
     default: return false
     }
-    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdBrowse||id==301||id==302{
+    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdBrowse||id==301||id==302{
         background=iaRGB(0,96,225)
     }else if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{
         background=iaRGB(221,230,244)
@@ -192,7 +193,10 @@ func iaDrawButton(param uintptr)bool{
             foreground=iaRGB(205,219,240)
         }
     }
-    if data.ItemState&1!=0{
+    if data.ItemState&4!=0&&(id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdRecover||id==iaCmdBrowse||id==302){
+        // Win32 ODS_DISABLED: visibly unavailable, not merely unclickable.
+        background=iaRGB(219,227,238);foreground=iaRGB(91,106,127)
+    }else if data.ItemState&1!=0{
         if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{background=iaRGB(194,213,237)}else{background=iaRGB(0,72,180)}
     }
     brush:=iaBrush(background)

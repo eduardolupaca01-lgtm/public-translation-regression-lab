@@ -48,6 +48,22 @@ func TestR44JSONChoiceAndWrapVerification(t *testing.T){
   strings.ReplaceAll(good,"Sí","hide_if(1)"),
  }{if _,e:=mvJSONVerifyMapDetailed([]byte(original),[]byte(bad));e==nil{t.Fatal("accepted inconsistent or executable choice")}}
 }
+func TestR44JSONCopyFolderNeverOverwrites(t *testing.T){
+ root:=filepath.Join(t.TempDir(),"Juego 日本語")
+ if e:=os.Mkdir(root,0700);e!=nil{t.Fatal(e)}
+ first,e:=mvJSONCopyFolder(root)
+ if e!=nil||filepath.Base(first)!="Juego 日本語 - IA JSON"{t.Fatalf("first named folder: %s %v",filepath.Base(first),e)}
+ keep:=filepath.Join(first,"keep.txt")
+ if e=os.WriteFile(keep,[]byte("existing copy"),0600);e!=nil{t.Fatal(e)}
+ secondPath:=first+" (2)"
+ if e=os.WriteFile(secondPath,[]byte("existing file"),0600);e!=nil{t.Fatal(e)}
+ third,e:=mvJSONCopyFolder(root)
+ if e!=nil||third!=first+" (3)"{t.Fatalf("collision not handled: %s %v",filepath.Base(third),e)}
+ for name,want:=range map[string]string{keep:"existing copy",secondPath:"existing file"}{
+  raw,e:=os.ReadFile(name);if e!=nil||string(raw)!=want{t.Fatal("existing destination changed",e)}
+ }
+ if st,e:=os.Stat(root);e!=nil||!st.IsDir(){t.Fatal("original folder changed",e)}
+}
 func TestR44JSONPilotRealOPUS(t *testing.T){
  packaged:=os.Getenv("IA_R44_REAL_PACKAGE")
  if packaged==""{t.Skip("frozen real OPUS supplied by Windows acceptance")}
@@ -91,9 +107,8 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
  ctx,cancel:=context.WithTimeout(context.Background(),4*time.Minute);defer cancel()
  out,e:=exec.CommandContext(ctx,packaged,"--mv-json-copy","--game",filepath.Join(root,"Game.exe")).CombinedOutput()
  if e!=nil{t.Fatalf("JSON pilot failed: %v %s",e,out)}
- copies,e:=filepath.Glob(filepath.Join(filepath.Dir(root),"Juego-IA-MV-JSON-*"))
- if e!=nil||len(copies)!=1{t.Fatal("missing unique copy",e)}
- dest:=copies[0]
+ dest:=filepath.Join(filepath.Dir(root),filepath.Base(root)+" - IA JSON")
+ if st,e:=os.Lstat(dest);e!=nil||!st.IsDir(){t.Fatal("named copy missing",e)}
  if _,e=os.Lstat(filepath.Join(dest,mvJSONMarker));!os.IsNotExist(e){t.Fatal("incomplete marker remained")}
  if got:=mvJSONWorkerStatus(filepath.Join(dest,"IA Traductora","install","mv-json","status.json"));got!="IA_MV_JSON_CANDIDATO_LISTO"{t.Fatalf("worker terminal status: %s",got)}
  reportFile:=filepath.Join(dest,"IA Traductora","install","mv-json","report.json")
