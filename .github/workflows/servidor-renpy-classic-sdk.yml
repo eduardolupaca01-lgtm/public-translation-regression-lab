@@ -1,0 +1,48 @@
+name: RenPy classic SDK native text contracts
+on:
+  push:
+    branches: [feature/servidor-renpy-r1]
+    paths:
+      - '.github/workflows/servidor-renpy-classic-sdk.yml'
+      - '.github/scripts/renpy_classic_sdk_probe.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  classic-sdk:
+    name: Classic SDK ${{ matrix.version }} - native initialization contract
+    runs-on: windows-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '4.8.7'
+            archive: 'renpy-4.8.7.zip'
+          - version: '5.6.7'
+            archive: 'renpy-5.6.7-full.zip'
+          - version: '6.12.2'
+            archive: 'renpy-6.12.2-sdk.zip'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Obtain historical archive from official HTTPS distribution
+        shell: pwsh
+        env:
+          SDK_VERSION: ${{ matrix.version }}
+          SDK_ARCHIVE: ${{ matrix.archive }}
+        run: |
+          $zip=Join-Path $env:RUNNER_TEMP "classic-sdk.zip"
+          curl.exe --proto '=https' --proto-redir '=https' --location --fail --retry 1 --max-time 120 "https://www.renpy.org/dl/$env:SDK_VERSION/$env:SDK_ARCHIVE" --output $zip
+          if ($LASTEXITCODE -ne 0) { throw "Official historical SDK unavailable" }
+          Write-Host "Downloaded archive SHA256 (observed, not publisher-pinned): $((Get-FileHash -Algorithm SHA256 $zip).Hash)"
+          "CLASSIC_SDK_ZIP=$zip" >> $env:GITHUB_ENV
+      - name: Run native old Text and Input classes with the new classic adapter
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: python .github/scripts/renpy_classic_sdk_probe.py --archive "$env:CLASSIC_SDK_ZIP" --version "${{ matrix.version }}"
