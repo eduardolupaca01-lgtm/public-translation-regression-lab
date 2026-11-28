@@ -69,6 +69,16 @@ label start:
                     if len(value)!=1:raise RuntimeError("Unexpected native text sequence")
                     value=value[0]
                 return value
+            def publish_render_evidence(marker):
+                # Unlike Ren'Py's buffered log, this fixture-owned receipt is
+                # closed and published atomically after all display checks.
+                path=os.environ["IA_RENPY_NATIVE_RENDER_RESULT"]
+                temp=path+".tmp"
+                with open(temp,"wb") as report:
+                    report.write(marker.encode("ascii"))
+                    report.flush()
+                    os.fsync(report.fileno())
+                os.rename(temp,path)
             def present_and_refresh(obj,original,deliver=None):
                 # Both gates run the real renderer and its periodic callbacks.
                 # Only preflight supplies a deterministic cache arrival.
@@ -122,7 +132,7 @@ label start:
                 value=present_and_refresh(obj,cold,lambda:c.remember(cold,translated))
                 if value!=translated:
                     raise RuntimeError("Native periodic refresh returned wrong text")
-                api.write_log("NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS")
+                publish_render_evidence("NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS")
             if mode=="real":
                 # The actual previous preparation must already have made
                 # this archived sentence available BEFORE any worker wait.
@@ -177,7 +187,7 @@ label start:
                         raise RuntimeError("Formatting/quotes lost")
                 if not cold_count:
                     raise RuntimeError("No previously unprepared dynamic text exercised real periodic refresh")
-                api.write_log("NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS")
+                publish_render_evidence("NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS")
                 source=u"Thank you for your help."
                 target=engine.config.say_menu_text_filter(source)
                 if target==source or not re.search(u"gracias|agradezco|ayuda|asistencia",target,re.I):
@@ -212,8 +222,17 @@ def command(exe,*args):
     if p.returncode:raise RuntimeError("Installer/SDK command failed: "+str(p.returncode)+" "+p.stderr.decode("utf-8","replace")[-1500:])
 
 def diagnostics(root,result):
-    for path in [result/"error.txt",root/"traceback.txt",root/"errors.txt",root/"log.txt",root/SIDE/"client-startup.txt",root/SIDE/"worker-startup.json",root/SIDE/"status.json",root/SIDE/"client-progress.json"]:
+    for path in [result/"error.txt",result/"render-result.txt",root/"traceback.txt",root/"errors.txt",root/"log.txt",root/SIDE/"client-startup.txt",root/SIDE/"worker-startup.json",root/SIDE/"status.json",root/SIDE/"client-progress.json",root/SIDE/"window-status.json"]:
         if path.is_file():print(path.name,path.read_text("utf-8-sig",errors="replace")[-12000:],flush=True)
+
+def verify_render_evidence(result,real):
+    expected="NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS" if real else "NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS"
+    path=result/"render-result.txt"
+    if not path.is_file() or path.stat().st_size!=len(expected):
+        raise RuntimeError("Missing actual native render/refresh evidence")
+    if path.read_text("ascii")!=expected:
+        raise RuntimeError("Incorrect native render/refresh evidence for this mode")
+    return expected
 
 def wait_marker(proc,root,result,expected,seconds=180):
     deadline=time.monotonic()+seconds
@@ -296,7 +315,8 @@ def main():
         # packaged acceptance performs the whole real OPUS preparation.
         prep_env=dict(env,IA_RENPY_NATIVE_MODE="prepare_forbidden",
                       IA_RENPY_NATIVE_RESULT=str(result/"forbidden-result.txt"),
-                      IA_RENPY_NATIVE_ERROR=str(result/"forbidden-error.txt"))
+                      IA_RENPY_NATIVE_ERROR=str(result/"forbidden-error.txt"),
+                      IA_RENPY_NATIVE_RENDER_RESULT=str(result/"forbidden-render-result.txt"))
         if args.servidor:
             prep=subprocess.run([str(args.servidor),"--renpy-prepare","--game",str(launcher)],
                                 env=prep_env,capture_output=True,timeout=900)
@@ -345,10 +365,12 @@ def main():
                     proc.wait(timeout=15)
                 request.unlink(missing_ok=True);cancel.unlink(missing_ok=True)
             time.sleep(1)
-        if (result/"forbidden-result.txt").is_file() or (result/"forbidden-error.txt").is_file():
+        if any((result/name).is_file() for name in ("forbidden-result.txt","forbidden-error.txt","forbidden-render-result.txt")):
             raise RuntimeError("Preparation unexpectedly entered the game's start label")
         if any(sha(p)!=v for p,v in before.items()):raise RuntimeError("Preparation changed original archive/launcher/save")
-        env.update(IA_RENPY_NATIVE_MODE=mode,IA_RENPY_NATIVE_RESULT=str(result/"result.txt"),IA_RENPY_NATIVE_ERROR=str(result/"error.txt"))
+        env.update(IA_RENPY_NATIVE_MODE=mode,IA_RENPY_NATIVE_RESULT=str(result/"result.txt"),
+                   IA_RENPY_NATIVE_ERROR=str(result/"error.txt"),
+                   IA_RENPY_NATIVE_RENDER_RESULT=str(result/"render-result.txt"))
         # Exactly how the user opens the game: original executable, no flags,
         # no extra launch button or special injection from a host interpreter.
         proc=subprocess.Popen([str(launcher)],cwd=root,env=env)
@@ -356,10 +378,10 @@ def main():
         status=(side/"client-startup.txt").read_text("ascii")
         if "IA_RENPY_HOOKS_LISTOS" not in status or "RENPY_VERSION=7.3.2.320" not in status:
             raise RuntimeError("Missing production boot diagnostics")
-        render_marker="NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS" if args.servidor else "NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS"
-        if render_marker not in (root/"log.txt").read_text("utf-8-sig",errors="replace"):
+        try:render_marker=verify_render_evidence(result,bool(args.servidor))
+        except (RuntimeError,OSError,UnicodeError):
             diagnostics(root,result)
-            raise RuntimeError("Missing actual native render/refresh evidence")
+            raise
         print(render_marker,flush=True)
         if any(sha(p)!=v for p,v in before.items()):raise RuntimeError("Original archive/launcher/save changed")
         if args.servidor:

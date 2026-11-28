@@ -413,6 +413,26 @@ class ClassicRenpyR1(unittest.TestCase):
             finally:s.close();bridge.cleanup()
 
 class SDKProbeSourceTests(unittest.TestCase):
+    def test_native_render_receipt_is_required_and_mode_specific(self):
+        source=BASE/"tests/probe_renpy_installed_native.py"
+        spec=importlib.util.spec_from_file_location("native_probe_receipt",source)
+        m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+        with tempfile.TemporaryDirectory() as d:
+            result=Path(d)
+            # The final success marker and a log line alone cannot replace
+            # the separate receipt written after actual rendering.
+            (result/"result.txt").write_text("NATIVE_INSTALLED_732_PREFLIGHT_OK",encoding="ascii")
+            (result/"log.txt").write_text("NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS",encoding="ascii")
+            with self.assertRaises(RuntimeError):m.verify_render_evidence(result,False)
+            receipt=result/"render-result.txt"
+            receipt.write_text("NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS",encoding="ascii")
+            self.assertEqual(m.verify_render_evidence(result,False),"NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS")
+            with self.assertRaises(RuntimeError):m.verify_render_evidence(result,True)
+            receipt.write_text("NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS",encoding="ascii")
+            self.assertEqual(m.verify_render_evidence(result,True),"NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS")
+            with self.assertRaises(RuntimeError):m.verify_render_evidence(result,False)
+            receipt.write_text("truncated",encoding="ascii")
+            with self.assertRaises(RuntimeError):m.verify_render_evidence(result,True)
     def test_probe_sources_compile_and_keep_checks_active(self):
         import ast
         import re
