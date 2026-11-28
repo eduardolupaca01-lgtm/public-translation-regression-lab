@@ -69,13 +69,88 @@ init 999:
         except Exception:
             report=open(os.environ["IA_CLASSIC_ERROR"],"wb")
             try:
-                report.write(traceback.format_exc())
+                traceback.print_exc(file=report)
             finally:
                 report.close()
             raise
 
 label start:
     return
+'''
+DRIVER=r'''
+# Real SDK bootstrap driver. The native main function still parses and
+# initializes the original synthetic RPY; only exception reporting is ours.
+# Syntax deliberately limited to Python 2.3.
+import os
+import sys
+import traceback
+def record(path,value):
+    out=open(path,"ab")
+    try:
+        out.write(str(value)+"\n")
+        out.flush()
+    finally:
+        out.close()
+def run_native():
+    sdk=os.environ["IA_CLASSIC_SDK"].replace("\\","/")
+    project=os.environ["IA_CLASSIC_PROJECT"].replace("\\","/")
+    requested=os.environ["IA_CLASSIC_VERSION"]
+    phase=os.environ["IA_CLASSIC_PHASE"]
+    os.chdir(sdk)
+    record(phase,"NATIVE_BOOTSTRAP cwd="+os.getcwd())
+    # The 2005 launcher searches common/ relative to its working directory.
+    for path in (sdk,sdk+"/module"):
+        if os.path.isdir(path) and path not in sys.path:
+            sys.path.append(path)
+    import renpy
+    record(phase,"IMPORTED "+str(getattr(renpy,"version","unknown")))
+    assert requested in str(renpy.version)
+    if requested.startswith("4."):
+        import renpy.main
+        main=renpy.main.main
+        record(phase,"MAIN_ARGS "+repr(main.func_code.co_varnames[:main.func_code.co_argcount]))
+        main(project,lint=True)
+    elif requested.startswith("5."):
+        # 5.6.x bootstrap initializes these documented engine-owned
+        # options and directories before calling the zero-argument main.
+        if hasattr(renpy,"import_all"):
+            renpy.import_all()
+        import renpy.main
+        import renpy.game
+        import renpy.config
+        main=renpy.main.main
+        names=main.func_code.co_varnames[:main.func_code.co_argcount]
+        record(phase,"MAIN_ARGS "+repr(names))
+        if not names:
+            import optparse
+            renpy.game.options=optparse.Values(dict(version=False,game=project,
+                savedir=project+"/saves",lock=None,python=None,compile=False,
+                lint=True,profile=False,leak=False,warp=None))
+            renpy.config.renpy_base=sdk
+            renpy.config.basedir=project
+            renpy.config.gamedir=project
+            main()
+        else:
+            # Older SDK variants retain the 4.x signature.
+            assert "lint" in names,repr(names)
+            main(project,lint=True)
+    else:
+        raise AssertionError("Unsupported bootstrap family")
+    record(phase,"NATIVE_MAIN_RETURNED")
+try:
+    run_native()
+except:
+    out=open(os.environ["IA_CLASSIC_ERROR"],"wb")
+    try:
+        traceback.print_exc(file=out)
+        try:
+            import renpy
+            out.write("\nENGINE_PHASE "+str(renpy.game.exception_info)+"\n")
+        except:
+            pass
+    finally:
+        out.close()
+    raise
 '''
 def safe_extract(archive,dest):
     with zipfile.ZipFile(archive) as z:
@@ -103,7 +178,7 @@ def find_launcher(base):
     return sorted(possible,key=lambda x:(x[0],x[1],str(x[2])))[0][2]
 def diagnostics(base,project,root,launcher,phase):
     print("Diagnostic phase:",phase,flush=True)
-    for p in (root/(phase+"-console.txt"),root/"error.txt",root/"entered.txt"):
+    for p in (root/(phase+"-console.txt"),root/"error.txt",root/"entered.txt",root/"native-phase.txt"):
         if p.is_file():print(p.name,p.read_text("utf-8-sig",errors="replace")[-8000:],flush=True)
     for directory in (project,project/"game",launcher.parent):
         for name in ("traceback.txt","errors.txt","error.txt","log.txt","stderr.txt","renpy.exe.log","run_game.exe.log"):
@@ -133,6 +208,9 @@ def run_phase(command,env,base,project,root,launcher,phase,marker,expected,secon
                 # A zero launcher exit alone is not evidence of interpreter success.
                 time.sleep(.25)
             print("Launcher final status:",proc.poll(),flush=True)
+            for path in (project,project/"game",launcher.parent):
+                if path.is_dir():
+                    print("Fixture files:",str(path.relative_to(root)),[x.name for x in path.glob("*.rpy*")][:30],flush=True)
             diagnostics(base,project,root,launcher,phase)
             raise RuntimeError("Missing verified marker in "+phase)
         finally:
@@ -185,10 +263,21 @@ def main():
                 'f.close()\n',encoding="ascii")
             run_phase([str(launcher),"--python",probe.name],env,sdk,project,root,launcher,
                       "python-start",pre,lambda v:v.startswith("PYTHON_STARTED "),35)
-        # Historical --lint initializes the actual game script and native
-        # displayable classes but does not require the graphics loop.
-        # This is explicitly an initialization contract, not a play test.
-        command=[str(launcher),"--game",project.name,"--lint"] if old else [str(launcher),str(project),"--lint"]
+        # Old launchers lose the original exception trying to write wU.
+        # Their verified --python mode invokes the real native main instead;
+        # retain actual script loading and all Text/Input assertions.
+        if old:
+            env.update(IA_CLASSIC_SDK=str(launcher.parent),IA_CLASSIC_PROJECT=str(project),
+                       IA_CLASSIC_PHASE=str(root/"native-phase.txt"))
+            (launcher.parent/"ia_native_driver.py").write_text(DRIVER,encoding="ascii")
+            (launcher.parent/"ia_native_entry.py").write_text(
+                'import os\n'
+                'namespace=dict(globals())\n'
+                'execfile(os.path.join(os.environ["IA_CLASSIC_SDK"],"ia_native_driver.py"),namespace,namespace)\n',
+                encoding="ascii")
+            command=[str(launcher),"--python","ia_native_entry.py"]
+        else:
+            command=[str(launcher),str(project),"--lint"]
         run_phase(command,env,sdk,project,root,launcher,"native-init",marker,
                   lambda v:v.startswith("CLASSIC_NATIVE_INIT_OK ") and args.version in v,85)
 if __name__=="__main__":main()

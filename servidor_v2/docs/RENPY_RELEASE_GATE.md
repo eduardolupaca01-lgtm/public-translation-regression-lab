@@ -1,0 +1,7 @@
+# Ren'Py release gate — no new candidate while compatibility tests fail
+
+The previous packaged R45 is a historical experiment, not a release approved for testing all classic versions. The previous SDK retry 46109799823 proved both original 32-bit Python 2.3.3 interpreters launch. Ren'Py 4.8.7's old exception logger failed at its own wU open; 5.6.7 returned without a marker. 6.12.2 passed. These observations do not certify 4 or 5.
+
+The new diagnostic driver invokes the exact SDK's native main using the verified bundled interpreter, with the historical 4.x and 5.x initialization interfaces. It preserves actual script parsing, native Text/ Input checks and the result marker; no fake marker or exit-code-only pass. The driver writes the original exception to an absolute path in binary mode. Official source references: https://github.com/renpy/renpy/tree/4.8.7 and https://github.com/renpy/renpy/tree/bcaf88f8a3df9af9308aa4fdee1fd4971c57fd4b (near 5.6.7).
+
+The real build workflow now calls the two required test workflows on the SAME commit. Its build job requires both successes, including the full classic SDK matrix and Windows/Ubuntu and modern SDK matrix. Any failure, cancellation or skip prevents construction, packaging and upload. The previous standalone test workflows remain manually callable. This is a gate for the current representative SDK tests, not certification of all 188 historical releases. The packaged OPUS tests remain required before publication. Do not label an older artifact as a newly approved build.

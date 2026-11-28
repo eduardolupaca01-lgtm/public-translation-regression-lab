@@ -5,6 +5,9 @@ on:
     paths:
       - 'servidor_v2/**'
       - '.github/workflows/servidor-renpy-real.yml'
+      - '.github/workflows/servidor-renpy-r1.yml'
+      - '.github/workflows/servidor-renpy-classic-sdk.yml'
+      - '.github/scripts/renpy_classic_sdk_probe.py'
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +19,19 @@ permissions:
   actions: read
 
 jobs:
+  classic-required:
+    name: Required classic SDK tests (4, 5, early 6)
+    uses: ./.github/workflows/servidor-renpy-classic-sdk.yml
+    permissions:
+      contents: read
+  modern-required:
+    name: Required installer and modern SDK regressions
+    uses: ./.github/workflows/servidor-renpy-r1.yml
+    permissions:
+      contents: read
   build-real-ia:
+    needs: [classic-required, modern-required]
+    if: ${{ success() && needs.classic-required.result == 'success' && needs.modern-required.result == 'success' }}
     name: Reconstruir motor propio desde modelos verificados y probar español real
     runs-on: windows-latest
     timeout-minutes: 90

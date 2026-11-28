@@ -1,11 +1,7 @@
 name: Servidor RenPy R1 - independent program
 on:
-  push:
-    branches: [feature/servidor-renpy-r1]
-    paths:
-      - 'servidor_v2/**'
-      - '.github/workflows/servidor-renpy-r1.yml'
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -29,13 +25,8 @@ jobs:
       - name: Installation, recovery and existing navigation regressions
         working-directory: servidor_v2
         run: go test ./cmd/servidor -run 'TestRenpy|TestWeb|TestR44' -count=1
-      - name: Compile Windows launcher (without bundled model weights)
-        working-directory: servidor_v2
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: '0'
-        run: go build -o Servidor-RenPy-lab.exe ./cmd/servidor
+      # No candidate executable is emitted during preflight. Windows Go
+      # tests already compile the actual installer package and test binary.
 
   native-sdk:
     name: RenPy official SDK ${{ matrix.version }} - native text contract
