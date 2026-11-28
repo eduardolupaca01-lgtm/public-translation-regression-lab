@@ -109,4 +109,51 @@ class RenpyR1(unittest.TestCase):
         i=Input();i.set_text("Hello");self.assertEqual(i.value,"Hello")
         e.predicting=lambda:True
         v.set_text("Continue");self.assertIn(("Continue",False),fake.seen)
+class ClassicRenpyR1(unittest.TestCase):
+    def classic(self):
+        s=importlib.util.spec_from_file_location("classic_client",BASE/"cmd/servidor/renpy_assets/classic_client.py")
+        m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+    def test_old_native_constructor_and_setter(self):
+        from types import SimpleNamespace as NS
+        m=self.classic()
+        class Text:
+            def __init__(self,text,*args,**kw):self.text=text
+            def set_text(self,new_text):self.text=new_text
+        class Input(Text):pass
+        class Fake:
+            def __init__(self):self.seen=[]
+            def enqueue(self,s):self.seen.append(s)
+            def translate(self,s,foreground=True):
+                return {"Hello":"Hola","Continue":"Continuar","Save":"Guardar"}.get(s,s)
+            def start_prefetch(self):pass
+            def close(self):pass
+        Say=type("Say",(),{});say=Say();say.what="Hello"
+        Menu=type("Menu",(),{});menu=Menu();menu.items=[("Continue",True,[])]
+        e=NS(game=NS(script=NS(all_stmts=[say,menu]),init_phase=False,context=lambda:NS(init_phase=False)),
+             display=NS(text=NS(Text=Text),behavior=NS(Input=Input)))
+        f=Fake();m.install(e,f)
+        self.assertEqual(f.seen,["Hello","Continue"])
+        self.assertEqual(Text("Hello").text,"Hola")
+        t=Text("Continue");self.assertEqual(t.text,"Continuar")
+        t.set_text(new_text="Save");self.assertEqual(t.text,"Guardar")
+        self.assertEqual(Input("Hello").text,"Hello")
+        self.assertEqual(Text("Hello",tokenized=True).text,"Hello")
+    def test_classic_authenticated_file_transport(self):
+        from renpy_classic_bridge import ClassicBridge
+        from renpy_runtime import ordinary
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);folder=root/"session";folder.mkdir()
+            s=RenpyService(root,"model",Neural(),quality)
+            bridge=ClassicBridge(folder,s,"0"*32,1,ordinary)
+            try:
+                req=folder/"request-00000001.txt"
+                req.write_bytes(b"bad\n00000001\nHello")
+                bridge.step();self.assertFalse((folder/"response-00000001.txt").exists())
+                prefix=(s.token+"\n00000001\n").encode("ascii")
+                req.write_bytes(prefix+b"Hello")
+                bridge.step()
+                self.assertEqual((folder/"response-00000001.txt").read_bytes(),prefix+b"Hola")
+                self.assertFalse(req.exists())
+            finally:s.close();bridge.cleanup()
+
 if __name__=="__main__":unittest.main()

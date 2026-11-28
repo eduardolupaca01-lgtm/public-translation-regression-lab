@@ -118,7 +118,13 @@ def installation(root,engine):
         raise ValueError("IA_RENPY_MOTOR_NO_VERIFICADO")
     receipt=read_json(side/"owner-v1.json")
     if receipt.get("schema")!=SCHEMA:raise ValueError("IA_RENPY_INSTALACION_NO_VERIFICADA")
-    game=root/"game";boot=game/"ia_servidor_renpy"/"boot.rpy"
+    profile=receipt.get("profile") or "modern"
+    rel=receipt.get("game_rel") or "game"
+    if profile not in ("classic","modern") or not isinstance(rel,str) or not rel or rel==".." or any(c in rel for c in "/\\:\x00") or rel.lower() in ("renpy","lib",SIDECAR.lower()):
+        raise ValueError("IA_RENPY_PERFIL_INVALIDO")
+    game=root/rel
+    boot=game/"ia_servidor_renpy"/"boot.rpy"
+    if profile=="classic":boot=game/"zz_ia_servidor_renpy.rpy"
     if not ordinary(game,True) or not ordinary(boot.parent,True):raise ValueError("IA_RENPY_RUTA_INSEGURA")
     for path,key in ((side/"client.py","client_sha256"),(boot,"boot_sha256")):
         if not ordinary(path) or path.stat().st_size>262144 or hashlib.sha256(path.read_bytes()).hexdigest()!=receipt.get(key):
@@ -126,7 +132,7 @@ def installation(root,engine):
     models=receipt.get("engine_sha256",{})
     if not isinstance(models,dict) or not models or not all(isinstance(v,str) and re.fullmatch(r"[0-9a-f]{64}",v) for v in models.values()):
         raise ValueError("IA_RENPY_MANIFIESTO_INVALIDO")
-    return side,hashlib.sha256(json.dumps(models,sort_keys=True).encode()).hexdigest()
+    return side,hashlib.sha256(json.dumps(models,sort_keys=True).encode()).hexdigest(),receipt
 
 class Memory:
     def __init__(self,folder,identity):
@@ -202,7 +208,16 @@ def handler(service):
 
 def run_renpy(root,engine,nonce,parent,neural_factory,quality,monitor):
     if not re.fullmatch("[0-9a-f]{32}",nonce) or parent<=0:raise ValueError("IA_RENPY_SESION_INVALIDA")
-    side,identity=installation(root,engine)
+    side,identity,receipt=installation(root,engine)
+    if receipt.get("profile")=="classic":
+        key=side/"classic-key.txt"
+        if not ordinary(key) or key.stat().st_size!=32:
+            raise ValueError("IA_RENPY_CLAVE_INVALIDA")
+        raw=key.read_bytes()
+        if hashlib.sha256(raw).hexdigest()!=receipt.get("classic_key_sha256") or not secrets.compare_digest(raw,nonce.encode("ascii")):
+            raise ValueError("IA_RENPY_CLAVE_INVALIDA")
+        from renpy_classic_bridge import run_classic
+        return run_classic(side,identity,nonce,parent,neural_factory,engine,quality,monitor,RenpyService,ordinary,atomic_json)
     session=side/("session-"+nonce+".json")
     if session.exists():raise ValueError("IA_RENPY_SESION_EXISTENTE")
     service=RenpyService(side,identity,neural_factory(engine),quality)

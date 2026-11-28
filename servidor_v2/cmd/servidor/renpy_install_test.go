@@ -7,6 +7,7 @@ import (
  "archive/zip"
  "bytes"
  "encoding/json"
+ "strings"
 )
 func renpyFixture(t *testing.T)string{
  t.Helper();root:=t.TempDir()
@@ -53,4 +54,43 @@ func TestRenpyStatusAndWrongGame(t *testing.T){
  if s,e:=renpyStatusText(exe);e!=nil||s==""{t.Fatal(s,e)}
  bad:=filepath.Join(t.TempDir(),"Game.exe");os.WriteFile(bad,[]byte("MZ"),0600)
  if _,e:=detectRenpy(bad);e==nil{t.Fatal("unknown game accepted")}
+}
+
+func TestRenpyOfficialCatalogAndExactRelease(t *testing.T){
+ counts:=map[byte]int{};seen:=map[string]bool{}
+ for _,v:=range strings.Split(renpyReleases,"\n"){
+  if v==""||strings.HasPrefix(v,"#"){continue}
+  if seen[v]{t.Fatal("duplicate",v)};seen[v]=true;counts[v[0]]++
+  if renpyCatalogMatch(v)!=v{t.Fatal("missing exact release",v)}
+ }
+ for family,want:=range map[byte]int{'4':26,'5':36,'6':51,'7':46,'8':29}{if counts[family]!=want{t.Fatal(family,counts[family],want)}}
+ if renpyCatalogMatch("6.99.14.3135")!="6.99.14"||renpyCatalogMatch("8.6.2.26112601")!="8.6.2"||renpyCatalogMatch("7.4.99")!=""{t.Fatal("build mapping")}
+}
+func TestRenpyClassicZipAndFlatRestore(t *testing.T){
+ root:=t.TempDir();game:=filepath.Join(root,"game");lib:=filepath.Join(root,"lib")
+ for _,p:=range []string{game,lib}{if e:=os.Mkdir(p,0700);e!=nil{t.Fatal(e)}}
+ exe:=filepath.Join(root,"Novel.exe");if e:=os.WriteFile(exe,[]byte("MZfixture"),0600);e!=nil{t.Fatal(e)}
+ original:=filepath.Join(game,"script.rpy");raw:=[]byte("label start:\n    \"Hello\"\n");if e:=os.WriteFile(original,raw,0600);e!=nil{t.Fatal(e)}
+ f,e:=os.Create(filepath.Join(lib,"renpy.zip"));if e!=nil{t.Fatal(e)}
+ z:=zip.NewWriter(f)
+ for n,content:=range map[string]string{"renpy/__init__.py":"version = \"Ren'Py 4.8.7\"\n","renpy/display/text.pyc":"compiled fixture"}{
+  w,e:=z.Create(n);if e!=nil{t.Fatal(e)};if _,e=w.Write([]byte(content));e!=nil{t.Fatal(e)}
+ }
+ if e=z.Close();e!=nil{t.Fatal(e)};f.Close()
+ d,e:=detectRenpy(exe);if e!=nil||d.Profile!=renpyClassicProfile||d.Version!="4.8.7"||d.GameRel!="game"{t.Fatal(d,e)}
+ before,e:=os.ReadFile(filepath.Join(lib,"renpy.zip"));if e!=nil{t.Fatal(e)}
+ if e=renpyInstall(exe,renpyFakePackage(t));e!=nil{t.Fatal(e)}
+ hook:=filepath.Join(game,renpyClassicHook);b,e:=os.ReadFile(hook);if e!=nil||!bytes.Contains(b,[]byte("init 999:\n    python hide:")){t.Fatal("classic hook",e)}
+ side:=filepath.Join(root,renpySide);m,e:=renpyReadReceipt(side);if e!=nil||m.Profile!=renpyClassicProfile||m.ClassicKey==""{t.Fatal(m,e)}
+ if e=os.WriteFile(hook+"c",[]byte("synthetic compiled"),0600);e!=nil{t.Fatal(e)}
+ if e=renpyRecover(exe);e!=nil{t.Fatal(e)}
+ if _,e=os.Stat(hook);!os.IsNotExist(e){t.Fatal("flat hook remains")}
+ if _,e=os.Stat(hook+"c");!os.IsNotExist(e){t.Fatal("compiled hook remains")}
+ after,_:=os.ReadFile(original);engine,_:=os.ReadFile(filepath.Join(lib,"renpy.zip"))
+ if !bytes.Equal(raw,after)||!bytes.Equal(before,engine){t.Fatal("original modified")}
+}
+func TestRenpyClassicAmbiguousGameDirectory(t *testing.T){
+ root:=t.TempDir()
+ for _,n:=range []string{"game","data"}{p:=filepath.Join(root,n);os.Mkdir(p,0700);os.WriteFile(filepath.Join(p,"script.rpy"),[]byte("fixture"),0600)}
+ if _,e:=renpyFindGame(root,filepath.Join(root,"Novel.exe"),renpyClassicProfile);e==nil{t.Fatal("ambiguous layout accepted")}
 }

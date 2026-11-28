@@ -122,7 +122,7 @@ def main():
     candidates=[p for p in executables if (p.parent/"renpy").is_dir() and (p.parent/"lib").is_dir()]
     if len(candidates)!=1:
         raise RuntimeError("Expected a single official SDK executable: %d"%len(candidates))
-    with tempfile.TemporaryDirectory(prefix="ia-renpy-native-") as folder:
+    with tempfile.TemporaryDirectory(prefix="ia-renpy-native-",ignore_cleanup_errors=True) as folder:
         root=pathlib.Path(folder)
         game=root/"game";game.mkdir()
         (game/"script.rpy").write_text(SCRIPT,encoding="utf-8")
@@ -130,6 +130,11 @@ def main():
         env=os.environ.copy()
         env["RENPY_DISABLE_JOYSTICK"]="1"
         env["RENPY_SKIP_MAIN_MENU"]="1"
+        if args.version=="6.99.14":
+            # Official classic renderer fallback for the CI's OpenGL 1.1
+            # adapter. Only the synthetic scene, never a player's game.
+            env["RENPY_RENDERER"]="sw"
+            env["RENPY_PERFORMANCE_TEST"]="0"
         # The host PYTHONUTF8 setting is for the outer diagnostic only;
         # do not inject Python 3 settings into a bundled legacy interpreter.
         env.pop("PYTHONUTF8",None)
