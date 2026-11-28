@@ -61,7 +61,7 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
   mainSource=strings.Replace(mainSource,"window.originalGuardRan&&window.originalPluginsRan","window.coreReady&&!window.originalGuardRan&&!window.extraFixtureRan&&window.originalPluginsRan",1)
  }
  mvnwbinWrite(t,filepath.Join(js,"main.js"),mainSource)
- original:=mvnwbinSnapshot(t,root);mapSHA,e:=digestFile(mapPath);if e!=nil{t.Fatal(e)};original[mapPath]=mapSHA
+ original:=mvnwbinOfflineSnapshot(t,root);mapSHA,e:=digestFile(mapPath);if e!=nil{t.Fatal(e)};original[mapPath]=mapSHA
  pkg,e:=readPackage(packaged);if e!=nil{t.Fatal(e)};defer pkg.Close()
  // Use the executable's public CLI, not a mocked worker. The clone
  // function itself verifies the candidate and source hashes.

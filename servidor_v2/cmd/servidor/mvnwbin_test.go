@@ -75,7 +75,9 @@ func mvnwbinProtectedFiles(root string)[]string{
  files:=[]string{filepath.Join(root,"package.json"),filepath.Join(root,"Game.exe"),
   filepath.Join(root,"www","index.html"),filepath.Join(root,"www","js","plugins.bin"),
   filepath.Join(root,"www","js","main.js"),filepath.Join(root,"www","data","System.json")}
- for _,n:=range []string{"guard.bin","plugins.js","plugins/AuthoredExtra.js"}{
+ // The live add-on tests intentionally change the plaintext registry.
+ // Snapshot it separately in the offline tests where no write is allowed.
+ for _,n:=range []string{"guard.bin"}{
   f:=filepath.Join(root,"www","js",filepath.FromSlash(n))
   if mvnwbinMarker(f){files=append(files,f)}
  }
@@ -86,6 +88,15 @@ func mvnwbinSnapshot(t *testing.T,root string)map[string]string{
  result:=map[string]string{}
  for _,file:=range mvnwbinProtectedFiles(root){
   sum,e:=digestFile(file);if e!=nil{t.Fatal(e)};result[file]=sum
+ }
+ return result
+}
+func mvnwbinOfflineSnapshot(t *testing.T,root string)map[string]string{
+ t.Helper()
+ result:=mvnwbinSnapshot(t,root)
+ for _,n:=range []string{"plugins.js","plugins/AuthoredExtra.js"}{
+  f:=filepath.Join(root,"www","js",filepath.FromSlash(n))
+  if mvnwbinMarker(f){sum,e:=digestFile(f);if e!=nil{t.Fatal(e)};result[f]=sum}
  }
  return result
 }
@@ -134,7 +145,7 @@ func TestR44NWBinSingleRegistryUsesOnlyJSONCopy(t *testing.T){
    exe:=filepath.Join(root,"Game.exe")
    // A blank deployed app name is not authorization for live install.
    mvnwbinWrite(t,filepath.Join(root,"package.json"),`{"name":"","main":"www/index.html"}`)
-   before:=mvnwbinSnapshot(t,root)
+   before:=mvnwbinOfflineSnapshot(t,root)
    if _,e:=detectInstallTarget(exe);e==nil||e.Error()!=mvnwbinExtensionUnavailable{t.Fatalf("expected JSON-only route: %v",e)}
    source,content,e:=mvJSONSource(exe)
    if e!=nil||source!=root||content!=filepath.Join(root,"www"){t.Fatalf("JSON copy not recognized: %v",e)}
