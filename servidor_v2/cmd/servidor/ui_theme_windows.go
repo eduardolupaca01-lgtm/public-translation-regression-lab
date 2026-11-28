@@ -100,7 +100,7 @@ func iaThemeDestroy(){
 }
 func iaApplyControlFont(window uintptr,klass string,id int,title string){
     var font=iaThemeFontNormal
-    if id==iaCmdWebBrowse||id==iaCmdWebInstall||id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
+    if id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
         font=iaThemeFontButton
     }
     if klass=="STATIC"&&font!=0{
@@ -139,11 +139,11 @@ func iaColorControl(device,window uintptr)uintptr{
         iaSetTextColor.Call(device,iaRGB(255,255,255))
         return iaThemeBrushHeader
     }
-    if window==ui.statusLabel||window==ui.webStatus{
+    if window==ui.statusLabel||window==ui.webStatus||window==ui.renpyStatus{
         iaSetTextColor.Call(device,iaRGB(6,53,128))
         return iaThemeBrushStatus
     }
-    if window==ui.input||window==ui.logs||window==ui.webInput||window==ui.webLogs{
+    if window==ui.input||window==ui.logs||window==ui.webInput||window==ui.webLogs||window==ui.renpyInput||window==ui.renpyLogs{
         iaSetTextColor.Call(device,iaRGB(19,42,75))
         return iaThemeBrushWhite
     }
@@ -167,7 +167,7 @@ func iaDrawButton(param uintptr)bool{
     var background uintptr
     var foreground uintptr=iaRGB(255,255,255)
     switch id{
-    case 300: text="01"
+    case 300: text="REN'PY"
     case 301: text="RPG"
     case 302: text="WEB"
     case 303: text="04"
@@ -175,6 +175,10 @@ func iaDrawButton(param uintptr)bool{
     case 305: text="+"
     case iaCmdBrowse: text="EXE"
     case iaCmdWebBrowse: text="EXE"
+    case iaCmdRenpyBrowse: text="EXE"
+    case iaCmdRenpyInstall: text="2. INSTALAR TRADUCTOR"
+    case iaCmdRenpyRecover: text="Restaurar Ren'Py"
+    case iaCmdRenpyStatus: text="Estado IA Traductora"
     case iaCmdWebInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdClone: text="CREAR COPIA VX ACE"
@@ -184,8 +188,8 @@ func iaDrawButton(param uintptr)bool{
     case iaCmdRecover: text="Recuperar inicio RPG"
     default: return false
     }
-    activeNav:=(id==301&&!iaCurrentUI.webActive)||(id==302&&iaCurrentUI.webActive)
-    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdBrowse||id==iaCmdWebBrowse||id==iaCmdWebInstall||activeNav{
+    activeNav:=(id==300&&iaCurrentUI.renpyActive)||(id==301&&!iaCurrentUI.webActive&&!iaCurrentUI.renpyActive)||(id==302&&iaCurrentUI.webActive)
+    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdBrowse||id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdWebBrowse||id==iaCmdWebInstall||activeNav{
         background=iaRGB(0,96,225)
     }else if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{
         background=iaRGB(221,230,244)
@@ -196,7 +200,7 @@ func iaDrawButton(param uintptr)bool{
             foreground=iaRGB(205,219,240)
         }
     }
-    if data.ItemState&4!=0&&(id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdRecover||id==iaCmdBrowse||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==301||id==302){
+    if data.ItemState&4!=0&&(id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdRecover||id==iaCmdBrowse||id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==301||id==302){
         // Win32 ODS_DISABLED: visibly unavailable, not merely unclickable.
         background=iaRGB(219,227,238);foreground=iaRGB(91,106,127)
     }else if data.ItemState&1!=0{

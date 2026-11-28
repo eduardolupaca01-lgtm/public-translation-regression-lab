@@ -1,0 +1,51 @@
+name: RenPy classic SDK native text contracts
+on:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  classic-sdk:
+    name: Classic SDK ${{ matrix.version }} - native initialization contract
+    runs-on: windows-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '4.8.7'
+            archive: 'renpy-4.8.7.zip'
+            sha: '465285f9abae0e0a4d305a38d3c41e263827e1636a5d675163e7bbda40fc5cc0'
+          - version: '5.6.7'
+            archive: 'renpy-5.6.7-full.zip'
+            sha: '67a4c93d641aac0314e785d33c892783de0a1043de85d029b70ad8d82d518e58'
+          - version: '6.12.2'
+            archive: 'renpy-6.12.2-sdk.zip'
+            sha: 'ab73dfdb303322b6089f18c2a0363911364cd45f578337aac7f2bc03a5dac5e1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Obtain historical archive from official HTTPS distribution
+        shell: pwsh
+        env:
+          SDK_VERSION: ${{ matrix.version }}
+          SDK_ARCHIVE: ${{ matrix.archive }}
+          SDK_SHA256: ${{ matrix.sha }}
+        run: |
+          $zip=Join-Path $env:RUNNER_TEMP "classic-sdk.zip"
+          curl.exe --proto '=https' --proto-redir '=https' --location --fail --retry 1 --max-time 120 "https://www.renpy.org/dl/$env:SDK_VERSION/$env:SDK_ARCHIVE" --output $zip
+          if ($LASTEXITCODE -ne 0) { throw "Official historical SDK unavailable" }
+          # Pin exact bytes observed in run 46108588188 from the official HTTPS host.
+          # This is a repeatability pin, not a publisher signature.
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant() -ne $env:SDK_SHA256) { throw "Historical SDK archive changed" }
+          Write-Host "Historical archive matches recorded SHA256"
+          "CLASSIC_SDK_ZIP=$zip" >> $env:GITHUB_ENV
+      - name: Run native old Text and Input classes with the new classic adapter
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: python .github/scripts/renpy_classic_sdk_probe.py --archive "$env:CLASSIC_SDK_ZIP" --version "${{ matrix.version }}"

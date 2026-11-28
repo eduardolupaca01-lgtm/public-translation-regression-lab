@@ -32,6 +32,7 @@ const(
     iaWMAppDone=0x8001
     iaWMWebProgress=0x8002
     iaWMWebDone=0x8003
+    iaWMRenpyDone=0x8004
     iaWMDrawItem=0x002B
     iaWMPaint=0x000F
     iaWMEraseBk=0x0014
@@ -46,6 +47,10 @@ const(
     iaCmdJSONCopy=106
     iaCmdWebBrowse=107
     iaCmdWebInstall=108
+    iaCmdRenpyBrowse=109
+    iaCmdRenpyInstall=110
+    iaCmdRenpyRecover=111
+    iaCmdRenpyStatus=112
 )
 var(
     iaUser32=syscall.NewLazyDLL("user32.dll")
@@ -127,6 +132,10 @@ type iaUI struct{
     recoverBtn uintptr
     cloneBtn uintptr
     jsonBtn uintptr
+    renpyBtn uintptr
+    renpyActive bool
+    renpyInfo,renpyInput,renpyBrowse,renpyInstall,renpyRecover,renpyCheck,renpyLogs,renpyStatus uintptr
+    renpyFile,renpyLogText,renpyResult string
     webBtn uintptr
     rpgBtn uintptr
     webActive bool
@@ -337,7 +346,7 @@ func iaChooseFile(owner uintptr,filter []uint16,caption string)(selected string,
 // Keep action availability independent from control captions. In particular,
  // a recognized offline-only layout must never dispatch the normal installer.
 func iaRPGActionAllowed(ui *iaUI,command int)bool{
-    if ui.busy||ui.webActive||ui.gameFile==""{return false}
+    if ui.busy||ui.webActive||ui.renpyActive||ui.gameFile==""{return false}
     if ui.jsonPilot{
         switch command{
         case iaCmdInstall,iaCmdJSONCopy:return !ui.jsonRecovery
@@ -550,6 +559,16 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         return iaColorControl(wparam,lparam)
     case iaWMCommand:
         switch int(wparam&0xFFFF){
+        case 300:
+            if lparam==ui.renpyBtn{iaSwitchRenpy(ui)}
+        case iaCmdRenpyBrowse:
+            if lparam==ui.renpyBrowse&&ui.renpyActive&&!ui.busy{iaRenpySelect(ui)}
+        case iaCmdRenpyInstall:
+            if lparam==ui.renpyInstall{iaStartRenpy(ui,false)}
+        case iaCmdRenpyRecover:
+            if lparam==ui.renpyRecover{iaStartRenpy(ui,true)}
+        case iaCmdRenpyStatus:
+            if lparam==ui.renpyCheck&&ui.renpyActive&&!ui.busy{iaRenpyStatus(ui)}
         case 301:
             if lparam==ui.rpgBtn{iaSwitchSection(ui,false)}
         case 302:
@@ -559,7 +578,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         case iaCmdWebInstall:
             if lparam==ui.webInstall&&iaWebActionAllowed(ui){iaWebInstallAction()}
         case iaCmdBrowse:
-            if lparam!=ui.browse || ui.busy || ui.webActive{return 0}
+            if lparam!=ui.browse || ui.busy || ui.webActive || ui.renpyActive{return 0}
             file,err:=iaSelectFile(hwnd)
             if err!=nil{
                 iaLog("[IA_SELECTOR_ERROR] "+err.Error())
@@ -627,7 +646,9 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             if lparam==ui.jsonBtn&&iaRPGActionAllowed(ui,iaCmdJSONCopy){iaJSONPilotAction(false)}
         case iaCmdCopy:
             if lparam==ui.copyBtn{
-                if ui.webActive{
+                if ui.renpyActive{
+                    if err:=iaCopyDiagnostics(hwnd,ui.renpyLogText);err!=nil{iaRenpyLog(ui,"[IA_RENPY_COPIAR_ERROR]")}else{iaSet(ui.renpyStatus,"Diagnóstico Ren'Py copiado.")}
+                }else if ui.webActive{
                     if err:=iaCopyDiagnostics(hwnd,ui.webLogText);err!=nil{
                         iaWebLog(ui,"[IA_WEB_COPIAR_ERROR] "+iaSafeInstallCode(err.Error()))
                         iaSet(ui.webStatus,"No se pudo copiar el diagnóstico WEB.")
@@ -643,6 +664,10 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             if lparam==ui.closeBtn && !ui.busy{iaDestroyWindow.Call(hwnd)}
         }
         return 0
+    case 0x0113: // WM_TIMER: RenPy progress only
+        if wparam==0x5245{iaRenpyTick(ui);return 0}
+    case iaWMRenpyDone:
+        iaRenpyFinish(ui);return 0
     case iaWMWebProgress:
         iaWebDrain(ui);return 0
     case iaWMWebDone:
@@ -726,12 +751,13 @@ func runUI(){
     ui:=&iaCurrentUI;ui.hwnd=hwnd
     ui.titleLabel=iaControl(hwnd,"STATIC","Servidor R44",0,30,20,360,55,0)
     ui.sectionLabel=iaControl(hwnd,"STATIC","RPG",0,233,123,250,40,0)
-    for i,label:=range []string{"01","RPG","WEB","04","05","+"}{
+    for i,label:=range []string{"REN'PY","RPG","WEB","04","05","+"}{
         style:=uint32(0)
-        if label!="RPG"&&label!="WEB"{style|=iaWSDisabled}
+        if label!="RPG"&&label!="WEB"&&label!="REN'PY"{style|=iaWSDisabled}
         control:=iaControl(hwnd,"BUTTON",label,style,20,127+i*70,169,54,300+i)
         if label=="WEB"{ui.webBtn=control}
         if label=="RPG"{ui.rpgBtn=control}
+        if label=="REN'PY"{ui.renpyBtn=control}
     }
     ui.infoLabel=iaControl(hwnd,"STATIC","1. Selecciona el archivo EXE del juego (una copia cerrada):",0,230,187,780,34,0)
     ui.input=iaControl(hwnd,"EDIT","",iaWSBorder|iaESReadOnly,230,227,597,44,0)
@@ -753,6 +779,7 @@ func runUI(){
     // receives its HWND. Force a second paint with the dark header brush.
     if ui.titleLabel!=0{iaInvalidateRect.Call(ui.titleLabel,0,1)}
     iaCreateWebControls(ui)
+    iaCreateRenpyControls(ui)
     iaSwitchSection(ui,false)
     iaLog("[IA_TRADUCTORA_LISTA] "+packageBuildID+". MV/MZ/VX Ace, XP experimental, SOLData. Acciones separadas: INSTALAR TRADUCTOR, CREAR COPIA VX ACE y CREAR COPIA MV/JSON. Motor local OPUS.")
     iaShowWindow.Call(hwnd,5);iaUpdateWindow.Call(hwnd)
@@ -762,7 +789,7 @@ func runUI(){
         if int32(success)<=0{break}
         // F10 is local to this UI message loop. No global hotkey,
         // hooks, process injection, or interception inside a game.
-        if msg.Message==0x0100&&msg.WParam==0x79&&ui.jsonSummary!=""&&!ui.busy&&!ui.webActive{
+        if msg.Message==0x0100&&msg.WParam==0x79&&ui.jsonSummary!=""&&!ui.busy&&!ui.webActive&&!ui.renpyActive{
             if msg.LParam&(1<<30)==0{
                 iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16(ui.jsonSummary))),uintptr(unsafe.Pointer(iaUTF16("IA Traductora · Estado JSON"))),0x40)
             }

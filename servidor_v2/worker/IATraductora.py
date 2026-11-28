@@ -1262,6 +1262,8 @@ def main():
     p.add_argument("--game-root",type=Path)
     p.add_argument("--halva-content",type=Path)
     p.add_argument("--web-root",type=Path)
+    p.add_argument("--renpy-root",type=Path)
+    p.add_argument("--renpy-session")
     p.add_argument("--web-port",type=int,default=8765)
     p.add_argument("--web-no-browser",action="store_true")
     p.add_argument("--parent-pid",type=int,default=0)
@@ -1275,6 +1277,21 @@ def main():
         if args.mv_json_pilot or args.mv_json_direct:
             write_startup_code(args.diagnostic_file,"IA_MV_JSON_FASE_ENTRADA")
         engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
+        if args.renpy_root is not None or args.renpy_session is not None:
+            if (args.renpy_root is None or not args.renpy_session or args.parent_pid<=0 or
+                args.game_root is not None or args.web_root is not None or args.halva_content is not None or
+                args.rpgxp_lab or args.check_models or args.mv_json_pilot or args.mv_json_direct):
+                raise ValueError("IA_RENPY_ARGUMENTOS_INVALIDOS")
+            from renpy_runtime import run_renpy
+            # RenPy only: leave CPU capacity for game rendering, even on
+            # low-core machines. RPG/WEB keep their existing configuration.
+            os.environ.setdefault("OMP_WAIT_POLICY","PASSIVE")
+            threads=min(2,max(1,(os.cpu_count() or 2)//2))
+            write_startup_code(args.diagnostic_file,"IA_RENPY_MOTOR_VALIDANDO")
+            run_renpy(args.renpy_root,engine,args.renpy_session,args.parent_pid,
+                      lambda folder:NeuralOPUS(folder,pilot_threads=threads),native_quality_reason,monitor_game_lifetime,
+                      checkpoint=lambda code:write_startup_code(args.diagnostic_file,code))
+            return
         if args.mv_json_pilot or args.mv_json_direct:
             if (args.mv_json_pilot and args.mv_json_direct) or args.rpgxp_lab or args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid:
                 raise ValueError("IA_MV_JSON_SOLICITUD_INVALIDA")
