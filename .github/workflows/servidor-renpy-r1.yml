@@ -1,0 +1,38 @@
+name: Servidor RenPy R1 - independent program
+on:
+  push:
+    branches: [feature/servidor-renpy-r1]
+    paths:
+      - 'servidor_v2/**'
+      - '.github/workflows/servidor-renpy-r1.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: servidor_v2/go.sum
+      - name: Original RenPy client and worker regressions
+        run: python -m unittest discover -s servidor_v2/tests -p test_renpy_r1.py -v
+      - name: Installation, recovery and existing navigation regressions
+        working-directory: servidor_v2
+        run: go test ./cmd/servidor -run 'TestRenpy|TestWeb|TestR44' -count=1
+      - name: Compile Windows launcher (without bundled model weights)
+        working-directory: servidor_v2
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: go build -o Servidor-RenPy-lab.exe ./cmd/servidor

@@ -478,7 +478,25 @@ func main(){
  xpProbe:=flag.Bool("xp-native-probe",false,"Validate genuine RGSS1 using an isolated synthetic game")
  jsonCopy:=flag.Bool("mv-json-copy",false,"Crear copia independiente de prueba con el mapa inicial MV/NWBin traducido")
  jsonDirect:=flag.Bool("mv-json-install",false,"Instalación JSON explícita en la carpeta seleccionada, con respaldos y recuperación")
+ renpyInstallFlag:=flag.Bool("renpy-install",false,"Instalar traductor Ren'Py en una copia cerrada")
+ renpyRecoverFlag:=flag.Bool("renpy-recover",false,"Desactivar exclusivamente el traductor Ren'Py")
+ renpyInspectFlag:=flag.Bool("renpy-inspect",false,"Inventario Ren'Py de solo lectura")
  flag.Parse()
+ if *renpyInstallFlag||*renpyRecoverFlag||*renpyInspectFlag{
+  count:=0;for _,v:=range []bool{*renpyInstallFlag,*renpyRecoverFlag,*renpyInspectFlag}{if v{count++}}
+  valid:=count==1&&*exe!=""&&flag.NArg()==0
+  flag.Visit(func(f *flag.Flag){if f.Name!="game"&&f.Name!="renpy-install"&&f.Name!="renpy-recover"&&f.Name!="renpy-inspect"&&!(f.Name=="package"&&*renpyInstallFlag){valid=false}})
+  if !valid{fmt.Fprintln(os.Stderr,"IA_RENPY_ARGUMENTOS_INVALIDOS");os.Exit(1)}
+  var e error
+  if *renpyInspectFlag{var d renpyDetection;d,e=detectRenpy(*exe);if e==nil{fmt.Println(d.summary())}}
+  if *renpyRecoverFlag{e=renpyRecover(*exe);if e==nil{fmt.Println("IA_RENPY_RESTAURADO")}}
+  if *renpyInstallFlag{
+   source:=*payload;if source==""{source,e=os.Executable()}
+   if e==nil{var p *packageReader;p,e=readPackage(source);if e==nil{defer p.Close();e=renpyInstall(*exe,p)}}
+   if e==nil{fmt.Println("IA_RENPY_INSTALADO")}
+  }
+  if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)};return
+ }
  if *jsonDirect{
   valid:=*exe!=""&&flag.NArg()==0
   flag.Visit(func(f *flag.Flag){if f.Name!="mv-json-install"&&f.Name!="game"&&f.Name!="package"{valid=false}})

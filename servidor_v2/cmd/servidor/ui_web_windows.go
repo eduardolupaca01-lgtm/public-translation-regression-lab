@@ -44,18 +44,7 @@ func iaRefreshWebActions(ui *iaUI){
 }
 
 func iaSwitchSection(ui *iaUI,web bool){
- if ui.busy{return}
- ui.webActive=web
- show:=func(h uintptr,visible bool){
-  if h==0{return}
-  cmd:=uintptr(0);if visible{cmd=5};iaShowWindow.Call(h,cmd)
- }
- for _,h:=range []uintptr{ui.infoLabel,ui.input,ui.browse,ui.install,ui.cloneBtn,ui.jsonBtn,ui.logs,ui.statusLabel,ui.recoverBtn}{show(h,!web)}
- for _,h:=range []uintptr{ui.webInfo,ui.webInput,ui.webBrowse,ui.webInstall,ui.webLogs,ui.webStatus}{show(h,web)}
- label:="RPG";if web{label="WEB"}
- if ui.sectionLabel!=0{iaSet(ui.sectionLabel,label)}
- iaRefreshRPGActions(ui);iaRefreshWebActions(ui)
- for _,h:=range []uintptr{ui.rpgBtn,ui.webBtn,ui.hwnd}{if h!=0{iaInvalidateRect.Call(h,0,1)}}
+ if web{iaSwitchProgram(ui,2)}else{iaSwitchProgram(ui,1)}
 }
 
 func iaWebLog(ui *iaUI,line string){

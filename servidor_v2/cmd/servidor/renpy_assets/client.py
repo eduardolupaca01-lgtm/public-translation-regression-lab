@@ -39,7 +39,12 @@ class Client(object):
         self.rejected=0;self.fallback=0;self.detected=0
     def get_session(self,deadline):
         if self.connection and self.proc and self.proc.poll() is None:return self.connection
-        if CLOCK()<self.cooldown or not self.launch_lock.acquire(False):return None
+        while CLOCK()<deadline:
+            if self.connection and self.proc and self.proc.poll() is None:return self.connection
+            if CLOCK()<self.cooldown:return None
+            if self.launch_lock.acquire(False):break
+            time.sleep(.05)
+        else:return None
         try:
             if self.stopped:return None
             if not self.proc or self.proc.poll() is not None:
@@ -173,7 +178,8 @@ def install(engine,client=None):
         previous=text_cls.set_text
         behavior=getattr(getattr(engine,"display",None),"behavior",None)
         input_cls=getattr(behavior,"Input",None)
-        def set_text(obj,value,*args,**kwargs):
+        def set_text(obj,text,*args,**kwargs):
+            value=text
             if (getattr(obj,"tokenized",False) or (input_cls is not None and isinstance(obj,input_cls))
                 or any(c.__name__=="Input" for c in type(obj).__mro__)):
                 return previous(obj,value,*args,**kwargs)
