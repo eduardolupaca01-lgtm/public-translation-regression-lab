@@ -130,9 +130,10 @@ def main():
         env=os.environ.copy()
         env["RENPY_DISABLE_JOYSTICK"]="1"
         env["RENPY_SKIP_MAIN_MENU"]="1"
-        if args.version=="6.99.14":
-            # Official classic renderer fallback for the CI's OpenGL 1.1
-            # adapter. Only the synthetic scene, never a player's game.
+        if args.version in ("6.99.14","7.3.2"):
+            # Official renderer fallback for CI's OpenGL 1.1 adapter. Both
+            # SDKs use the pre-game performance test and can block at its
+            # renderer warning. Only the synthetic scene, never player games.
             env["RENPY_RENDERER"]="sw"
             env["RENPY_PERFORMANCE_TEST"]="0"
         # The host PYTHONUTF8 setting is for the outer diagnostic only;

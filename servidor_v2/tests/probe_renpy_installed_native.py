@@ -49,10 +49,12 @@ label start:
             if mode=="real":
                 c=module.active_client
                 deadline=time.time()+90
-                while time.time()<deadline and not c.get_session(module.CLOCK()+10):
-                    time.sleep(.5)
+                # Observe the production automatic startup, without calling
+                # get_session() to start or reconnect it from the test.
+                while time.time()<deadline and not c.connection:
+                    time.sleep(.25)
                 if not c.connection:
-                    raise RuntimeError("Packaged worker did not connect")
+                    raise RuntimeError("Packaged worker did not connect automatically")
                 pairs=[(u"Thank you for your help.",u"gracias|agradezco|ayuda|asistencia"),
                        (u"\u304a\u306f\u3088\u3046\u3054\u3056\u3044\u307e\u3059\u3002",u"buenos|buen|d\u00edas|d\u00eda|hola"),
                        (u'{b}"Thank you for your help."{/b}',u"gracias|agradezco|ayuda|asistencia")]
@@ -140,6 +142,8 @@ def main():
         original=game/"script.rpy";original.write_text(SCRIPT,encoding="ascii")
         env=os.environ.copy()
         for k in ("PYTHONUTF8","PYTHONIOENCODING"):env.pop(k,None)
+        # Exact 7.3.2 CI renderer workaround; applies to this temporary
+        # fixture only. No production environment or game config is changed.
         env.update(RENPY_DISABLE_JOYSTICK="1",RENPY_SKIP_MAIN_MENU="1",RENPY_PERFORMANCE_TEST="0",RENPY_RENDERER="sw")
         # Compile using the SDK itself. No injected or reconstructed game AST.
         proc=subprocess.Popen([str(launcher),str(root),"compile"],cwd=root,env=env)
