@@ -57,6 +57,11 @@ label start:
     python:
         try:
             import io
+            import os
+            try:
+                import builtins as py_builtins
+            except ImportError:
+                import __builtin__ as py_builtins
             native = renpy.text.text.Text
             pairs = [(u'Hello world',u'Hola mundo'),
                 (u'She said "Hello"',u'Ella dijo "Hola"'),
@@ -66,9 +71,12 @@ label start:
             for original, expected in pairs:
                 displayable = native(original)
                 actual=displayable.text
-                if isinstance(actual,list):
-                    actual=actual[0]
-                assert actual==expected, "native Text did not receive translation: "+repr(actual)
+                if isinstance(actual,(py_builtins.list,py_builtins.tuple)):
+                    # Ren'Py store shadows Python's list on modern runtimes.
+                    # Require the whole native sequence, not only its first item.
+                    assert py_builtins.tuple(actual)==(expected,), "native Text did not receive exact translation: "+repr(actual)
+                else:
+                    assert actual==expected, "native Text did not receive translation: "+repr(actual)
             if hasattr(config,"say_menu_text_filter"):
                 assert config.say_menu_text_filter(u'Hello world')==u'Hola mundo'
             from renpy.display.behavior import Input
@@ -110,6 +118,10 @@ def main():
         env=os.environ.copy()
         env["RENPY_DISABLE_JOYSTICK"]="1"
         env["RENPY_SKIP_MAIN_MENU"]="1"
+        # The host PYTHONUTF8 setting is for the outer diagnostic only;
+        # do not inject Python 3 settings into a bundled legacy interpreter.
+        env.pop("PYTHONUTF8",None)
+        env.pop("PYTHONIOENCODING",None)
         proc=subprocess.Popen([str(candidates[0]),str(root)],cwd=str(candidates[0].parent),env=env)
         try:
             deadline=time.monotonic()+120
@@ -119,9 +131,12 @@ def main():
                 if err.exists() or (root/"native-init-error.txt").exists() or (root/"traceback.txt").exists() or (root/"errors.txt").exists():
                     diagnostics(root)
                     raise RuntimeError("RenPy reported a native initialization or execution error")
-                if proc.poll() is not None and not marker.exists():
+                # Legacy Windows launcher can exit successfully before its
+                # delegated interpreter emits the actual game result. A zero
+                # launcher exit is never an acceptance result.
+                if proc.poll() is not None and proc.returncode!=0 and not marker.exists():
                     diagnostics(root)
-                    raise RuntimeError("RenPy exited before the native marker: "+str(proc.returncode))
+                    raise RuntimeError("RenPy launcher failed: "+str(proc.returncode))
                 if marker.exists() and marker.read_text(encoding="utf-8")=="NATIVE_TEXT_CONTRACT_OK":
                     print("REAL_SDK_NATIVE_CONTRACT",args.version,"PASS (deterministic responses, not OPUS)")
                     return
