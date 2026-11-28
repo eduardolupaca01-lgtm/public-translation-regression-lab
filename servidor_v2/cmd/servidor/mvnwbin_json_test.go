@@ -10,20 +10,43 @@ import (
  "context"
  "bytes"
  "strings"
+ "reflect"
 )
-const mvJSONFixtureMap=`{"width":20,"events":[null,{"id":1,"name":"Aster","pages":[{"conditions":{"switch1Id":2},"list":[{"code":101,"indent":0,"parameters":["portrait",0,0,2]},{"code":401,"indent":0,"parameters":["\\C[2]Please open the wooden gate.\\C[0]"]},{"code":401,"indent":0,"parameters":["橋を渡ってください。"]},{"code":102,"indent":0,"parameters":[["Open the gate.","Wait here."],1,0,2,0]},{"code":355,"indent":1,"parameters":["Please open the wooden gate."]},{"code":0,"indent":0,"parameters":[]}]}]}]}`
+const mvJSONFixtureMap=`{"width":20,"events":[null,{"id":1,"name":"Aster","pages":[{"conditions":{"switch1Id":2},"list":[{"code":101,"indent":0,"parameters":["portrait",0,0,2]},{"code":401,"indent":0,"parameters":["\\C[2]Please open the wooden gate.\\C[0]"]},{"code":401,"indent":0,"parameters":["橋を渡ってください。"]},{"code":102,"indent":0,"parameters":[["Yes","No"],1,0,2,0]},{"code":402,"indent":0,"parameters":[0,"Yes"]},{"code":355,"indent":1,"parameters":["Please open the wooden gate."]},{"code":402,"indent":0,"parameters":[1,"No"]},{"code":404,"indent":0,"parameters":[]},{"code":0,"indent":0,"parameters":[]}]}]}]}`
 func TestR44JSONStructuralVerification(t *testing.T){
  good:=strings.Replace(mvJSONFixtureMap,"Please open the wooden gate.\\\\C[0]","Abre la puerta de madera.\\\\C[0]",1)
  good=strings.Replace(good,"橋を渡ってください。","Cruza el puente.",1)
  if n,e:=mvJSONVerifyMap([]byte(mvJSONFixtureMap),[]byte(good));e!=nil||n!=2{t.Fatalf("valid projection: %d %v",n,e)}
  for _,bad:=range []string{
   strings.Replace(good,"\"switch1Id\":2","\"switch1Id\":3",1),
-  strings.Replace(good,"Wait here.","Run away.",1),
+  strings.Replace(good,"[0,\"Yes\"]","[0,\"Run away.\"]",1),
   strings.Replace(good,"Please open the wooden gate.","Destroy this script.",1),
   strings.Replace(good,"\\\\C[2]","\\\\C[3]",1),
  }{
   if _,e:=mvJSONVerifyMap([]byte(mvJSONFixtureMap),[]byte(bad));e==nil{t.Fatal("accepted invalid mutation")}
  }
+}
+func TestR44JSONMenuTermsOnly(t *testing.T){
+ before:=[]byte(`{"gameTitle":"Test","locale":"es_ES","startMapId":1,"terms":{"basic":["Level","HP","TP"],"commands":["Item","Skill","Equip","Status","Formation","Quest Log","Options","Save","Game End",null,"Custom"],"params":["Attack","Max HP"],"messages":{"alwaysDash":"Always Dash","bgmVolume":"BGM Volume","partyName":"The group of %1"}}}`)
+ after,n,e:=mvJSONLocalizeSystem(before)
+ if e!=nil||n!=15{t.Fatalf("menu projection count %d %v",n,e)}
+ expected:=[]byte(`{"gameTitle":"Test","locale":"es_ES","startMapId":1,"terms":{"basic":["Nivel","PV","TP"],"commands":["Objetos","Habilidades","Equipo","Estado","Formación","Misiones","Opciones","Guardar","Salir",null,"Custom"],"params":["Ataque","PV máx."],"messages":{"alwaysDash":"Correr siempre","bgmVolume":"Vol. música","partyName":"The group of %1"}}}`)
+ x,e:=mvJSONDecode(expected);if e!=nil{t.Fatal(e)}
+ y,e:=mvJSONDecode(after);if e!=nil||!reflect.DeepEqual(x,y){t.Fatal("unrelated System data changed",e)}
+}
+func TestR44JSONChoiceAndWrapVerification(t *testing.T){
+ original:=`{"events":[{"pages":[{"list":[{"code":101,"indent":0,"parameters":["",0,0,2]},{"code":401,"indent":0,"parameters":["\\C[2]Please wait here until the morning.\\C[0]"]},{"code":102,"indent":0,"parameters":[["Yes","No"],1,0,2,0]},{"code":402,"indent":0,"parameters":[0,"Yes"]},{"code":402,"indent":0,"parameters":[1,"No"]},{"code":404,"indent":0,"parameters":[]}]}]}]}`
+ good:=strings.ReplaceAll(original,"Yes","Sí")
+ good=strings.Replace(good,"Please wait here until the morning.","Por favor, espera aquí\\nhasta la mañana.",1)
+ changed,e:=mvJSONVerifyMapDetailed([]byte(original),[]byte(good))
+ if e!=nil||changed.Lines!=1||changed.ChoiceGroups!=1||changed.ChoiceLabels!=1||changed.Wrapped!=1||changed.Breaks!=1{t.Fatalf("valid native fields %+v %v",changed,e)}
+ for _,bad:=range []string{
+  strings.Replace(good,"[0,\"Sí\"]","[0,\"No\"]",1),
+  strings.Replace(good,"[1,\"No\"]","[0,\"No\"]",1),
+  strings.Replace(good,"[\"Sí\",\"No\"],1,0","[\"Sí\",\"No\"],0,0",1),
+  strings.Replace(good,"\\\\C[2]","\\\\C[3]",1),
+  strings.ReplaceAll(good,"Sí","hide_if(1)"),
+ }{if _,e:=mvJSONVerifyMapDetailed([]byte(original),[]byte(bad));e==nil{t.Fatal("accepted inconsistent or executable choice")}}
 }
 func TestR44JSONPilotRealOPUS(t *testing.T){
  packaged:=os.Getenv("IA_R44_REAL_PACKAGE")
@@ -39,7 +62,7 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
  if profile=="two_active"{root=mvnwbinFixture(t,false)}else{root=mvnwbinSingleFixture(t,profile=="one_retained")}
  content:=filepath.Join(root,"www");js:=filepath.Join(content,"js")
  mvnwbinWrite(t,filepath.Join(root,"package.json"),fmt.Sprintf("{\"name\":\"ia-r44-json-trial-%d\",\"main\":\"www/index.html\",\"window\":{\"show\":false}}",time.Now().UnixNano()))
- mvnwbinWrite(t,filepath.Join(content,"data","System.json"),"{\"startMapId\":1}")
+ mvnwbinWrite(t,filepath.Join(content,"data","System.json"),"{\"startMapId\":1,\"terms\":{\"commands\":[\"Item\",\"Skill\",\"Options\",\"Save\"]}}")
  mapPath:=filepath.Join(content,"data","Map001.json")
  mvnwbinWrite(t,mapPath,mvJSONFixtureMap)
  fixtures:=[]struct{name,source string}{}
@@ -56,7 +79,7 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
  }
  // Authored original loader reads the ordinary data file. It is copied
  // byte-for-byte and never replaced by the localizer.
- mainSource:="var fs=require('fs'),p=require('path');var map=JSON.parse(fs.readFileSync(p.join(nw.App.startPath,'www','data','Map001.json'),'utf8'));var list=map.events[1].pages[0].list;var canvas=document.createElement('canvas');canvas.width=700;canvas.height=100;document.body.appendChild(canvas);var ctx=canvas.getContext('2d');ctx.fillText(list[1].parameters[0],10,20);ctx.fillText(list[2].parameters[0],10,50);var pixels=ctx.getImageData(0,0,700,100).data;var ok=window.originalGuardRan&&window.originalPluginsRan&&/puerta|port[oó]n|verja/i.test(list[1].parameters[0])&&/puente/i.test(list[2].parameters[0])&&pixels.some(function(v,i){return i%4===3&&v>0;});fs.writeFileSync(p.join(nw.App.startPath,'r44-json-native.txt'),ok?'PASS':'FAIL');nw.App.quit();\n"
+ mainSource:="var fs=require('fs'),p=require('path');var map=JSON.parse(fs.readFileSync(p.join(nw.App.startPath,'www','data','Map001.json'),'utf8'));var list=map.events[1].pages[0].list;var canvas=document.createElement('canvas');canvas.width=700;canvas.height=100;document.body.appendChild(canvas);var ctx=canvas.getContext('2d');ctx.fillText(list[1].parameters[0],10,20);ctx.fillText(list[2].parameters[0],10,50);var pixels=ctx.getImageData(0,0,700,100).data;var sys=JSON.parse(fs.readFileSync(p.join(nw.App.startPath,'www','data','System.json'),'utf8'));var menu=sys.terms.commands.join('|')==='Objetos|Habilidades|Opciones|Guardar';var choice=list[3].parameters[0][0]==='Sí'&&list[4].parameters[1]==='Sí'&&list[6].parameters[1]==='No';var ok=menu&&choice&&window.originalGuardRan&&window.originalPluginsRan&&/puerta|port[oó]n|verja/i.test(list[1].parameters[0])&&/puente/i.test(list[2].parameters[0])&&pixels.some(function(v,i){return i%4===3&&v>0;});fs.writeFileSync(p.join(nw.App.startPath,'r44-json-native.txt'),ok?'PASS':'FAIL');nw.App.quit();\n"
  if profile!="two_active"{
   mainSource=strings.Replace(mainSource,"window.originalGuardRan&&window.originalPluginsRan","window.coreReady&&!window.originalGuardRan&&!window.extraFixtureRan&&window.originalPluginsRan",1)
  }
@@ -75,17 +98,23 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
  reportFile:=filepath.Join(dest,"IA Traductora","install","mv-json","report.json")
  raw,e:=os.ReadFile(reportFile);if e!=nil{t.Fatal(e)}
  var report mvJSONReport
- if json.Unmarshal(raw,&report)!=nil||report.Lines!=2||report.New!=2{t.Fatalf("unexpected translation counts %+v",report)}
+ if json.Unmarshal(raw,&report)!=nil||report.Lines!=2||report.New!=2||report.ChoiceLabels!=1||report.ChoiceGroups!=1{t.Fatalf("unexpected translation counts %+v",report)}
  localized,e:=os.ReadFile(filepath.Join(dest,"www","data","Map001.json"))
  if e!=nil{t.Fatal(e)}
  if n,e:=mvJSONVerifyMap([]byte(mvJSONFixtureMap),localized);e!=nil||n!=2{t.Fatal("localized structure",n,e)}
  backup,e:=os.ReadFile(filepath.Join(dest,"IA Traductora","install","mv-json","original-Map001.json"))
  if e!=nil||!bytes.Equal(backup,[]byte(mvJSONFixtureMap)){t.Fatal("exact map backup missing",e)}
  for src,want:=range original{
-  if src==mapPath{continue}
+  if src==mapPath||src==filepath.Join(content,"data","System.json"){continue}
   rel,e:=filepath.Rel(root,src);if e!=nil{t.Fatal(e)}
   got,e:=digestFile(filepath.Join(dest,rel));if e!=nil||got!=want{t.Fatal("copied startup changed",rel,e)}
  }
+ systemBackup,e:=os.ReadFile(filepath.Join(dest,"IA Traductora","install","mv-json","original-System.json"))
+ originalSystem,e2:=os.ReadFile(filepath.Join(content,"data","System.json"))
+ if e!=nil||e2!=nil||!bytes.Equal(systemBackup,originalSystem){t.Fatal("system backup missing or changed")}
+ var presentation struct{Translation mvJSONReport `json:"translation"`}
+ presentationRaw,e:=os.ReadFile(filepath.Join(dest,"IA Traductora","install","mv-json","presentation.json"))
+ if e!=nil||json.Unmarshal(presentationRaw,&presentation)!=nil||presentation.Translation.Menu!=4{t.Fatal("presentation receipt invalid",e)}
  for _,n:=range []string{"guard.bin","plugins.js"}{
   src:=filepath.Join(root,"www","js",n)
   if _,e=os.Lstat(src);os.IsNotExist(e){

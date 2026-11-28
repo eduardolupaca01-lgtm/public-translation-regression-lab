@@ -57,6 +57,40 @@ class PilotTests(unittest.TestCase):
         doc=fixture();original=copy.deepcopy(doc)
         p.localize_map(doc,{"Aster"},lambda keys:({key:r"\V[1]Injected" for key in keys},{"new_translations":0,"cache_hits":0}),native_quality_reason)
         self.assertEqual(doc,original)
+    def test_nested_choices_and_no_executable_labels(self):
+        rows=[
+            {"code":102,"indent":0,"parameters":[["Yes","No"],1,0,2,0]},
+            {"code":402,"indent":0,"parameters":[0,"Yes"]},
+            {"code":102,"indent":1,"parameters":[["See Intro","Skip"],1,0,2,0]},
+            {"code":402,"indent":1,"parameters":[0,"See Intro"]},
+            {"code":402,"indent":1,"parameters":[1,"Skip"]},
+            {"code":404,"indent":1,"parameters":[]},
+            {"code":402,"indent":0,"parameters":[1,"No"]},
+            {"code":404,"indent":0,"parameters":[]},
+            {"code":102,"indent":0,"parameters":[["Yes","hide_if(1)"],1,0,2,0]},
+            {"code":402,"indent":0,"parameters":[0,"Yes"]},
+            {"code":402,"indent":0,"parameters":[1,"hide_if(1)"]},
+            {"code":404,"indent":0,"parameters":[]},
+        ]
+        doc={"events":[{"pages":[{"list":rows}]}]}
+        stats=p.localize_map(doc,set(),lambda keys:({},{"new_translations":0,"cache_hits":0}),native_quality_reason)
+        self.assertEqual(stats["choice_groups"],2)
+        self.assertEqual(stats["choice_labels"],3)
+        self.assertEqual(rows[0]["parameters"],[["Sí","No"],1,0,2,0])
+        self.assertEqual(rows[1]["parameters"],[0,"Sí"])
+        self.assertEqual(rows[2]["parameters"][0],["Ver introducción","Omitir"])
+        self.assertEqual(rows[3]["parameters"],[0,"Ver introducción"])
+        self.assertEqual(rows[8]["parameters"][0],["Yes","hide_if(1)"])
+    def test_wrap_preserves_controls_and_every_word(self):
+        raw=r"\C[2]\N[1] La puerta de madera está cerca del puente y debemos esperar hasta el amanecer.\C[0]"
+        out,breaks,warnings=p.wrap_display(raw)
+        self.assertGreater(breaks,0)
+        self.assertEqual(warnings,0)
+        self.assertEqual(out.replace("\n"," "),raw)
+        self.assertEqual([x for x in p.CONTROL.findall(out) if x!="\n"],p.CONTROL.findall(raw))
+        self.assertTrue(all(p.estimated_width(line)<=p.WRAP_PIXELS for line in out.split("\n")))
+        short="Cruza el puente."
+        self.assertEqual(p.wrap_display(short),(short,0,0))
     def test_malformed_map_and_duplicate_json(self):
         with self.assertRaises(ValueError):list(p.display_lines({"events":[{"pages":[{"list":[{"code":401,"indent":0,"parameters":[]}]}]}]}))
         with self.assertRaises(ValueError):p.decode(b'{"x":1,"x":2}')

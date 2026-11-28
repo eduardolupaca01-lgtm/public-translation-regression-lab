@@ -124,6 +124,7 @@ type iaUI struct{
     webBtn uintptr
     cloneAllowed bool
     jsonPilot bool
+    jsonSummary string
     resultGame string
     titleLabel uintptr
     sectionLabel uintptr
@@ -366,7 +367,7 @@ func iaStartJSONPilot(){
     ui:=&iaCurrentUI
     if ui.busy||!ui.jsonPilot||ui.gameFile==""{return}
     yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
-      uintptr(unsafe.Pointer(iaUTF16("Cierra el juego. Se creará una carpeta independiente junto al original, con sus archivos y el mapa inicial traducido. No se tocarán los binarios ni se instalará F10. Si el juego no admite estos datos, usa el original. ¿Crear copia de prueba?"))),
+      uintptr(unsafe.Pointer(iaUTF16("Cierra el juego. Se creará una carpeta independiente junto al original, con sus archivos, menú nativo, diálogos y elecciones del mapa inicial traducidos. No se tocarán los binarios. F10 solo estará disponible en Servidor para ver el estado. Si el juego no admite estos datos, usa el original. ¿Crear copia de prueba?"))),
       uintptr(unsafe.Pointer(iaUTF16("R44 - copia JSON de prueba"))),0x24|0x100)
     if yes!=6{return}
     ui.busy=true
@@ -386,7 +387,7 @@ func iaStartJSONPilot(){
         pkg,e:=readPackage(executable);if e!=nil{info=e.Error();return};defer pkg.Close()
         path,report,e:=mvJSONCopyPilot(game,pkg)
         if e!=nil{info=e.Error();return}
-        final=path;info=fmt.Sprintf("IA_MV_JSON_COPIA_LISTA|%d",report.Lines)
+        final=path;info=fmt.Sprintf("IA_MV_JSON_COPIA_LISTA|Diálogos: %d · Elecciones: %d · Menú: %d · Ajustes de línea: %d · Avisos de ancho: %d",report.Lines,report.ChoiceLabels,report.Menu,report.Wrapped,report.FitWarnings)
     }()
 }
 func iaStartClone(){
@@ -585,9 +586,10 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             iaSet(ui.input,newGame);iaSet(ui.install,"2. INSTALAR TRADUCTOR")
             iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
             lines:=strings.TrimPrefix(result,"IA_MV_JSON_COPIA_LISTA|")
-            iaLog("[IA_MV_JSON_COPIA_LISTA] "+lines+" líneas del mapa inicial traducidas. Abre el EXE de la nueva copia; no requiere F10.")
-            iaSet(ui.status,"Copia JSON lista. Compatibilidad real pendiente.")
-            iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16("Copia de prueba lista:\n"+newGame+"\n\nAbre ese EXE y empieza una partida. El original permanece intacto."))),uintptr(unsafe.Pointer(iaUTF16("Servidor R44"))),0x40)
+            ui.jsonSummary=lines+"\n\n"+newGame+"\n\nModo JSON previo al juego. F10 en esta ventana consulta el estado; no es un complemento del juego."
+            iaLog("[IA_MV_JSON_COPIA_LISTA] "+lines+". Abre el EXE de la nueva copia. F10 en Servidor: estado.")
+            iaSet(ui.status,"Copia JSON lista. F10 en Servidor: estado.")
+            iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16("Copia de prueba lista:\n"+ui.jsonSummary+"\n\nAbre el EXE de la copia. El original permanece intacto."))),uintptr(unsafe.Pointer(iaUTF16("Servidor R44"))),0x40)
         }else if code=="IA_WEB_COPIA_LISTA"&&newGame!=""{
             ui.gameFile="";ui.jsonPilot=false;ui.cloneAllowed=false;iaSet(ui.install,"2. INSTALAR TRADUCTOR");iaSet(ui.input,newGame)
             iaEnableWindow.Call(ui.install,0);iaEnableWindow.Call(ui.recoverBtn,0);iaEnableWindow.Call(ui.cloneBtn,0)
@@ -672,6 +674,14 @@ func runUI(){
     for {
         success,_,_:=iaGetMessage.Call(uintptr(unsafe.Pointer(&msg)),0,0,0)
         if int32(success)<=0{break}
+        // F10 is local to this UI message loop. No global hotkey,
+        // hooks, process injection, or interception inside a game.
+        if msg.Message==0x0100&&msg.WParam==0x79&&ui.jsonSummary!=""&&!ui.busy{
+            if msg.LParam&(1<<30)==0{
+                iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16(ui.jsonSummary))),uintptr(unsafe.Pointer(iaUTF16("IA Traductora · Estado JSON"))),0x40)
+            }
+            continue
+        }
         iaTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
         iaDispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))
     }

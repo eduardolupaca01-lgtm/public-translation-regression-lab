@@ -1,13 +1,15 @@
 """R44: conservative offline translation of a copied MV starting map.
 
-Only event display lines (401/405) are eligible. Do not run game code,
-change scripts/controls/choices or access compiled plugins. The worker
-produces a candidate inside its owned journal, not a modified game file.
+Only event display lines (401/405) and verified native choice labels
+(102/402 pairs) are eligible. Do not run game code, change event indices,
+scripts, controls, or access compiled plugins. Output is a candidate in
+the owned journal, not a modified game file.
 """
 import hashlib
 import json
 import re
 import stat
+import unicodedata
 from pathlib import Path
 
 SCHEMA="ia-mv-json-pilot-v1"
@@ -81,26 +83,121 @@ def plan(raw,names):
             units.append((i,piece[:start],body,piece[start+len(body):],lang))
     return (parts,units) if units else None
 
-def display_lines(doc):
+def event_lists(doc):
     if not isinstance(doc,dict) or not isinstance(doc.get("events"),list):raise error("MAPA_INVALIDO")
     for event in doc["events"]:
         if event is None:continue
         if not isinstance(event,dict) or not isinstance(event.get("pages"),list):raise error("MAPA_INVALIDO")
         for page in event["pages"]:
             if not isinstance(page,dict) or not isinstance(page.get("list"),list):raise error("MAPA_INVALIDO")
-            for cmd in page["list"]:
-                if not isinstance(cmd,dict):raise error("MAPA_INVALIDO")
-                if type(cmd.get("code")) is not int or type(cmd.get("indent")) is not int:raise error("MAPA_INVALIDO")
-                if cmd["code"] not in (401,405):continue
-                params=cmd.get("parameters")
-                if not isinstance(params,list) or len(params)!=1 or not isinstance(params[0],str):raise error("MAPA_INVALIDO")
-                yield params
+            rows=page["list"]
+            for cmd in rows:
+                if not isinstance(cmd,dict) or type(cmd.get("code")) is not int or type(cmd.get("indent")) is not int:
+                    raise error("MAPA_INVALIDO")
+            yield rows
+
+def display_entries(doc):
+    for rows in event_lists(doc):
+        for cmd in rows:
+            if cmd["code"] not in (401,405):continue
+            params=cmd.get("parameters")
+            if not isinstance(params,list) or len(params)!=1 or not isinstance(params[0],str):raise error("MAPA_INVALIDO")
+            yield cmd["code"],params
+
+def display_lines(doc):
+    for _,params in display_entries(doc):yield params
+
+# Choice condition plugins can embed executable expressions or tags in a
+# label. Only plain, short, single-line labels qualify. If any label or
+# branch is not a standard native shape, leave its entire group unchanged.
+CHOICE_UNSAFE=re.compile(r"[\\<>{}\[\]()%:\x00-\x1f]|https?://|www\.|(?:\b(?:hide_if|show_if|enable_if|disable_if|en|if)\s*\()")
+CHOICE_FIXED={"Yes":"Sí","No":"No","See Intro":"Ver introducción","Skip":"Omitir",
+              "Continue":"Continuar","Cancel":"Cancelar","Back":"Volver","Leave":"Salir",
+              "Accept":"Aceptar","Decline":"Rechazar","Talk":"Hablar","Wait":"Esperar"}
+def plain_choice(value):
+    return isinstance(value,str) and 0<len(value)<=180 and value==value.strip() and not CHOICE_UNSAFE.search(value)
+
+def choice_groups(doc):
+    for rows in event_lists(doc):
+        stack=[]
+        for cmd in rows:
+            code,indent,params=cmd["code"],cmd["indent"],cmd.get("parameters")
+            if code==102:
+                while stack and stack[-1]["indent"]>=indent:stack.pop()
+                labels=params[0] if isinstance(params,list) and len(params)==5 else None
+                valid=(isinstance(labels,list) and 1<=len(labels)<=24 and all(plain_choice(x) for x in labels)
+                       and all(type(x) is int for x in params[1:]))
+                stack.append({"indent":indent,"labels":labels,"branches":{},"valid":valid})
+            elif code in (402,403,404):
+                # Do not infer a pairing across an unclosed nested block.
+                if not stack or stack[-1]["indent"]!=indent:
+                    for group in stack:group["valid"]=False
+                    continue
+                group=stack[-1]
+                if code==402:
+                    labels=group["labels"]
+                    valid=(group["valid"] and isinstance(params,list) and len(params)==2 and type(params[0]) is int
+                           and 0<=params[0]<len(labels) and params[0] not in group["branches"] and params[1]==labels[params[0]])
+                    if valid:group["branches"][params[0]]=params
+                    else:group["valid"]=False
+                elif code==403:
+                    if params!=[]:group["valid"]=False
+                else:
+                    stack.pop()
+                    if group["valid"] and params==[] and len(group["branches"])==len(group["labels"]):
+                        yield group["labels"],group["branches"]
+
+# A conservative width budget, not the game's font measurement. Native
+# line breaks are inserted only at existing spaces, never inside a word
+# or escape token. Actual variable/actor substitutions may still be wider.
+WRAP_PIXELS=500
+def estimated_width(text):
+    total=0
+    for i,part in enumerate(CONTROL.split(text)):
+        if i%2:
+            upper=part.upper()
+            if upper.startswith(("\\N[","\\P[","\\V[")):total+=160
+            elif upper.startswith("\\I["):total+=36
+            elif upper=="\\G":total+=80
+            elif upper=="\\\\":total+=18
+            continue
+        for ch in part:
+            if unicodedata.combining(ch):continue
+            if ch==" ":total+=9
+            elif ch in "ilI.,:;!|'’":total+=9
+            elif unicodedata.east_asian_width(ch) in ("W","F"):total+=28
+            elif ch in "mwMW@%":total+=27
+            elif ch.isupper():total+=23
+            else:total+=17
+    return total
+
+def wrap_display(value):
+    lines=re.split(r"(\r\n|\r|\n)",value)
+    breaks=0
+    warnings=0
+    for i in range(0,len(lines),2):
+        line=lines[i]
+        if estimated_width(line)<=WRAP_PIXELS:continue
+        # No character truncation, no artificial spaces in escape codes,
+        # and no conversion of the game's original line separators.
+        pieces=re.split(r"( +)",line)
+        out=pieces[0]
+        row=pieces[0]
+        for j in range(1,len(pieces),2):
+            spaces,word=pieces[j],pieces[j+1]
+            if row.strip() and word and estimated_width(row+spaces+word)>WRAP_PIXELS:
+                out+="\n"+word;row=word;breaks+=1
+            else:
+                out+=spaces+word;row+=spaces+word
+        if any(estimated_width(x)>WRAP_PIXELS for x in out.split("\n")):warnings+=1
+        lines[i]=out
+    return "".join(lines),breaks,warnings
 
 def localize_map(doc,names,resolve,quality):
     planned=[]
     keys={}
     skipped=0
-    for params in display_lines(doc):
+    for code,params in display_entries(doc):
         p=plan(params[0],names)
         if p is None:
             skipped+=1
@@ -110,11 +207,27 @@ def localize_map(doc,names,resolve,quality):
             skipped+=1
             continue
         for unit in p[1]:keys[(unit[4],unit[2])]=None
-        planned.append((params,p))
+        planned.append((code,params,p))
+    choices=[]
+    for labels,branches in choice_groups(doc):
+        items=[]
+        for at,value in enumerate(labels):
+            if value in CHOICE_FIXED:
+                items.append((at,CHOICE_FIXED[value],None))
+            else:
+                lang=source(value,names)
+                if lang:items.append((at,None,(lang,value)))
+        fresh={key for _,_,key in items if key is not None}-keys.keys()
+        if len(keys)+len(fresh)>MAX_UNITS:continue
+        for key in fresh:keys[key]=None
+        if items:choices.append((labels,branches,items))
     answers,stats=resolve(list(keys))
     changed=0
     rejected=0
-    for params,(parts,units) in planned:
+    wrapped=0
+    added_breaks=0
+    fit_warnings=0
+    for code,params,(parts,units) in planned:
         output=parts[:]
         valid=True
         for i,lead,body,tail,lang in units:
@@ -128,10 +241,29 @@ def localize_map(doc,names,resolve,quality):
             continue
         value="".join(output)
         if value!=params[0]:
+            if code==401:
+                value,breaks,warnings=wrap_display(value)
+                wrapped+=int(breaks>0);added_breaks+=breaks;fit_warnings+=warnings
             params[0]=value
             changed+=1
+    groups=0
+    labels_changed=0
+    for labels,branches,items in choices:
+        updates={}
+        for at,fixed,key in items:
+            value=fixed if key is None else answers.get(key)
+            if not plain_choice(value) or estimated_width(value)>WRAP_PIXELS or (key and quality(key[0],key[1],value)):
+                updates=None;break
+            if value!=labels[at]:updates[at]=value
+        if not updates:continue
+        for at,value in updates.items():
+            labels[at]=value
+            branches[at][1]=value
+        groups+=1;labels_changed+=len(updates)
     return {"translated_lines":changed,"eligible_lines":len(planned),
-            "skipped_lines":skipped,"rejected_lines":rejected,"unique_units":len(keys),**stats}
+            "skipped_lines":skipped,"rejected_lines":rejected,"unique_units":len(keys),
+            "choice_groups":groups,"choice_labels":labels_changed,"wrapped_lines":wrapped,
+            "added_breaks":added_breaks,"fit_warnings":fit_warnings,**stats}
 
 def resolve_local(keys,neural,memory,quality):
     answers={}
@@ -208,7 +340,7 @@ def run_pilot(game,engine,neural_factory,memory_factory,quality):
         stats=localize_map(doc,names,lambda keys:resolve_local(keys,neural,memory,quality),quality)
     finally:
         memory.close()
-    if stats["translated_lines"]<=0:raise error("SIN_TRADUCCIONES_VALIDAS")
+    if stats["translated_lines"]+stats["choice_labels"]<=0:raise error("SIN_TRADUCCIONES_VALIDAS")
     result=json.dumps(doc,ensure_ascii=False,separators=(",",":"),allow_nan=False).encode("utf8")
     if len(result)>MAX_BYTES:raise error("RESULTADO_EXCESIVO")
     if digest(regular(source_path,MAX_BYTES))!=request["before_sha256"]:raise error("ORIGEN_CAMBIADO")
