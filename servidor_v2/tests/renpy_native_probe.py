@@ -50,7 +50,7 @@ init 999 python hide:
         # not just the deterministic presentation fake.
         actual_client=ia_native_client.Client(config.basedir)
         import re
-        if not re.match(r'^[0-9a-f]{32}
+        if not re.match(r'^[0-9a-f]{32}$',actual_client.nonce): raise AssertionError('invalid client nonce')
         if actual_client.nonce==ia_native_client.new_nonce(): raise AssertionError('repeated nonce')
         actual_client.close()
         ia_native_client.install(engine,ia_test_client)
@@ -93,123 +93,7 @@ label start:
                 if config.say_menu_text_filter(u'Hello world')!=u'Hola mundo': raise AssertionError('say/menu filter mismatch')
             from renpy.display.behavior import Input
             entered = Input(default=u'Hello world')
-            if entered.content!=u'Hello world': raise AssertionError("player input altered")
-            with io.open(os.path.join(config.basedir,"native-result.txt"),"w",encoding="utf-8") as report:
-                report.write(u"NATIVE_TEXT_CONTRACT_OK")
-        except Exception:
-            import traceback
-            with open(os.path.join(config.basedir,"native-error.txt"),"wb") as report:
-                report.write(traceback.format_exc().encode("utf-8","backslashreplace"))
-    $ renpy.quit()
-    return
-'''
-def diagnostics(root):
-    for name in ("native-init-error.txt","native-error.txt","native-init-ok.txt","traceback.txt","errors.txt","log.txt"):
-        p=root/name
-        if p.exists():
-            print(name, p.read_text(encoding="utf-8-sig",errors="replace")[-10000:], flush=True)
-
-def main():
-    # Windows CI's legacy cp1252 output otherwise masks the Ren'Py exception.
-    if hasattr(sys.stdout,"reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8",errors="backslashreplace")
-        sys.stderr.reconfigure(encoding="utf-8",errors="backslashreplace")
-    parser=argparse.ArgumentParser()
-    parser.add_argument("--sdk-root",type=pathlib.Path,required=True)
-    parser.add_argument("--version",required=True)
-    args=parser.parse_args()
-    executables=list(args.sdk_root.rglob("renpy.exe"))
-    candidates=[p for p in executables if (p.parent/"renpy").is_dir() and (p.parent/"lib").is_dir()]
-    if len(candidates)!=1:
-        raise RuntimeError("Expected a single official SDK executable: %d"%len(candidates))
-    with tempfile.TemporaryDirectory(prefix="ia-renpy-native-",ignore_cleanup_errors=True) as folder:
-        root=pathlib.Path(folder)
-        game=root/"game";game.mkdir()
-        (game/"script.rpy").write_text(SCRIPT,encoding="utf-8")
-        shutil.copyfile(SOURCE,root/"ia_native_client.py")
-        env=os.environ.copy()
-        env["RENPY_DISABLE_JOYSTICK"]="1"
-        env["RENPY_SKIP_MAIN_MENU"]="1"
-        if args.version=="6.99.14":
-            # Official classic renderer fallback for the CI's OpenGL 1.1
-            # adapter. Only the synthetic scene, never a player's game.
-            env["RENPY_RENDERER"]="sw"
-            env["RENPY_PERFORMANCE_TEST"]="0"
-        # The host PYTHONUTF8 setting is for the outer diagnostic only;
-        # do not inject Python 3 settings into a bundled legacy interpreter.
-        env.pop("PYTHONUTF8",None)
-        env.pop("PYTHONIOENCODING",None)
-        proc=subprocess.Popen([str(candidates[0]),str(root)],cwd=str(candidates[0].parent),env=env)
-        try:
-            deadline=time.monotonic()+120
-            marker=root/"native-result.txt"
-            err=root/"native-error.txt"
-            while time.monotonic()<deadline:
-                if err.exists() or (root/"native-init-error.txt").exists() or (root/"traceback.txt").exists() or (root/"errors.txt").exists():
-                    diagnostics(root)
-                    raise RuntimeError("RenPy reported a native initialization or execution error")
-                # Legacy Windows launcher can exit successfully before its
-                # delegated interpreter emits the actual game result. A zero
-                # launcher exit is never an acceptance result.
-                if proc.poll() is not None and proc.returncode!=0 and not marker.exists():
-                    diagnostics(root)
-                    raise RuntimeError("RenPy launcher failed: "+str(proc.returncode))
-                if marker.exists() and marker.read_text(encoding="utf-8")=="NATIVE_TEXT_CONTRACT_OK":
-                    print("REAL_SDK_NATIVE_CONTRACT",args.version,"PASS (deterministic responses, not OPUS)")
-                    return
-                time.sleep(.5)
-            diagnostics(root)
-            raise RuntimeError("Native marker missing for "+args.version)
-        finally:
-            if proc.poll() is None:
-                subprocess.run(["taskkill","/PID",str(proc.pid),"/T","/F"],capture_output=True)
-                proc.wait(timeout=15)
-if __name__=="__main__":
-    main()
-,actual_client.nonce): raise AssertionError('invalid client nonce')
-        if actual_client.nonce==ia_native_client.new_nonce(): raise AssertionError('repeated nonce')
-        actual_client.close()
-        ia_native_client.install(engine,ia_test_client)
-    except Exception:
-        import traceback
-        with open(os.path.join(config.basedir,"native-init-error.txt"),"wb") as report:
-            report.write(traceback.format_exc().encode("utf-8","backslashreplace"))
-        raise
-    with open(os.path.join(config.basedir,"native-init-ok.txt"),"wb") as report:
-        report.write(b"INIT_OK")
-
-label main_menu:
-    return
-
-label start:
-    python:
-        try:
-            import io
-            import os
-            try:
-                import builtins as py_builtins
-            except ImportError:
-                import __builtin__ as py_builtins
-            native = renpy.text.text.Text
-            pairs = [(u'Hello world',u'Hola mundo'),
-                (u'She said "Hello"',u'Ella dijo "Hola"'),
-                (u'Continue',u'Continuar'),
-                (u'Quest complete',u'Mision completada'),
-                (u'Inventory',u'Inventario')]
-            for original, expected in pairs:
-                displayable = native(original)
-                actual=displayable.text
-                if isinstance(actual,(py_builtins.list,py_builtins.tuple)):
-                    # Ren'Py store shadows Python's list on modern runtimes.
-                    # Require the whole native sequence, not only its first item.
-                    if py_builtins.tuple(actual)!=(expected,): raise AssertionError("native Text did not receive exact translation: "+repr(actual))
-                else:
-                    if actual!=expected: raise AssertionError("native Text did not receive translation: "+repr(actual))
-            if hasattr(config,"say_menu_text_filter"):
-                if config.say_menu_text_filter(u'Hello world')!=u'Hola mundo': raise AssertionError('say/menu filter mismatch')
-            from renpy.display.behavior import Input
-            entered = Input(default=u'Hello world')
-            if entered.content!=u'Hello world': raise AssertionError("player input altered")
+            if entered.content!=u'Hello world': raise AssertionError('player input altered')
             with io.open(os.path.join(config.basedir,"native-result.txt"),"w",encoding="utf-8") as report:
                 report.write(u"NATIVE_TEXT_CONTRACT_OK")
         except Exception:

@@ -1,4 +1,3 @@
-# -*- coding: ascii -*-
 # Frozen Python 2.3 launchers may execfile with different globals/locals.
 import os
 namespace={"__name__":"ia_renpy_classic_start"}

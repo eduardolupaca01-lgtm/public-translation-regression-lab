@@ -140,6 +140,13 @@ class ClassicRenpyR1(unittest.TestCase):
     def classic(self):
         s=importlib.util.spec_from_file_location("classic_client",BASE/"cmd/servidor/renpy_assets/classic_client.py")
         m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+    def test_classic_visible_markup_and_resource_guards(self):
+        m=self.classic()
+        for source in ("{b}Save{/b}", "{i}Continue{/i}", "Hello {image=images/star.png}", "Hello [name]", "{b}Save{/b} [name]"):
+            self.assertTrue(m.visible(source),source)
+        for source in ("{b}{/b}", "{image=images/star.png}", "[name]", "images/star.png", "{b}images/star.png{/b}", "http://example.org", "FLAG_QUEST"):
+            self.assertFalse(m.visible(source),source)
+        self.assertEqual(m.visible_probe("{b}Save{/b} [name]"),"Save ")
     def test_old_native_constructor_and_setter(self):
         from types import SimpleNamespace as NS
         m=self.classic()
@@ -151,7 +158,7 @@ class ClassicRenpyR1(unittest.TestCase):
             def __init__(self):self.seen=[]
             def enqueue(self,s):self.seen.append(s)
             def translate(self,s,foreground=True):
-                return {"Hello":"Hola","Continue":"Continuar","Save":"Guardar"}.get(s,s)
+                return {"Hello":"Hola","Continue":"Continuar","Save":"Guardar","{b}Save{/b}":"{b}Guardar{/b}"}.get(s,s)
             def start_prefetch(self):pass
             def close(self):pass
         Say=type("Say",(),{});say=Say();say.what="Hello"
@@ -161,6 +168,7 @@ class ClassicRenpyR1(unittest.TestCase):
         f=Fake();m.install(e,f)
         self.assertEqual(f.seen,["Hello","Continue"])
         self.assertEqual(Text("Hello").text,"Hola")
+        self.assertEqual(Text("{b}Save{/b}").text,"{b}Guardar{/b}")
         t=Text("Continue");self.assertEqual(t.text,"Continuar")
         t.set_text(new_text="Save");self.assertEqual(t.text,"Guardar")
         self.assertEqual(Input("Hello").text,"Hello")
@@ -189,9 +197,10 @@ class ClassicRenpyR1(unittest.TestCase):
             try:
                 self.assertEqual(c.translate('She said "Hello"'),'Ella dijo "Hola"')
                 self.assertEqual(c.translate('「おはよう。」'),'「Buenos días.」')
+                self.assertEqual(c.translate('{b}Save{/b}'),'{b}Guardar{/b}')
                 self.assertEqual(c.translate('She said "Hello"'),'Ella dijo "Hola"')
-                self.assertEqual(service.translated,2)
-                self.assertEqual(c.sequence,2)
+                self.assertEqual(service.translated,3)
+                self.assertEqual(c.sequence,3)
             finally:
                 c.close()
                 for bridge,thread in workers:
@@ -217,5 +226,39 @@ class ClassicRenpyR1(unittest.TestCase):
                 self.assertEqual((folder/"response-00000001.txt").read_bytes(),prefix+b"Hola")
                 self.assertFalse(req.exists())
             finally:s.close();bridge.cleanup()
+
+class SDKProbeSourceTests(unittest.TestCase):
+    def test_probe_sources_compile_and_keep_checks_active(self):
+        import ast
+        import re
+        import textwrap
+        files=(BASE/"tests/renpy_native_probe.py",BASE.parent/".github/scripts/renpy_classic_sdk_probe.py")
+        for path in files:
+            source=path.read_text(encoding="utf-8")
+            tree=ast.parse(source,filename=str(path))
+            compile(tree,str(path),"exec")
+            scripts=[ast.literal_eval(n.value) for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="SCRIPT" for t in n.targets)]
+            self.assertEqual(len(scripts),1,str(path))
+            lines=scripts[0].splitlines()
+            blocks=[]
+            for i,line in enumerate(lines):
+                if not re.match(r"^\s*(?:init\s+\d+\s+)?python(?:\s+hide)?:\s*$",line):continue
+                indent=len(line)-len(line.lstrip())
+                end=i+1
+                while end<len(lines):
+                    v=lines[end]
+                    if v.strip() and len(v)-len(v.lstrip())<=indent:break
+                    end+=1
+                code=textwrap.dedent("\n".join(lines[i+1:end]))
+                block=ast.parse(code,filename=str(path))
+                self.assertFalse(any(isinstance(n,ast.Assert) for n in ast.walk(block)),str(path))
+                blocks.append(block)
+            self.assertTrue(blocks,str(path))
+            self.assertTrue(any(isinstance(n,ast.Raise) for block in blocks for n in ast.walk(block)),str(path))
+        for name in ("classic_client.py","classic_start.py","classic_entry.py"):
+            data=(BASE/"cmd/servidor/renpy_assets"/name).read_bytes()
+            data.decode("ascii")
+            self.assertNotIn(b"coding:",data.splitlines()[0])
+            compile(data,name,"exec")
 
 if __name__=="__main__":unittest.main()

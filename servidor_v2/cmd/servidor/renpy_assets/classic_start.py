@@ -1,4 +1,3 @@
-# -*- coding: ascii -*-
 """Pre-parser compatibility for the original Ren'Py 4/5 desktop runtime.
 Python 2.3 syntax. No engine, archive, or original script is rewritten.
 """

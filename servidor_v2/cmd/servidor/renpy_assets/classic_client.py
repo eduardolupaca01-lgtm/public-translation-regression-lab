@@ -1,4 +1,3 @@
-# -*- coding: ascii -*-
 """Original classic Ren'Py client. Python 2.3 grammar and minimal stdlib.
 
 No JSON, hashlib, subprocess, uuid, socket, or third-party module required.
@@ -68,11 +67,36 @@ def as_text(value):
             return None
     return None
 
+def visible_probe(s):
+    """Remove controls ONLY from the eligibility probe, never from the text
+    sent to the worker. A closing {/b} is not a filesystem path.
+    The worker separately validates exact control preservation."""
+    result=[]
+    i=0
+    while i<len(s):
+        if s.startswith("{{",i) or s.startswith("[[",i):
+            result.append(s[i])
+            i+=2
+            continue
+        if s[i]=="{":
+            end=s.find("}",i+1)
+            if end>=0:
+                i=end+1
+                continue
+        if s[i]=="[":
+            end=s.find("]",i+1)
+            if end>=0:
+                i=end+1
+                continue
+        result.append(s[i])
+        i+=1
+    return u"".join(result)
+
 def visible(value):
     s=as_text(value)
     if s is None or not 0<len(s)<=32768:
         return False
-    v=s.strip()
+    v=visible_probe(s).strip()
     if not v or v.startswith("http://") or v.startswith("https://"):
         return False
     low=v.lower()
@@ -131,7 +155,7 @@ class Client(object):
     def __init__(self,root):
         self.root=root
         self.side=os.path.join(root,SIDE)
-        self.nonce=read_small(os.path.join(self.side,"classic-key.txt"),32).decode("ascii")
+        self.nonce=read_small(os.path.join(self.side,"classic-key.txt"),32).decode("utf-8")
         if not hex_string(self.nonce,32):
             raise ValueError("IA_RENPY_CLAVE_INVALIDA")
         self.session=os.path.join(self.side,"classic-session-"+self.nonce)
@@ -163,7 +187,7 @@ class Client(object):
             self.started=True
         while time.time()<deadline and not self.stopped:
             try:
-                raw=read_small(os.path.join(self.session,"ready.txt"),512).decode("ascii")
+                raw=read_small(os.path.join(self.session,"ready.txt"),512).decode("utf-8")
                 fields=raw.split("\n")
                 if len(fields)==4 and fields[0]==SCHEMA and fields[1]==self.nonce and fields[2]==str(os.getpid()) and hex_string(fields[3],64):
                     self.token=fields[3]
@@ -183,7 +207,7 @@ class Client(object):
             return None
         req=os.path.join(self.session,"request-"+seq+".txt")
         answer=os.path.join(self.session,"response-"+seq+".txt")
-        prefix=(self.token+"\n"+seq+"\n").encode("ascii")
+        prefix=(self.token+"\n"+seq+"\n").encode("utf-8")
         write_new(req,prefix+value.encode("utf-8"))
         while time.time()<deadline and not self.stopped:
             try:
