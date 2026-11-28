@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """Independent native Ren'Py client; Python 2.7 / 3 compatible."""
 from __future__ import unicode_literals
-import atexit
+try:
+    import atexit
+except ImportError:
+    atexit=None
 import collections
 import io
 import json
@@ -47,6 +50,17 @@ class Client(object):
         self.pending=collections.deque();self.queued=set()
         self.wake=threading.Event();self.stopped=False;self.thread=None
         self.rejected=0;self.fallback=0;self.detected=0
+        self.worker_diag=os.path.join(self.side,"worker-startup.json")
+        self.diagnostics=set()
+    def note(self,code):
+        # Fixed codes only. No game text, user paths, or credentials.
+        if code in self.diagnostics:return
+        self.diagnostics.add(code)
+        try:
+            with open(os.path.join(self.side,"client-startup.txt"),"ab") as report:
+                report.write((code+"\n").encode("ascii"))
+        except (IOError,OSError):
+            pass
     def get_session(self,deadline):
         if self.connection and self.proc and self.proc.poll() is None:return self.connection
         while CLOCK()<deadline:
@@ -61,10 +75,27 @@ class Client(object):
                 self.connection=None;self.nonce=new_nonce()
                 self.session=os.path.join(self.side,"session-"+self.nonce+".json")
                 exe=os.path.join(self.side,"engine","IATraductora.exe")
+                if not os.path.isfile(exe):
+                    self.note("IA_RENPY_MOTOR_NO_ENCONTRADO")
+                    self.cooldown=CLOCK()+5;return None
                 try:
-                    self.proc=subprocess.Popen([exe,"--renpy-root",self.root,"--renpy-session",self.nonce,
-                        "--parent-pid",str(os.getpid())],cwd=self.side,creationflags=0x08000000 if os.name=="nt" else 0)
-                except (OSError,ValueError):
+                    # The original game's embedded interpreter can leave
+                    # Python 2 runtime settings in its environment. Isolate
+                    # the child only; never change the game's environment.
+                    env=os.environ.copy()
+                    for key in ("PYTHONHOME","PYTHONPATH","PYTHONSTARTUP","_MEIPASS2"):
+                        env.pop(key,None)
+                    args=[exe,"--renpy-root",self.root,"--renpy-session",self.nonce,
+                          "--parent-pid",str(os.getpid()),"--diagnostic-file",self.worker_diag]
+                    self.proc=subprocess.Popen(args,cwd=self.side,env=env,
+                        creationflags=0x08000000 if os.name=="nt" else 0)
+                    self.note("IA_RENPY_MOTOR_INICIADO")
+                except Exception as exc:
+                    code=getattr(exc,"winerror",None) or getattr(exc,"errno",None)
+                    if isinstance(code,int) and 0<=code<=4294967295:
+                        self.note("IA_RENPY_MOTOR_INICIO_OS_"+str(code))
+                    else:
+                        self.note("IA_RENPY_MOTOR_INICIO_FALLO")
                     self.cooldown=CLOCK()+5;return None
             while CLOCK()<deadline and self.proc.poll() is None:
                 try:
@@ -72,9 +103,12 @@ class Client(object):
                     if (state.get("schema")==SCHEMA and state.get("nonce")==self.nonce and state.get("parent")==os.getpid()
                         and isinstance(state.get("port"),int) and 1024<=state["port"]<=65535
                         and re.match(r"^[0-9a-f]{64}$",state.get("token",""))):
-                        self.connection=state;return state
+                        self.connection=state;self.note("IA_RENPY_MOTOR_CONECTADO");return state
                 except (IOError,ValueError,TypeError):pass
                 time.sleep(.05)
+            if self.proc is not None and self.proc.poll() is not None:
+                self.note("IA_RENPY_MOTOR_SALIDA_"+str(self.proc.returncode & 0xffffffff))
+            else:self.note("IA_RENPY_MOTOR_ESPERANDO")
             self.cooldown=CLOCK()+1;return None
         finally:self.launch_lock.release()
     def request(self,value,deadline):
@@ -109,6 +143,10 @@ class Client(object):
         self.thread=threading.Thread(target=self.prefetch,name="IA-RenPy-inventory")
         self.thread.daemon=True;self.thread.start()
     def prefetch(self):
+        # Start the verified worker even if the game has only compiled RPA
+        # resources, or its native AST inventory is empty. No separate play button.
+        try:self.get_session(CLOCK()+25)
+        except Exception:self.note("IA_RENPY_MOTOR_CONEXION_FALLO")
         while not self.stopped:
             value=None
             with self.lock:
@@ -164,7 +202,7 @@ _installed=False
 def install(engine,client=None):
     global _installed
     if _installed:return None
-    _installed=True;client=client or Client(engine.config.basedir)
+    client=client or Client(engine.config.basedir)
     def foreground():
         try:
             if getattr(engine,"predicting",lambda:False)():return False
@@ -186,6 +224,9 @@ def install(engine,client=None):
     elif hasattr(config,"say_menu_text_filters"):
         config.say_menu_text_filters=list(config.say_menu_text_filters)+[transform]
     native=getattr(getattr(engine,"text",None),"text",None);text_cls=getattr(native,"Text",None)
+    if text_cls is None or not hasattr(text_cls,"set_text"):
+        raise ValueError("IA_RENPY_CLASE_TEXTO_NO_VERIFICADA")
+    _installed=True
     if text_cls is not None and hasattr(text_cls,"set_text"):
         previous=text_cls.set_text
         behavior=getattr(getattr(engine,"display",None),"behavior",None)
@@ -210,6 +251,11 @@ def install(engine,client=None):
             elif isinstance(value,list):value=[transform(x) if as_text(x) is not None else x for x in value]
             return previous(obj,value,*args,**kwargs)
         text_cls.set_text=set_text
-    for text in inventory(engine):client.enqueue(text)
-    client.start_prefetch();atexit.register(client.close)
+    try:
+        for text in inventory(engine):client.enqueue(text)
+    except Exception:
+        # Runtime hooks stay installed even with an unusual compiled AST.
+        if hasattr(client,"note"):client.note("IA_RENPY_INVENTARIO_PARCIAL")
+    client.start_prefetch()
+    if atexit is not None:atexit.register(client.close)
     return client

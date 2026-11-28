@@ -226,7 +226,7 @@ def handler(service):
             return self.send_json(200,{"text":service.translate(text)})
     return Handler
 
-def run_renpy(root,engine,nonce,parent,neural_factory,quality,monitor):
+def run_renpy(root,engine,nonce,parent,neural_factory,quality,monitor,checkpoint=lambda code:None):
     if not re.fullmatch("[0-9a-f]{32}",nonce) or parent<=0:raise ValueError("IA_RENPY_SESION_INVALIDA")
     side,identity,receipt=installation(root,engine)
     if receipt.get("profile")=="classic":
@@ -247,6 +247,8 @@ def run_renpy(root,engine,nonce,parent,neural_factory,quality,monitor):
         server.daemon_threads=False;server.block_on_close=True
         monitor(server,parent)
         atomic_json(session,{"schema":SCHEMA,"nonce":nonce,"port":server.server_port,"token":service.token,"parent":parent})
+        atomic_json(side/"status.json",service.status())
+        checkpoint("IA_RENPY_MOTOR_LISTO")
         server.serve_forever(poll_interval=.25)
     finally:
         if server is not None:server.server_close()

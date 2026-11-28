@@ -1283,8 +1283,10 @@ def main():
                 args.rpgxp_lab or args.check_models or args.mv_json_pilot or args.mv_json_direct):
                 raise ValueError("IA_RENPY_ARGUMENTOS_INVALIDOS")
             from renpy_runtime import run_renpy
+            write_startup_code(args.diagnostic_file,"IA_RENPY_MOTOR_VALIDANDO")
             run_renpy(args.renpy_root,engine,args.renpy_session,args.parent_pid,
-                      NeuralOPUS,native_quality_reason,monitor_game_lifetime)
+                      NeuralOPUS,native_quality_reason,monitor_game_lifetime,
+                      checkpoint=lambda code:write_startup_code(args.diagnostic_file,code))
             return
         if args.mv_json_pilot or args.mv_json_direct:
             if (args.mv_json_pilot and args.mv_json_direct) or args.rpgxp_lab or args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid:

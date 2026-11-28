@@ -15,6 +15,7 @@ import (
  "path/filepath"
  "sort"
  "strings"
+ "syscall"
 )
 
 // New, independent Ren'Py program. No game scripts, archives or saves are rewritten.
@@ -93,6 +94,13 @@ func renpyLock(root string)(func(),error){
  f,e:=os.OpenFile(p,os.O_CREATE|os.O_EXCL|os.O_WRONLY,0600);if e!=nil{return nil,errors.New("IA_RENPY_OPERACION_BLOQUEADA")}
  return func(){f.Close();os.Remove(p)},nil
 }
+// Allow recovery of the exact previously released modern assets, not arbitrary
+// files which merely claim ownership. Known LF and CRLF release hashes.
+func renpyPriorModern(m renpyReceipt)bool{
+ if m.Profile!=renpyModernProfile{return false}
+ return (m.Client=="dc159fe8d20894385b1c7804dff7cd1d5891e1f225b8d4c764539240c51956a8"&&m.Boot=="dd03fe41a71f5f321778b9684ee8a9f7f3d659d8a8172fc85dbe1069c19afc2d")||
+ (m.Client=="41ee8c5d2ba898e863cf2e1c278a0f39c7172461414ce3e7b4e4fdc2d30433fd"&&m.Boot=="0926373c6fcd744f6995431aa2f91cc566acb02f38695f5da36e130d0de17a9c")
+}
 func renpyReadReceipt(side string)(renpyReceipt,error){
  var m renpyReceipt
  p:=filepath.Join(side,"owner-v1.json");if !renpyDir(side)||!renpyFile(p){return m,errors.New("IA_RENPY_PROPIEDAD_NO_VERIFICADA")}
@@ -101,7 +109,7 @@ func renpyReadReceipt(side string)(renpyReceipt,error){
  if m.Profile==""{m.Profile=renpyModernProfile};if m.GameRel==""{m.GameRel="game"}
  if (m.Profile!=renpyModernProfile&&m.Profile!=renpyClassicProfile)||!renpyGameRelValid(m.GameRel){return m,errors.New("IA_RENPY_PROPIEDAD_NO_VERIFICADA")}
  client,boot:=renpyAssets(m.Profile)
- if m.Client!=hash(client)||m.Boot!=hash(boot){return m,errors.New("IA_RENPY_PROPIEDAD_NO_VERIFICADA")}
+ if (m.Client!=hash(client)||m.Boot!=hash(boot))&&!renpyPriorModern(m){return m,errors.New("IA_RENPY_PROPIEDAD_NO_VERIFICADA")}
  if m.Profile==renpyClassicProfile{
   p:=filepath.Join(side,"classic-key.txt");if !renpyFile(p){return m,errors.New("IA_RENPY_CLAVE_INVALIDA")}
   st,e:=os.Stat(p);if e!=nil||st.Size()!=32{return m,errors.New("IA_RENPY_CLAVE_INVALIDA")}
@@ -128,7 +136,7 @@ func renpyVerifySide(side string,m renpyReceipt,want map[string]string)error{
  if m.Profile==renpyClassicProfile{if e:=renpyVerifyClassicStart(side,m);e!=nil{return e}}
  if len(m.Engine)!=len(want){return errors.New("IA_RENPY_VERSION_DISTINTA")}
  p:=filepath.Join(side,"client.py");if !renpyFile(p){return errors.New("IA_RENPY_CLIENTE_INVALIDO")};h,e:=digestFile(p);if e!=nil||h!=m.Client{return errors.New("IA_RENPY_CLIENTE_INVALIDO")}
- for n,sha:=range want{if m.Engine[n]!=sha{return errors.New("IA_RENPY_VERSION_DISTINTA")};p:=filepath.Join(side,"engine",filepath.FromSlash(n));if !renpyFile(p){return errors.New("IA_RENPY_MOTOR_INVALIDO")};h,e:=digestFile(p);if e!=nil||h!=sha{return errors.New("IA_RENPY_MOTOR_INVALIDO")}}
+ for n,sha:=range want{if !safeFile(n)||len(sha)!=64||m.Engine[n]!=sha{return errors.New("IA_RENPY_VERSION_DISTINTA")};p:=filepath.Join(side,"engine",filepath.FromSlash(n));if !renpyFile(p){return errors.New("IA_RENPY_MOTOR_INVALIDO")};h,e:=digestFile(p);if e!=nil||h!=sha{return errors.New("IA_RENPY_MOTOR_INVALIDO")}}
  return nil
 }
 func renpyExtract(stage string,p *packageReader,want map[string]string,d renpyDetection)error{
@@ -153,22 +161,67 @@ func renpyExtract(stage string,p *packageReader,want map[string]string,d renpyDe
  }
  b,e:=json.Marshal(m);if e!=nil{return e};return createNew(filepath.Join(stage,"owner-v1.json"),b)
 }
-func renpyInstall(exe string,p *packageReader)error{
+// Keep the failing phase and numeric OS error visible without leaking a user's path.
+func renpyStageError(phase string,e error)error{
+ if e==nil{return nil}
+ if strings.HasPrefix(e.Error(),"IA_"){return e}
+ var n syscall.Errno
+ if errors.As(e,&n){return fmt.Errorf("IA_RENPY_%s_OS_%d",phase,uint64(n))}
+ if errors.Is(e,os.ErrPermission){return fmt.Errorf("IA_RENPY_%s_PERMISO",phase)}
+ if errors.Is(e,os.ErrNotExist){return fmt.Errorf("IA_RENPY_%s_NO_ENCONTRADO",phase)}
+ return fmt.Errorf("IA_RENPY_%s_FALLO",phase)
+}
+func renpyInstall(exe string,p *packageReader)(err error){
+ phase:="DETECTAR"
+ defer func(){err=renpyStageError(phase,err)}()
  d,e:=detectRenpy(exe);if e!=nil{return e}
+ phase="BLOQUEAR"
  release,e:=renpyLock(d.Root);if e!=nil{return e};defer release()
  side:=filepath.Join(d.Root,renpySide);hook:=renpyHookAt(d)
- if renpyHookExists(d){return errors.New("IA_RENPY_HOOK_EXISTENTE_RESTAURAR")}
+ phase="PAQUETE"
  want,e:=renpyPayload(p);if e!=nil{return e}
+ if renpyHookExists(d){
+  // A second click on an already verified modern installation is harmless.
+  // Do not overwrite, and do not mistake a foreign hook for ours.
+  m,e:=renpyReadReceipt(side);if e!=nil{return errors.New("IA_RENPY_HOOK_EXISTENTE_RESTAURAR")}
+  if m.Profile!=d.Profile||m.GameRel!=d.GameRel{return errors.New("IA_RENPY_PERFIL_DISTINTO")}
+  if renpyPriorModern(m){return errors.New("IA_RENPY_VERSION_ANTERIOR_RESTAURAR")}
+  if e=renpyCheckSessions(side);e!=nil{return e}
+  if e=renpyVerifySide(side,m,want);e!=nil{return e}
+  b:=hook;if d.Profile==renpyModernProfile{b=filepath.Join(hook,"boot.rpy")}
+  if !renpyFile(b){return errors.New("IA_RENPY_HOOK_EXISTENTE_RESTAURAR")}
+  h,e:=digestFile(b);if e!=nil||h!=m.Boot{return errors.New("IA_RENPY_HOOK_ALTERADO")}
+  return nil
+ }
+ phase="PREPARAR_MOTOR"
  if _,e:=os.Lstat(side);os.IsNotExist(e){
   stage,e:=os.MkdirTemp(d.Root,".ia-renpy-stage-");if e!=nil{return e};defer os.RemoveAll(stage)
   if e=renpyExtract(stage,p,want,d);e!=nil{return e}
   if _,e=os.Lstat(side);!os.IsNotExist(e){return errors.New("IA_RENPY_DESTINO_OCUPADO")}
   if e=os.Rename(stage,side);e!=nil{return e}
  }else if e!=nil{return e}
+ phase="VERIFICAR_MOTOR"
  m,e:=renpyReadReceipt(side);if e!=nil{return e}
  if m.Profile!=d.Profile||m.GameRel!=d.GameRel{return errors.New("IA_RENPY_PERFIL_DISTINTO")}
  if e=renpyCheckSessions(side);e!=nil{return e}
+ if renpyPriorModern(m){
+  // The user already restored the previous hook. Keep the complete old
+  // sidecar (including memory and any diagnostics) under a unique backup.
+  // Prepare and verify the replacement before publishing anything.
+  if e=renpyVerifySide(side,m,m.Engine);e!=nil{return e}
+  stage,e:=os.MkdirTemp(d.Root,".ia-renpy-stage-");if e!=nil{return e};defer os.RemoveAll(stage)
+  if e=renpyExtract(stage,p,want,d);e!=nil{return e}
+  backup,e:=os.MkdirTemp(d.Root,"IA Traductora RenPy - respaldo-");if e!=nil{return e}
+  old:=filepath.Join(backup,renpySide)
+  if e=os.Rename(side,old);e!=nil{return e}
+  if e=os.Rename(stage,side);e!=nil{
+   if undo:=os.Rename(old,side);undo!=nil{return errors.New("IA_RENPY_ACTUALIZACION_RESPALDO_CONSERVADO")}
+   return e
+  }
+  m,e=renpyReadReceipt(side);if e!=nil{return e}
+ }
  if e=renpyVerifySide(side,m,want);e!=nil{return e}
+ phase="PUBLICAR_HOOK"
  _,boot:=renpyAssets(d.Profile)
  if d.Profile==renpyClassicProfile{
   stage,e:=os.MkdirTemp(d.Root,".ia-renpy-flat-");if e!=nil{return e};defer os.RemoveAll(stage)
@@ -184,7 +237,8 @@ func renpyInstall(exe string,p *packageReader)error{
  if _,e=os.Lstat(hook);!os.IsNotExist(e){return errors.New("IA_RENPY_DESTINO_OCUPADO")}
  return os.Rename(stage,hook)
 }
-func renpyRecover(exe string)error{
+func renpyRecover(exe string)(err error){
+ defer func(){err=renpyStageError("RESTAURAR",err)}()
  d,e:=detectRenpy(exe);if e!=nil{return e}
  release,e:=renpyLock(d.Root);if e!=nil{return e};defer release()
  side:=filepath.Join(d.Root,renpySide);m,e:=renpyReadReceipt(side);if e!=nil{return e}
@@ -210,15 +264,44 @@ func renpyRecover(exe string)error{
  q,e:=os.MkdirTemp(side,"retired-");if e!=nil{return e}
  return os.Rename(hook,filepath.Join(q,renpyHook))
 }
+func renpyStartupText(side string)string{
+ out:=[]string{}
+ p:=filepath.Join(side,"client-startup.txt")
+ if renpyFile(p){
+  if st,e:=os.Stat(p);e==nil&&st.Size()<=16384{
+   if b,e:=os.ReadFile(p);e==nil{
+    for _,v:=range strings.Split(string(b),"\n"){
+     v=strings.TrimSpace(v);if len(v)>120||v==""{continue}
+     if strings.HasPrefix(v,"IA_RENPY_"){
+      valid:=true;for _,ch:=range v{if !(ch=='_'||ch>='A'&&ch<='Z'||ch>='a'&&ch<='z'||ch>='0'&&ch<='9'){valid=false;break}};if valid{out=append(out,v)}
+     }else if strings.HasPrefix(v,"RENPY_VERSION="){
+      ver:=strings.TrimPrefix(v,"RENPY_VERSION=");if ver!=""&&strings.Trim(ver,"0123456789.")==""{out=append(out,v)}
+     }
+    }
+   }
+  }
+ }
+ p=filepath.Join(side,"worker-startup.json")
+ if renpyFile(p){
+  if st,e:=os.Stat(p);e==nil&&st.Size()<=4096{
+   var state struct{Schema,Code string}
+   if b,e:=os.ReadFile(p);e==nil&&json.Unmarshal(b,&state)==nil&&state.Schema=="ia-traductora-startup-v1"&&strings.HasPrefix(state.Code,"IA_")&&len(state.Code)<=110&&strings.Trim(state.Code,"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")==""{out=append(out,state.Code)}
+  }
+ }
+ if len(out)==0{return "IA Traductora: complemento aún sin diagnóstico de arranque."}
+ if len(out)>12{out=out[len(out)-12:]}
+ return "IA Traductora: "+strings.Join(out," | ")
+}
 func renpyStatusText(exe string)(string,error){
  d,e:=detectRenpy(exe);if e!=nil{return "",e};side:=filepath.Join(d.Root,renpySide)
  if _,e=renpyReadReceipt(side);e!=nil{return "",e}
- p:=filepath.Join(side,"status.json");if !renpyFile(p){return "Todavía no hay sesión de traducción registrada.",nil}
+ startup:=renpyStartupText(side)
+ p:=filepath.Join(side,"status.json");if !renpyFile(p){return startup+" | Todavía no hay sesión de traducción registrada.",nil}
  st,e:=os.Stat(p);if e!=nil||st.Size()>8192{return "",errors.New("IA_RENPY_ESTADO_INVALIDO")}
  b,e:=os.ReadFile(p);if e!=nil{return "",e}
  var s struct{Schema string;Translated,Cached,Rejected uint64}
  if json.Unmarshal(b,&s)!=nil||s.Schema!=renpySchema{return "",errors.New("IA_RENPY_ESTADO_INVALIDO")}
- return fmt.Sprintf("Último registro: traducciones nuevas=%d · reutilizadas=%d · rechazadas=%d",s.Translated,s.Cached,s.Rejected),nil
+ return fmt.Sprintf("%s | traducciones nuevas=%d · reutilizadas=%d · rechazadas=%d",startup,s.Translated,s.Cached,s.Rejected),nil
 }
 
 func renpyNeedsLegacyStart(d renpyDetection)bool{

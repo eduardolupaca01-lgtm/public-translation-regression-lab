@@ -100,7 +100,7 @@ func iaThemeDestroy(){
 }
 func iaApplyControlFont(window uintptr,klass string,id int,title string){
     var font=iaThemeFontNormal
-    if id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdRenpyPlay||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
+    if id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==iaCmdBrowse||id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdClose||id==iaCmdCopy||(id>=300&&id<=305){
         font=iaThemeFontButton
     }
     if klass=="STATIC"&&font!=0{
@@ -178,8 +178,7 @@ func iaDrawButton(param uintptr)bool{
     case iaCmdRenpyBrowse: text="EXE"
     case iaCmdRenpyInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdRenpyRecover: text="Restaurar Ren'Py"
-    case iaCmdRenpyStatus: text="Estado de traducción"
-    case iaCmdRenpyPlay: text="3. JUGAR CON IA"
+    case iaCmdRenpyStatus: text="Estado IA Traductora"
     case iaCmdWebInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdInstall: text="2. INSTALAR TRADUCTOR"
     case iaCmdClone: text="CREAR COPIA VX ACE"
@@ -190,7 +189,7 @@ func iaDrawButton(param uintptr)bool{
     default: return false
     }
     activeNav:=(id==300&&iaCurrentUI.renpyActive)||(id==301&&!iaCurrentUI.webActive&&!iaCurrentUI.renpyActive)||(id==302&&iaCurrentUI.webActive)
-    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdBrowse||id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdRenpyPlay||id==iaCmdWebBrowse||id==iaCmdWebInstall||activeNav{
+    if id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdBrowse||id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdWebBrowse||id==iaCmdWebInstall||activeNav{
         background=iaRGB(0,96,225)
     }else if id==iaCmdClose||id==iaCmdCopy||id==iaCmdRecover{
         background=iaRGB(221,230,244)
@@ -201,7 +200,7 @@ func iaDrawButton(param uintptr)bool{
             foreground=iaRGB(205,219,240)
         }
     }
-    if data.ItemState&4!=0&&(id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdRecover||id==iaCmdBrowse||id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdRenpyPlay||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==301||id==302){
+    if data.ItemState&4!=0&&(id==iaCmdInstall||id==iaCmdClone||id==iaCmdJSONCopy||id==iaCmdRecover||id==iaCmdBrowse||id==iaCmdRenpyBrowse||id==iaCmdRenpyInstall||id==iaCmdRenpyRecover||id==iaCmdRenpyStatus||id==iaCmdWebBrowse||id==iaCmdWebInstall||id==301||id==302){
         // Win32 ODS_DISABLED: visibly unavailable, not merely unclickable.
         background=iaRGB(219,227,238);foreground=iaRGB(91,106,127)
     }else if data.ItemState&1!=0{

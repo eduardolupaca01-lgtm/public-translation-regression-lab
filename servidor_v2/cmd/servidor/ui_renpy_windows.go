@@ -13,8 +13,7 @@ func iaCreateRenpyControls(ui *iaUI){
  ui.renpyInput=iaControl(h,"EDIT","",iaWSBorder|iaESReadOnly,230,227,597,44,0)
  ui.renpyBrowse=iaControl(h,"BUTTON","EXE",0,843,226,169,46,iaCmdRenpyBrowse)
  ui.renpyInstall=iaControl(h,"BUTTON","2. INSTALAR TRADUCTOR",0,230,302,326,59,iaCmdRenpyInstall)
- ui.renpyCheck=iaControl(h,"BUTTON","Estado de traducción",0,566,302,446,59,iaCmdRenpyStatus)
- ui.renpyPlay=iaControl(h,"BUTTON","3. JUGAR CON IA",0,230,369,326,35,iaCmdRenpyPlay)
+ ui.renpyCheck=iaControl(h,"BUTTON","Estado IA Traductora",0,566,302,446,59,iaCmdRenpyStatus)
  ui.renpyLogs=iaControl(h,"EDIT","",iaWSBorder|iaWSVScroll|iaESMultiline|iaESReadOnly|iaESAutoVScroll,230,414,782,236,0)
  ui.renpyStatus=iaControl(h,"STATIC","Selecciona un juego Ren'Py.",0,230,664,773,39,0)
  ui.renpyRecover=iaControl(h,"BUTTON","Restaurar Ren'Py",0,501,710,274,36,iaCmdRenpyRecover)
@@ -25,7 +24,7 @@ func iaRenpyLog(ui *iaUI,s string){
  if ui.renpyLogs!=0{iaSet(ui.renpyLogs,ui.renpyLogText);iaSendMessage.Call(ui.renpyLogs,0x00B1,^uintptr(0),^uintptr(0));iaSendMessage.Call(ui.renpyLogs,0x00B7,0,0)}
 }
 func iaRefreshRenpy(ui *iaUI){
- for _,h:=range []uintptr{ui.renpyBrowse,ui.renpyInstall,ui.renpyRecover,ui.renpyCheck,ui.renpyPlay}{
+ for _,h:=range []uintptr{ui.renpyBrowse,ui.renpyInstall,ui.renpyRecover,ui.renpyCheck}{
   if h==0{continue};v:=uintptr(0)
   if ui.renpyActive&&!ui.busy&&(h==ui.renpyBrowse||ui.renpyFile!=""){v=1}
   iaEnableWindow.Call(h,v);iaInvalidateRect.Call(h,0,1)
@@ -37,7 +36,7 @@ func iaSwitchProgram(ui *iaUI,section int){
  show:=func(h uintptr,visible bool){if h==0{return};v:=uintptr(0);if visible{v=5};iaShowWindow.Call(h,v)}
  for _,h:=range []uintptr{ui.infoLabel,ui.input,ui.browse,ui.install,ui.cloneBtn,ui.jsonBtn,ui.logs,ui.statusLabel,ui.recoverBtn}{show(h,section==1)}
  for _,h:=range []uintptr{ui.webInfo,ui.webInput,ui.webBrowse,ui.webInstall,ui.webLogs,ui.webStatus}{show(h,section==2)}
- for _,h:=range []uintptr{ui.renpyInfo,ui.renpyInput,ui.renpyBrowse,ui.renpyInstall,ui.renpyRecover,ui.renpyCheck,ui.renpyPlay,ui.renpyLogs,ui.renpyStatus}{show(h,section==0)}
+ for _,h:=range []uintptr{ui.renpyInfo,ui.renpyInput,ui.renpyBrowse,ui.renpyInstall,ui.renpyRecover,ui.renpyCheck,ui.renpyLogs,ui.renpyStatus}{show(h,section==0)}
  label:=[]string{"REN'PY","RPG","WEB"}[section]
  if ui.sectionLabel!=0{iaSet(ui.sectionLabel,label)}
  iaRefreshRPGActions(ui);iaRefreshWebActions(ui);iaRefreshRenpy(ui)
@@ -67,15 +66,16 @@ func iaStartRenpy(ui *iaUI,restore bool){
    if e==nil{var pkg *packageReader;pkg,e=readPackage(source);if e==nil{defer pkg.Close();e=renpyInstall(p,pkg)}}
    if e==nil{result="IA_RENPY_INSTALADO"}
   }
-  if e!=nil{result=iaSafeInstallCode(e.Error())}
+  if e!=nil{result=iaSafeInstallCode(renpyStageError("OPERACION",e).Error())}
  }()
 }
 func iaRenpyFinish(ui *iaUI){
  ui.mu.Lock();s:=ui.renpyResult;ui.renpyResult="";ui.mu.Unlock();ui.busy=false;iaRefreshRenpy(ui)
  iaRenpyLog(ui,"["+s+"]")
  switch s{
- case "IA_RENPY_INSTALADO":iaSet(ui.renpyStatus,"Instalado. Usa JUGAR CON IA para iniciar el juego.")
+ case "IA_RENPY_INSTALADO":iaSet(ui.renpyStatus,"Instalado. Abre normalmente el EXE original del juego.")
  case "IA_RENPY_RESTAURADO":iaSet(ui.renpyStatus,"Complemento desactivado. Partidas y memoria conservadas.")
+ case "IA_RENPY_VERSION_ANTERIOR_RESTAURAR":iaSet(ui.renpyStatus,"Cierra el juego, pulsa Restaurar Ren'Py y vuelve a instalar.")
  default:iaSet(ui.renpyStatus,"Operación detenida. Revisa el diagnóstico; no fuerces cambios.")
  }
 }
@@ -85,9 +85,3 @@ func iaRenpyStatus(ui *iaUI){
  iaRenpyLog(ui,"[IA_RENPY_ESTADO] "+s);iaSet(ui.renpyStatus,s)
 }
 
-func iaRenpyPlay(ui *iaUI){
- if !ui.renpyActive||ui.busy||ui.renpyFile==""{return}
- if e:=renpyPlay(ui.renpyFile);e!=nil{iaRenpyLog(ui,"["+iaSafeInstallCode(e.Error())+"]");iaSet(ui.renpyStatus,"No se pudo iniciar el juego. Revisa diagnóstico.");return}
- iaRenpyLog(ui,"[IA_RENPY_INICIO_SOLICITADO] Se abrió el ejecutable original por su ruta compatible.")
- iaSet(ui.renpyStatus,"Inicio solicitado. Consulta Estado de traducción.")
-}

@@ -232,7 +232,7 @@ class SDKProbeSourceTests(unittest.TestCase):
         import ast
         import re
         import textwrap
-        files=(BASE/"tests/renpy_native_probe.py",BASE.parent/".github/scripts/renpy_classic_sdk_probe.py")
+        files=(BASE/"tests/renpy_native_probe.py",BASE.parent/".github/scripts/renpy_classic_sdk_probe.py",BASE/"tests/probe_renpy_installed_native.py")
         for path in files:
             source=path.read_text(encoding="utf-8")
             tree=ast.parse(source,filename=str(path))

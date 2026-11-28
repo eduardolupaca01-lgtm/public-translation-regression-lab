@@ -51,7 +51,6 @@ const(
     iaCmdRenpyInstall=110
     iaCmdRenpyRecover=111
     iaCmdRenpyStatus=112
-    iaCmdRenpyPlay=113
 )
 var(
     iaUser32=syscall.NewLazyDLL("user32.dll")
@@ -135,7 +134,7 @@ type iaUI struct{
     jsonBtn uintptr
     renpyBtn uintptr
     renpyActive bool
-    renpyInfo,renpyInput,renpyBrowse,renpyInstall,renpyRecover,renpyCheck,renpyPlay,renpyLogs,renpyStatus uintptr
+    renpyInfo,renpyInput,renpyBrowse,renpyInstall,renpyRecover,renpyCheck,renpyLogs,renpyStatus uintptr
     renpyFile,renpyLogText,renpyResult string
     webBtn uintptr
     rpgBtn uintptr
@@ -568,8 +567,6 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             if lparam==ui.renpyInstall{iaStartRenpy(ui,false)}
         case iaCmdRenpyRecover:
             if lparam==ui.renpyRecover{iaStartRenpy(ui,true)}
-        case iaCmdRenpyPlay:
-            if lparam==ui.renpyPlay&&ui.renpyActive&&!ui.busy{iaRenpyPlay(ui)}
         case iaCmdRenpyStatus:
             if lparam==ui.renpyCheck&&ui.renpyActive&&!ui.busy{iaRenpyStatus(ui)}
         case 301:

@@ -29,7 +29,8 @@ func TestRenpyDetectAndInstallRestore(t *testing.T){
  original:=filepath.Join(d.Root,"game","script.rpy");before,_:=os.ReadFile(original)
  p:=renpyFakePackage(t);if e=renpyInstall(exe,p);e!=nil{t.Fatal(e)}
  side:=filepath.Join(d.Root,renpySide);m,e:=renpyReadReceipt(side);if e!=nil{t.Fatal(e)};if e=renpyVerifySide(side,m,m.Engine);e!=nil{t.Fatal(e)}
- if e=renpyInstall(exe,p);e==nil{t.Fatal("must not overwrite hook")}
+ // Idempotent re-install must not rewrite an already verified hook.
+ if e=renpyInstall(exe,p);e!=nil{t.Fatal("verified installation",e)}
  hook:=filepath.Join(d.Root,"game",renpyHook)
  if e=os.WriteFile(filepath.Join(hook,"boot.rpyc"),[]byte("compiled"),0600);e!=nil{t.Fatal(e)}
  if e=os.WriteFile(filepath.Join(side,"memory-v1.sqlite3"),[]byte("memory fixture"),0600);e!=nil{t.Fatal(e)}
@@ -100,4 +101,17 @@ func TestRenpyClassicAmbiguousGameDirectory(t *testing.T){
  root:=t.TempDir()
  for _,n:=range []string{"game","data"}{p:=filepath.Join(root,n);os.Mkdir(p,0700);os.WriteFile(filepath.Join(p,"script.rpy"),[]byte("fixture"),0600)}
  if _,e:=renpyFindGame(root,filepath.Join(root,"Novel.exe"),renpyClassicProfile);e==nil{t.Fatal("ambiguous layout accepted")}
+}
+
+func TestRenpyExactVersionTuple(t *testing.T){
+ if v:=renpyDeclaredVersion([]byte("version_tuple = (7, 3, 2, vc_version)\n"));v!="7.3.2"{t.Fatal(v)}
+}
+func TestRenpyStartupDiagnosticAndNoPrivatePath(t *testing.T){
+ side:=t.TempDir()
+ if e:=os.WriteFile(filepath.Join(side,"client-startup.txt"),[]byte("IA_RENPY_BOOT_INICIADO\nRENPY_VERSION=7.3.2.320\nIA_RENPY_BOOT_FALLO_CARGA_CLIENTE_ImportError\nC:\\private\\game\n"),0600);e!=nil{t.Fatal(e)}
+ if e:=os.WriteFile(filepath.Join(side,"worker-startup.json"),[]byte("{\"schema\":\"ia-traductora-startup-v1\",\"code\":\"IA_RENPY_MOTOR_LISTO\"}"),0600);e!=nil{t.Fatal(e)}
+ s:=renpyStartupText(side)
+ if !strings.Contains(s,"7.3.2.320")||!strings.Contains(s,"ImportError")||!strings.Contains(s,"IA_RENPY_MOTOR_LISTO")||strings.Contains(s,"private"){t.Fatal(s)}
+ e:=renpyStageError("PUBLICAR_HOOK",&os.PathError{Op:"rename",Path:"private",Err:os.ErrPermission})
+ if strings.Contains(e.Error(),"private")||!strings.HasPrefix(e.Error(),"IA_RENPY_PUBLICAR_HOOK_"){t.Fatal(e)}
 }

@@ -30,8 +30,11 @@ func (d renpyDetection)summary()string{
  return fmt.Sprintf("IA_RENPY_DETECTADO | perfil=%s | versión=%s%s | .rpy=%d | .rpyc=%d | .rpa=%d",d.Profile,v,release,d.RPY,d.RPYC,d.RPA)
 }
 var renpyVersionLiteral=regexp.MustCompile("(?m)^[\\t ]*(?:version|version_only)[\\t ]*=[\\t ]*[\"'](?:Ren'Py[\\t ]+)?([4-8](?:pr[0-9]+|(?:\\.[0-9]+){0,4}[a-z]?))[\"']")
+var renpyVersionTuple=regexp.MustCompile("(?m)^[\\t ]*version_tuple[\\t ]*=[\\t ]*\\([\\t ]*([4-8])[\\t ]*,[\\t ]*([0-9]+)[\\t ]*,[\\t ]*([0-9]+)[\\t ]*,")
 func renpyDeclaredVersion(raw []byte)string{
- m:=renpyVersionLiteral.FindSubmatch(raw);if len(m)==2{return string(m[1])};return ""
+ m:=renpyVersionLiteral.FindSubmatch(raw);if len(m)==2{return string(m[1])}
+ v:=renpyVersionTuple.FindSubmatch(raw);if len(v)==4{return string(v[1])+"."+string(v[2])+"."+string(v[3])}
+ return ""
 }
 func renpyCatalogMatch(version string)string{
  // Exact release, optionally followed by a numeric build identifier.
