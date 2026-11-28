@@ -49,7 +49,7 @@ func TestR44JSONDirectInstallRecoverNoCopy(t *testing.T){
  after,e:=os.ReadDir(filepath.Dir(root));if e!=nil||len(after)!=len(entries){t.Fatal("direct mode created a sibling game")}
  if !mvJSONDirectNeedsRecovery(exe){t.Fatal("missing active journal")}
  if _,e=mvJSONInstallDirectWith(exe,pkg,r44DirectCandidate,vxaceAtomicReplaceFrom);e==nil||e.Error()!="IA_MV_JSON_DIRECTO_RECUPERAR_PRIMERO"{t.Fatal("repeat install",e)}
- if _,e=mvJSONCopyPilot(exe,pkg);e==nil||e.Error()!="IA_MV_JSON_DIRECTO_RECUPERAR_PRIMERO"{t.Fatal("copied active direct installation",e)}
+ if _,_,e=mvJSONCopyPilot(exe,pkg);e==nil||e.Error()!="IA_MV_JSON_DIRECTO_RECUPERAR_PRIMERO"{t.Fatal("copied active direct installation",e)}
  if h,e:=mvJSONBootFingerprint(exe,root,filepath.Join(root,"www"));e!=nil||h!=boot{t.Fatal("boot changed",e)}
  if e=RecoverGame(exe);e!=nil{t.Fatal(e)}
  r44DirectUnchanged(t,root,before,system)
