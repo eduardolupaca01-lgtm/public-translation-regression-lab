@@ -36,7 +36,8 @@ func renpyDeclaredVersion(raw []byte)string{
 func renpyCatalogMatch(version string)string{
  // Exact release, optionally followed by a numeric build identifier.
  best:=""
- for _,v:=range strings.Fields(renpyReleases){
+ for _,line:=range strings.Split(renpyReleases,"\n"){
+  v:=strings.TrimSpace(line);if v==""||strings.HasPrefix(v,"#"){continue}
   if v==version&&len(v)>len(best){best=v}
   if strings.HasPrefix(version,v+"."){
    suffix:=strings.TrimPrefix(version,v+".")

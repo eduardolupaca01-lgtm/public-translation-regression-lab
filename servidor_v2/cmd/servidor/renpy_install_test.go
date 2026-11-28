@@ -58,7 +58,8 @@ func TestRenpyStatusAndWrongGame(t *testing.T){
 
 func TestRenpyOfficialCatalogAndExactRelease(t *testing.T){
  counts:=map[byte]int{};seen:=map[string]bool{}
- for _,v:=range strings.Split(renpyReleases,"\n"){
+ for _,line:=range strings.Split(renpyReleases,"\n"){
+  v:=strings.TrimSpace(line) // Windows Git checkouts can convert embedded text to CRLF.
   if v==""||strings.HasPrefix(v,"#"){continue}
   if seen[v]{t.Fatal("duplicate",v)};seen[v]=true;counts[v[0]]++
   if renpyCatalogMatch(v)!=v{t.Fatal("missing exact release",v)}

@@ -138,6 +138,41 @@ class ClassicRenpyR1(unittest.TestCase):
         t.set_text(new_text="Save");self.assertEqual(t.text,"Guardar")
         self.assertEqual(Input("Hello").text,"Hello")
         self.assertEqual(Text("Hello",tokenized=True).text,"Hello")
+    def test_classic_client_and_worker_exchange_real_files(self):
+        import os
+        from renpy_classic_bridge import ClassicBridge
+        from renpy_runtime import ordinary
+        m=self.classic()
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);side=root/"IA Traductora RenPy";side.mkdir()
+            nonce="ab"*16
+            (side/"classic-key.txt").write_bytes(nonce.encode("ascii"))
+            folder=side/("classic-session-"+nonce)
+            service=RenpyService(side,"model",Neural(),quality)
+            workers=[]
+            def start(exe,game,key):
+                self.assertEqual(key,nonce);self.assertEqual(Path(game),root)
+                folder.mkdir()
+                bridge=ClassicBridge(folder,service,nonce,os.getpid(),ordinary)
+                thread=threading.Thread(target=bridge.serve);workers.append((bridge,thread))
+                thread.start()
+                return 1
+            m.launch_worker=start
+            c=m.Client(str(root))
+            try:
+                self.assertEqual(c.translate('She said "Hello"'),'Ella dijo "Hola"')
+                self.assertEqual(c.translate('「おはよう。」'),'「Buenos días.」')
+                self.assertEqual(c.translate('She said "Hello"'),'Ella dijo "Hola"')
+                self.assertEqual(service.translated,2)
+                self.assertEqual(c.sequence,2)
+            finally:
+                c.close()
+                for bridge,thread in workers:
+                    bridge.shutdown();thread.join(5)
+                    self.assertFalse(thread.is_alive())
+                    bridge.cleanup()
+                service.close()
+
     def test_classic_authenticated_file_transport(self):
         from renpy_classic_bridge import ClassicBridge
         from renpy_runtime import ordinary
