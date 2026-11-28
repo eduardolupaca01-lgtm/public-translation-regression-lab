@@ -11,6 +11,7 @@ import (
  "crypto/rand"
  "strconv"
  "os"
+ "os/exec"
  "path/filepath"
  "sort"
  "strings"
@@ -23,6 +24,10 @@ var renpyBoot []byte
 var renpyClient []byte
 //go:embed renpy_assets/classic_client.py
 var renpyClassicClient []byte
+//go:embed renpy_assets/classic_start.py
+var renpyClassicStart []byte
+//go:embed renpy_assets/classic_entry.py
+var renpyClassicEntry []byte
 
 const renpySide="IA Traductora RenPy"
 const renpySchema="ia-servidor-renpy-v1"
@@ -68,6 +73,8 @@ type renpyReceipt struct{
  Profile string `json:"profile,omitempty"`
  GameRel string `json:"game_rel,omitempty"`
  ClassicKey string `json:"classic_key_sha256,omitempty"`
+ ClassicStart string `json:"classic_start_sha256,omitempty"`
+ ClassicEntry string `json:"classic_entry_sha256,omitempty"`
 }
 func renpyPayload(p *packageReader)(map[string]string,error){
  out:=map[string]string{}
@@ -108,7 +115,17 @@ func renpyCheckSessions(side string)error{
  for _,n:=range entries{if (strings.HasPrefix(n.Name(),"session-")&&strings.HasSuffix(n.Name(),".json"))||strings.HasPrefix(n.Name(),"classic-session-"){return errors.New("IA_RENPY_SESION_PRESENTE_CERRAR_JUEGO")}}
  return nil
 }
+func renpyVerifyClassicStart(side string,m renpyReceipt)error{
+ for _,a:=range []struct{name,want string;data []byte}{
+  {"classic_start.py",m.ClassicStart,renpyClassicStart},{"classic_entry.py",m.ClassicEntry,renpyClassicEntry},
+ }{
+  p:=filepath.Join(side,a.name);if a.want!=hash(a.data)||!renpyFile(p){return errors.New("IA_RENPY_INICIO_CLASICO_NO_VERIFICADO")}
+  h,e:=digestFile(p);if e!=nil||h!=a.want{return errors.New("IA_RENPY_INICIO_CLASICO_NO_VERIFICADO")}
+ }
+ return nil
+}
 func renpyVerifySide(side string,m renpyReceipt,want map[string]string)error{
+ if m.Profile==renpyClassicProfile{if e:=renpyVerifyClassicStart(side,m);e!=nil{return e}}
  if len(m.Engine)!=len(want){return errors.New("IA_RENPY_VERSION_DISTINTA")}
  p:=filepath.Join(side,"client.py");if !renpyFile(p){return errors.New("IA_RENPY_CLIENTE_INVALIDO")};h,e:=digestFile(p);if e!=nil||h!=m.Client{return errors.New("IA_RENPY_CLIENTE_INVALIDO")}
  for n,sha:=range want{if m.Engine[n]!=sha{return errors.New("IA_RENPY_VERSION_DISTINTA")};p:=filepath.Join(side,"engine",filepath.FromSlash(n));if !renpyFile(p){return errors.New("IA_RENPY_MOTOR_INVALIDO")};h,e:=digestFile(p);if e!=nil||h!=sha{return errors.New("IA_RENPY_MOTOR_INVALIDO")}}
@@ -130,6 +147,9 @@ func renpyExtract(stage string,p *packageReader,want map[string]string,d renpyDe
   key:=make([]byte,16);if _,e:=rand.Read(key);e!=nil{return e}
   raw:=[]byte(hex.EncodeToString(key));m.ClassicKey=hash(raw)
   if e:=createNew(filepath.Join(stage,"classic-key.txt"),raw);e!=nil{return e}
+  m.ClassicStart=hash(renpyClassicStart);m.ClassicEntry=hash(renpyClassicEntry)
+  if e:=createNew(filepath.Join(stage,"classic_start.py"),renpyClassicStart);e!=nil{return e}
+  if e:=createNew(filepath.Join(stage,"classic_entry.py"),renpyClassicEntry);e!=nil{return e}
  }
  b,e:=json.Marshal(m);if e!=nil{return e};return createNew(filepath.Join(stage,"owner-v1.json"),b)
 }
@@ -199,4 +219,38 @@ func renpyStatusText(exe string)(string,error){
  var s struct{Schema string;Translated,Cached,Rejected uint64}
  if json.Unmarshal(b,&s)!=nil||s.Schema!=renpySchema{return "",errors.New("IA_RENPY_ESTADO_INVALIDO")}
  return fmt.Sprintf("Último registro: traducciones nuevas=%d · reutilizadas=%d · rechazadas=%d",s.Translated,s.Cached,s.Rejected),nil
+}
+
+func renpyNeedsLegacyStart(d renpyDetection)bool{
+ if d.Profile!=renpyClassicProfile{return false}
+ if strings.HasPrefix(d.Version,"4")||strings.HasPrefix(d.Version,"5"){return true}
+ // Frozen early releases may not expose a readable version literal.
+ return d.Version==""&&(renpyFile(filepath.Join(d.Root,"python23.dll"))||renpyFile(filepath.Join(d.Root,"lib","python23.dll")))
+}
+func renpyLaunchCommand(exe string)(*exec.Cmd,error){
+ d,e:=detectRenpy(exe);if e!=nil{return nil,e}
+ abs,e:=filepath.Abs(exe);if e!=nil{return nil,e}
+ side:=filepath.Join(d.Root,renpySide);m,e:=renpyReadReceipt(side);if e!=nil{return nil,e}
+ if m.Profile!=d.Profile||m.GameRel!=d.GameRel{return nil,errors.New("IA_RENPY_PERFIL_DISTINTO")}
+ hook:=renpyHookAt(d);if d.Profile!=renpyClassicProfile{hook=filepath.Join(hook,"boot.rpy")}
+ if !renpyFile(hook){return nil,errors.New("IA_RENPY_HOOK_NO_VERIFICADO")}
+ h,e:=digestFile(hook);if e!=nil||h!=m.Boot{return nil,errors.New("IA_RENPY_HOOK_ALTERADO")}
+ if e=renpyCheckSessions(side);e!=nil{return nil,e}
+ cmd:=exec.Command(abs)
+ if renpyNeedsLegacyStart(d){
+  if e=renpyVerifyClassicStart(side,m);e!=nil{return nil,e}
+  cmd=exec.Command(abs,"--python",filepath.Join(side,"classic_entry.py"))
+  for _,v:=range os.Environ(){
+   k:=strings.ToUpper(strings.SplitN(v,"=",2)[0])
+   if !strings.HasPrefix(k,"IA_RENPY_CLASSIC_")&&k!="PYTHONHOME"&&k!="PYTHONPATH"{cmd.Env=append(cmd.Env,v)}
+  }
+  cmd.Env=append(cmd.Env,"IA_RENPY_CLASSIC_ROOT="+d.Root,"IA_RENPY_CLASSIC_GAME="+d.gameDir())
+ }
+ cmd.Dir=d.Root;return cmd,nil
+}
+func renpyPlay(exe string)error{
+ cmd,e:=renpyLaunchCommand(exe);if e!=nil{return e}
+ if e=cmd.Start();e!=nil{return errors.New("IA_RENPY_INICIO_FALLO")}
+ go func(){_ = cmd.Wait()}()
+ return nil
 }

@@ -11,6 +11,7 @@ import time
 import zipfile
 
 CLIENT=Path(__file__).resolve().parents[2]/"servidor_v2/cmd/servidor/renpy_assets/classic_client.py"
+START_MODULE=CLIENT.with_name("classic_start.py")
 SCRIPT=r'''
 init 999:
     python hide:
@@ -44,6 +45,9 @@ init 999:
             assert os.environ["IA_CLASSIC_VERSION"] in version,repr(version)
             cls=module.native_text_class(engine)
             assert cls is not None
+            actual=module.Client(os.environ["IA_CLASSIC_TEST_ROOT"])
+            assert len(actual.nonce)==32
+            actual.close()
             module.install(engine,Fixture())
             # python hide uses separate globals and locals in classic engines.
             # Capture the module as a default argument, not a store global.
@@ -78,67 +82,53 @@ label start:
     return
 '''
 DRIVER=r'''
-# Real SDK bootstrap driver. The native main function still parses and
-# initializes the original synthetic RPY; only exception reporting is ours.
-# Syntax deliberately limited to Python 2.3.
 import os
 import sys
 import traceback
-def record(path,value):
-    out=open(path,"ab")
+def record(value):
+    f=open(os.environ["IA_CLASSIC_PHASE"],"ab")
     try:
-        out.write(str(value)+"\n")
-        out.flush()
+        f.write(str(value)+"\n")
     finally:
-        out.close()
-def run_native():
-    sdk=os.environ["IA_CLASSIC_SDK"].replace("\\","/")
-    project=os.environ["IA_CLASSIC_PROJECT"].replace("\\","/")
-    requested=os.environ["IA_CLASSIC_VERSION"]
-    phase=os.environ["IA_CLASSIC_PHASE"]
-    os.chdir(sdk)
-    record(phase,"NATIVE_BOOTSTRAP cwd="+os.getcwd())
-    # The 2005 launcher searches common/ relative to its working directory.
-    for path in (sdk,sdk+"/module"):
-        if os.path.isdir(path) and path not in sys.path:
-            sys.path.append(path)
-    import renpy
-    record(phase,"IMPORTED "+str(getattr(renpy,"version","unknown")))
-    assert requested in str(renpy.version)
-    if requested.startswith("4."):
-        import renpy.main
-        main=renpy.main.main
-        record(phase,"MAIN_ARGS "+repr(main.func_code.co_varnames[:main.func_code.co_argcount]))
-        main(project,lint=True)
-    elif requested.startswith("5."):
-        # 5.6.x bootstrap initializes these documented engine-owned
-        # options and directories before calling the zero-argument main.
-        if hasattr(renpy,"import_all"):
-            renpy.import_all()
-        import renpy.main
-        import renpy.game
-        import renpy.config
-        main=renpy.main.main
-        names=main.func_code.co_varnames[:main.func_code.co_argcount]
-        record(phase,"MAIN_ARGS "+repr(names))
-        if not names:
-            import optparse
-            renpy.game.options=optparse.Values(dict(version=False,game=project,
-                savedir=project+"/saves",lock=None,python=None,compile=False,
-                lint=True,profile=False,leak=False,warp=None))
-            renpy.config.renpy_base=sdk
-            renpy.config.basedir=project
-            renpy.config.gamedir=project
-            main()
-        else:
-            # Older SDK variants retain the 4.x signature.
-            assert "lint" in names,repr(names)
-            main(project,lint=True)
-    else:
-        raise AssertionError("Unsupported bootstrap family")
-    record(phase,"NATIVE_MAIN_RETURNED")
+        f.close()
 try:
-    run_native()
+    import codecs
+    sdk=os.environ["IA_CLASSIC_SDK"]
+    project=os.environ["IA_CLASSIC_PROJECT"]
+    namespace={"__name__":"ia_renpy_classic_start"}
+    execfile(os.environ["IA_CLASSIC_START_MODULE"],namespace,namespace)
+    path=os.path.join(sdk,"ia_io_probe.rpy")
+    raw="first\r\nsecond\rthird\n"
+    f=open(path,"wb")
+    f.write(raw)
+    f.close()
+    expected=u"first\nsecond\nthird\n"
+    f=open(path,"rU")
+    try:
+        assert f.read().decode("utf-8")==expected
+    finally:
+        f.close()
+    try:
+        old=codecs.open(path,"rU","utf-8")
+        old.close()
+        record("ORIGINAL_CODEC_OPEN_SUPPORTED")
+    except IOError:
+        record("ORIGINAL_CODEC_RUB_REPRODUCED_EXISTING_FILE")
+    assert namespace["install_codec_compat"]()
+    f=codecs.open(path,"rU","utf-8")
+    try:
+        assert f.read()==expected
+    finally:
+        f.close()
+    f=open(path,"rb")
+    try:
+        assert f.read()==raw
+    finally:
+        f.close()
+    os.unlink(path)
+    record("PRODUCTION_CODEC_COMPAT_OK")
+    namespace["native_main"](sdk,project,True,record)
+    record("NATIVE_MAIN_RETURNED")
 except:
     out=open(os.environ["IA_CLASSIC_ERROR"],"wb")
     try:
@@ -152,6 +142,7 @@ except:
         out.close()
     raise
 '''
+
 def safe_extract(archive,dest):
     with zipfile.ZipFile(archive) as z:
         if len(z.infolist())>100000 or sum(x.file_size for x in z.infolist())>1024**3:
@@ -242,10 +233,13 @@ def main():
         game.mkdir(parents=True)
         (game/"script.rpy").write_text(SCRIPT,encoding="ascii")
         marker=root/"result.txt";error=root/"error.txt"
+        side=project/"IA Traductora RenPy";side.mkdir()
+        (side/"classic-key.txt").write_bytes(b"ab"*16)
         env=os.environ.copy()
         for key in ("PYTHONUTF8","PYTHONIOENCODING","PYTHONHOME","PYTHONPATH"):
             env.pop(key,None)
         env.update(IA_CLASSIC_CLIENT=str(CLIENT),IA_CLASSIC_VERSION=args.version,
+                   IA_CLASSIC_TEST_ROOT=str(project),
                    IA_CLASSIC_RESULT=str(marker),IA_CLASSIC_ERROR=str(error),
                    IA_CLASSIC_ENTERED=str(root/"entered.txt"),
                    RENPY_RENDERER="sw",RENPY_PERFORMANCE_TEST="0")
@@ -268,6 +262,7 @@ def main():
         # retain actual script loading and all Text/Input assertions.
         if old:
             env.update(IA_CLASSIC_SDK=str(launcher.parent),IA_CLASSIC_PROJECT=str(project),
+                       IA_CLASSIC_START_MODULE=str(START_MODULE),
                        IA_CLASSIC_PHASE=str(root/"native-phase.txt"))
             (launcher.parent/"ia_native_driver.py").write_text(DRIVER,encoding="ascii")
             (launcher.parent/"ia_native_entry.py").write_text(

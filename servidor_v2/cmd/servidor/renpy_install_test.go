@@ -83,8 +83,14 @@ func TestRenpyClassicZipAndFlatRestore(t *testing.T){
  if e=renpyInstall(exe,renpyFakePackage(t));e!=nil{t.Fatal(e)}
  hook:=filepath.Join(game,renpyClassicHook);b,e:=os.ReadFile(hook);if e!=nil||!bytes.Contains(b,[]byte("init 999:\n    python hide:")){t.Fatal("classic hook",e)}
  side:=filepath.Join(root,renpySide);m,e:=renpyReadReceipt(side);if e!=nil||m.Profile!=renpyClassicProfile||m.ClassicKey==""{t.Fatal(m,e)}
+ cmd,e:=renpyLaunchCommand(exe);if e!=nil{t.Fatal(e)}
+ if len(cmd.Args)!=3||cmd.Args[1]!="--python"||filepath.Base(cmd.Args[2])!="classic_entry.py"||cmd.Dir!=root{t.Fatal("classic launch route",cmd.Args)}
+ start:=filepath.Join(side,"classic_start.py");if e=os.WriteFile(start,[]byte("changed"),0600);e!=nil{t.Fatal(e)}
+ if _,e=renpyLaunchCommand(exe);e==nil{t.Fatal("modified startup accepted")}
+ if e=os.WriteFile(start,renpyClassicStart,0600);e!=nil{t.Fatal(e)}
  if e=os.WriteFile(hook+"c",[]byte("synthetic compiled"),0600);e!=nil{t.Fatal(e)}
  if e=renpyRecover(exe);e!=nil{t.Fatal(e)}
+ if _,e=renpyLaunchCommand(exe);e==nil{t.Fatal("recovered hook can still launch through IA")}
  if _,e=os.Stat(hook);!os.IsNotExist(e){t.Fatal("flat hook remains")}
  if _,e=os.Stat(hook+"c");!os.IsNotExist(e){t.Fatal("compiled hook remains")}
  after,_:=os.ReadFile(original);engine,_:=os.ReadFile(filepath.Join(lib,"renpy.zip"))
