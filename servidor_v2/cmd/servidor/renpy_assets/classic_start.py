@@ -43,8 +43,8 @@ def install_codec_compat():
 def native_main(root,game,lint=False,report=None):
     root=os.path.abspath(root).replace("\\","/")
     game=os.path.abspath(game).replace("\\","/")
-    lowerroot=os.path.normcase(root)
-    lowergame=os.path.normcase(game)
+    lowerroot=os.path.normcase(root).replace("\\","/").rstrip("/")
+    lowergame=os.path.normcase(game).replace("\\","/").rstrip("/")
     if lowergame!=lowerroot and not lowergame.startswith(lowerroot+"/"):
         raise ValueError("IA_RENPY_RUTA_CLASICA_INVALIDA")
     if not os.path.isdir(root) or not os.path.isdir(game):
