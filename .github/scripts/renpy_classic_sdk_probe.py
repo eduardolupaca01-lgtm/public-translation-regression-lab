@@ -3,6 +3,7 @@ Uses genuine SDK classes and deterministic fixture translations, not neural infe
 """
 import argparse
 import os
+import struct
 from pathlib import Path, PurePosixPath
 import subprocess
 import tempfile
@@ -17,6 +18,9 @@ init 999:
         import sys
         import types
         import traceback
+        checkpoint=open(os.environ["IA_CLASSIC_ENTERED"],"wb")
+        checkpoint.write("INIT_ENTERED")
+        checkpoint.close()
         try:
             import renpy as engine
             import __builtin__ as builtins
@@ -41,9 +45,11 @@ init 999:
             cls=module.native_text_class(engine)
             assert cls is not None
             module.install(engine,Fixture())
-            def check(value,expected):
-                if isinstance(value,(builtins.list,builtins.tuple)):
-                    assert builtins.tuple(value)==(expected,),repr(value)
+            # python hide uses separate globals and locals in classic engines.
+            # Capture the module as a default argument, not a store global.
+            def check(value,expected,py_builtins=builtins):
+                if isinstance(value,(py_builtins.list,py_builtins.tuple)):
+                    assert py_builtins.tuple(value)==(expected,),repr(value)
                 else:
                     assert value==expected,repr(value)
             for original,expected in ((u'Hello world',u'Hola mundo'),(u'She said "Hello"',u'Ella dijo "Hola"'),(u'Continue',u'Continuar'),(u'{b}Save{/b}',u'{b}Guardar{/b}')):
@@ -95,47 +101,94 @@ def find_launcher(base):
         print("Top-level executable inventory:",[str(p.relative_to(base)) for p in base.rglob("*.exe")][:100],flush=True)
         raise RuntimeError("No recognized historical SDK game launcher")
     return sorted(possible,key=lambda x:(x[0],x[1],str(x[2])))[0][2]
+def diagnostics(base,project,root,launcher,phase):
+    print("Diagnostic phase:",phase,flush=True)
+    for p in (root/(phase+"-console.txt"),root/"error.txt",root/"entered.txt"):
+        if p.is_file():print(p.name,p.read_text("utf-8-sig",errors="replace")[-8000:],flush=True)
+    for directory in (project,project/"game",launcher.parent):
+        for name in ("traceback.txt","errors.txt","error.txt","log.txt","stderr.txt","renpy.exe.log","run_game.exe.log"):
+            p=directory/name
+            if p.is_file():print(str(p.relative_to(root)),p.read_text("utf-8-sig",errors="replace")[-8000:],flush=True)
+
+def run_phase(command,env,base,project,root,launcher,phase,marker,expected,seconds):
+    print("Phase",phase,"arguments",command[1:],flush=True)
+    with (root/(phase+"-console.txt")).open("wb") as output:
+        proc=subprocess.Popen(command,cwd=launcher.parent,env=env,stdout=output,stderr=subprocess.STDOUT)
+        try:
+            end=time.monotonic()+seconds
+            while time.monotonic()<end:
+                if (root/"error.txt").exists():
+                    diagnostics(base,project,root,launcher,phase)
+                    raise RuntimeError("Historical script reported an exception")
+                if marker.is_file() and expected(marker.read_text("utf-8",errors="replace")):
+                    print(marker.read_text("utf-8",errors="replace"),flush=True)
+                    # --lint and --python normally exit; allow clean completion.
+                    try:proc.wait(timeout=8)
+                    except subprocess.TimeoutExpired:pass
+                    return
+                code=proc.poll()
+                if code not in (None,0):
+                    print("Native exit:",code,hex(code&0xffffffff),flush=True)
+                    break
+                # A zero launcher exit alone is not evidence of interpreter success.
+                time.sleep(.25)
+            print("Launcher final status:",proc.poll(),flush=True)
+            diagnostics(base,project,root,launcher,phase)
+            raise RuntimeError("Missing verified marker in "+phase)
+        finally:
+            if proc.poll() is None:
+                subprocess.run(["taskkill","/PID",str(proc.pid),"/T","/F"],capture_output=True)
+                proc.wait(timeout=15)
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--archive",type=Path,required=True)
     parser.add_argument("--version",required=True)
     args=parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="ia-classic-sdk-",ignore_cleanup_errors=True) as d:
+    # Short ASCII path on the Windows runner; avoid depending on the system
+    # profile's long/Unicode temporary-directory name in Python 2.3.
+    with tempfile.TemporaryDirectory(prefix="ia-classic-",dir=os.environ.get("RUNNER_TEMP"),ignore_cleanup_errors=True) as d:
         root=Path(d);sdk=root/"sdk";sdk.mkdir()
         safe_extract(args.archive,sdk)
         launcher=find_launcher(sdk)
-        project=root/"fixture"
-        game=project if args.version.startswith(("4.","5.")) else project/"game"
+        binary=launcher.read_bytes()
+        offset=struct.unpack_from("<I",binary,0x3c)[0]
+        if binary[offset:offset+4]!=b"PE\x00\x00":raise RuntimeError("Not a PE launcher")
+        print("Historical launcher:",launcher.relative_to(sdk),"PE machine:",hex(struct.unpack_from("<H",binary,offset+4)[0]),flush=True)
+        print("Bundled Python DLLs:",[str(x.relative_to(sdk)) for x in sdk.rglob("python*.dll")][:40],flush=True)
+        # These old engines use paths relative to the launcher, plus common/.
+        # Keep the synthetic project inside the extracted SDK only.
+        project=launcher.parent/"ia_fixture"
+        old=args.version.startswith(("4.","5."))
+        game=project if old else project/"game"
         game.mkdir(parents=True)
         (game/"script.rpy").write_text(SCRIPT,encoding="ascii")
         marker=root/"result.txt";error=root/"error.txt"
         env=os.environ.copy()
-        env.pop("PYTHONUTF8",None);env.pop("PYTHONIOENCODING",None)
+        for key in ("PYTHONUTF8","PYTHONIOENCODING","PYTHONHOME","PYTHONPATH"):
+            env.pop(key,None)
         env.update(IA_CLASSIC_CLIENT=str(CLIENT),IA_CLASSIC_VERSION=args.version,
                    IA_CLASSIC_RESULT=str(marker),IA_CLASSIC_ERROR=str(error),
+                   IA_CLASSIC_ENTERED=str(root/"entered.txt"),
                    RENPY_RENDERER="sw",RENPY_PERFORMANCE_TEST="0")
-        command=[str(launcher),"--game",str(project)] if args.version.startswith(("4.","5.")) else [str(launcher),str(project)]
-        print("Historical launcher:",launcher.relative_to(sdk),flush=True)
-        proc=subprocess.Popen(command,cwd=launcher.parent,env=env)
-        try:
-            end=time.monotonic()+100
-            while time.monotonic()<end:
-                if error.exists():raise RuntimeError(error.read_text("utf-8",errors="replace"))
-                if marker.exists():
-                    result=marker.read_text("utf-8",errors="replace")
-                    if result.startswith("CLASSIC_NATIVE_INIT_OK ") and args.version in result:
-                        print(result,flush=True)
-                        return
-                if proc.poll() not in (None,0):
-                    break
-                time.sleep(.25)
-            for directory in (project,game,launcher.parent):
-                for name in ("traceback.txt","errors.txt","log.txt"):
-                    p=directory/name
-                    if p.is_file():print(name,p.read_text("utf-8-sig",errors="replace")[-8000:],flush=True)
-            raise RuntimeError("Historical native initialization marker missing")
-        finally:
-            if proc.poll() is None:
-                subprocess.run(["taskkill","/PID",str(proc.pid),"/T","/F"],capture_output=True)
-                proc.wait(timeout=15)
+        if old:
+            # Official --python switch in historical launchers. First prove
+            # their bundled interpreter starts at all, independently of the
+            # Ren'Py parser, display classes, graphics, or our translator.
+            pre=root/"python-start.txt"
+            env["IA_CLASSIC_PYTHON_RESULT"]=str(pre)
+            probe=launcher.parent/"ia_boot_probe.py"
+            probe.write_text(
+                'import os, sys\n'
+                'f=open(os.environ["IA_CLASSIC_PYTHON_RESULT"],"wb")\n'
+                'f.write("PYTHON_STARTED "+sys.version)\n'
+                'f.close()\n',encoding="ascii")
+            run_phase([str(launcher),"--python",probe.name],env,sdk,project,root,launcher,
+                      "python-start",pre,lambda v:v.startswith("PYTHON_STARTED "),35)
+        # Historical --lint initializes the actual game script and native
+        # displayable classes but does not require the graphics loop.
+        # This is explicitly an initialization contract, not a play test.
+        command=[str(launcher),"--game",project.name,"--lint"] if old else [str(launcher),str(project),"--lint"]
+        run_phase(command,env,sdk,project,root,launcher,"native-init",marker,
+                  lambda v:v.startswith("CLASSIC_NATIVE_INIT_OK ") and args.version in v,85)
 if __name__=="__main__":main()
