@@ -56,6 +56,8 @@ class Client(object):
         self.inventory_count=0;self.scan_complete=False;self.applied=0
         self.accepted=0;self.failed=0;self.deferred=0
         self.phase="ESCANEO"
+        self.scan_report={}
+        self.prepare_id=""
         self.worker_diag=os.path.join(self.side,"worker-startup.json")
         self.diagnostics=set()
     def note(self,code):
@@ -69,6 +71,12 @@ class Client(object):
             pass
     def get_session(self,deadline):
         if self.connection and self.proc and self.proc.poll() is None:return self.connection
+        # Do not spawn a second worker while another verified local session
+        # is active. Never attach to a foreign or stale session.
+        try:
+            if any(n.startswith("session-") and n.endswith(".json") and n!=os.path.basename(self.session) for n in os.listdir(self.side)):
+                self.note("IA_RENPY_OTRA_SESION_PRESENTE");return None
+        except (IOError,OSError):pass
         while CLOCK()<deadline:
             if self.connection and self.proc and self.proc.poll() is None:return self.connection
             if CLOCK()<self.cooldown:return None
@@ -174,7 +182,8 @@ class Client(object):
                     "discovered":self.detected,"pending":len(self.queued),
                     "accepted":self.accepted,"unchanged":self.rejected,
                     "transport_failed":self.failed,"deferred":self.deferred,
-                    "applied":self.applied,"updated":int(time.time())}
+                    "applied":self.applied,"updated":int(time.time()),
+                    "preparation_id":self.prepare_id,"scan":dict(self.scan_report)}
     def publish_progress(self):
         # Per-session temporary file; no dialogue or credentials in the report.
         path=os.path.join(self.side,"client-progress.json")
@@ -260,45 +269,200 @@ class Client(object):
         self.stopped=True;self.wake.set()
     def counts(self):return (self.detected,self.accepted,self.rejected,self.fallback)
 
-def inventory(engine):
-    # Inspect the engine's already-loaded AST, including scripts inside RPA;
-    # never deserialize game archives outside their native engine or run code.
+def expression_texts(source,visible=False):
+    """Inspect only literal text in a known presentation position.
+    Never evaluate the expression, import game code, or walk arbitrary objects.
+    Python 2 and 3 ASTs both expose literal strings as Str.s.
+    """
+    try:import ast
+    except ImportError:return
+    if isinstance(source,ast.AST):tree=source
+    else:
+        source=as_text(source)
+        if not source or len(source)>524288:return
+        try:tree=ast.parse(source.strip())
+        except (SyntaxError,ValueError,TypeError,UnicodeError):
+            try:tree=ast.parse(source,mode="exec")
+            except (SyntaxError,ValueError,TypeError,UnicodeError):return
+    def name(node):
+        if isinstance(node,ast.Name):return node.id
+        if isinstance(node,ast.Attribute):
+            prefix=name(node.value)
+            if prefix:return prefix+"."+node.attr
+        return ""
+    def literals(node):
+        if isinstance(node,ast.Str):
+            value=as_text(node.s)
+            if eligible(value):yield value
+        elif isinstance(node,ast.IfExp):
+            for part in (node.body,node.orelse):
+                for value in literals(part):yield value
+        elif isinstance(node,ast.Call) and name(node.func) in ("_","__","_p"):
+            if node.args:
+                for value in literals(node.args[0]):yield value
+        elif isinstance(node,ast.BinOp) and isinstance(node.op,ast.Add) and isinstance(node.left,ast.Str) and isinstance(node.right,ast.Str):
+            a=as_text(node.left.s);b=as_text(node.right.s)
+            if a is not None and b is not None and eligible(a+b):yield a+b
+    if visible:
+        node=tree.body[0].value if isinstance(tree,ast.Module) and len(tree.body)==1 and isinstance(tree.body[0],ast.Expr) else None
+        if node is not None:
+            for value in literals(node):yield value
+    first=("_","__","_p","Character","renpy.character.Character","Text","renpy.text.text.Text","renpy.display.text.Text","renpy.notify","renpy.confirm","renpy.input","ui.text","ui.textbutton","ui.label","renpy.exports.notify","renpy.exports.confirm","renpy.exports.input")
+    for node in ast.walk(tree):
+        if not isinstance(node,ast.Call):continue
+        kind=name(node.func)
+        index=1 if kind in ("renpy.say","renpy.exports.say") else 0
+        if kind not in first and kind not in ("renpy.say","renpy.exports.say"):continue
+        if len(node.args)>index:
+            for value in literals(node.args[index]):yield value
+        else:
+            key="what" if index==1 else "prompt" if kind.endswith("input") else "message" if kind.endswith(("notify","confirm")) else "name" if kind.endswith("Character") else "text"
+            for keyword in node.keywords:
+                if keyword.arg==key:
+                    for value in literals(keyword.value):yield value
+
+def screen_texts(screen,report):
+    # Native SL2 tree: inspect text, textbutton and label positional arguments,
+    # including branches that have never been evaluated. Do not execute screens.
+    stack=[screen];seen=set()
+    while stack:
+        node=stack.pop()
+        if node is None or id(node) in seen:continue
+        seen.add(id(node));report["screen_nodes"]+=1
+        kind=node.__class__.__name__
+        if kind=="SLDisplayable":
+            fn=getattr(node,"displayable",None)
+            if getattr(fn,"__name__","") in ("Text","_textbutton","_label","textbutton","label"):
+                args=getattr(node,"positional",[]) or []
+                if args:
+                    for value in expression_texts(args[0],True):yield value
+            # Explicit translation calls may also occur in other properties.
+            for key,expr in getattr(node,"keyword",[]) or []:
+                for value in expression_texts(expr,key in ("tooltip","alt","text","label")):yield value
+        elif kind in ("SLPython","SLDefault"):
+            code=getattr(node,"code",None)
+            for value in expression_texts(getattr(code,"source",code)):yield value
+        for child in reversed(getattr(node,"children",[]) or []):stack.append(child)
+        for entry in reversed(getattr(node,"entries",[]) or []):
+            if isinstance(entry,(list,tuple)) and len(entry)>=2:stack.append(entry[1])
+        block=getattr(node,"block",None)
+        if block is not None and not isinstance(block,(list,tuple)):stack.append(block)
+
+def inventory(engine,report=None):
+    if report is None:report={}
+    report.update({"script_files":0,"archived_scripts":0,"loose_scripts":0,
+                   "native_nodes":0,"screen_nodes":0,"partial":False})
     script=getattr(engine.game,"script",None)
-    if script is None:return
-    stmts=getattr(script,"all_stmts",[]) or []
-    if isinstance(stmts,dict):stmts=stmts.values()
+    if script is None:
+        report["partial"]=True;return
+    loader=getattr(engine,"loader",None)
+    if loader is not None and hasattr(loader,"listdirfiles"):
+        try:
+            try:entries=loader.listdirfiles(common=False)
+            except TypeError:entries=loader.listdirfiles()
+            files=set()
+            for directory,filename in entries:
+                name=as_text(filename)
+                if not name or not name.lower().endswith((".rpy",".rpyc",".rpym",".rpymc",".py")):continue
+                if "/ia_servidor_renpy/" in "/"+name.replace("\\","/") or "/tl/" in "/"+name.replace("\\","/"):continue
+                key=(directory is None,name)
+                if key in files:continue
+                files.add(key)
+                report["archived_scripts" if directory is None else "loose_scripts"]+=1
+            report["script_files"]=len(files)
+        except Exception:report["partial"]=True
     def visible_node(node):
         filename=(getattr(node,"filename","") or "").replace("\\","/")
         return "/tl/" not in "/"+filename and "/ia_servidor_renpy/" not in "/"+filename
-    for node in stmts:
-        if not visible_node(node):continue
-        if node.__class__.__name__=="Say":
+    def nodes():
+        stmts=getattr(script,"all_stmts",[]) or []
+        if isinstance(stmts,dict):stmts=stmts.values()
+        for node in stmts:yield node
+        named=getattr(script,"namemap",{}) or {}
+        if hasattr(named,"values"):
+            for node in named.values():yield node
+        translator=getattr(script,"translator",None)
+        blocks=getattr(translator,"default_translates",{}) or {}
+        if hasattr(blocks,"values"):
+            for block in blocks.values():
+                if visible_node(block):
+                    for node in getattr(block,"block",[]) or []:yield node
+    seen=set()
+    for node in nodes():
+        if node is None or id(node) in seen or not visible_node(node):continue
+        seen.add(id(node));report["native_nodes"]+=1
+        kind=node.__class__.__name__
+        if kind=="Say":
             value=as_text(getattr(node,"what",None))
             if eligible(value):yield value
-        elif node.__class__.__name__=="Menu":
-            for item in getattr(node,"items",[]):
+        elif kind=="Menu":
+            for item in getattr(node,"items",[]) or []:
                 if item:
                     value=as_text(item[0])
                     if eligible(value):yield value
+        elif kind=="Screen":
+            try:
+                for value in screen_texts(getattr(node,"screen",None),report):yield value
+            except Exception:report["partial"]=True
+        elif kind in ("Python","EarlyPython","Define","Default"):
+            try:
+                for value in expression_texts(getattr(getattr(node,"code",None),"source",None)):yield value
+            except Exception:report["partial"]=True
     translator=getattr(script,"translator",None)
-    # Some engines keep dialogue in their translation-block registry after
-    # releasing all_stmts. This is a read-only second source; queue deduplicates.
-    blocks=getattr(translator,"default_translates",{}) or {}
-    if hasattr(blocks,"values"):
-        for block in blocks.values():
-            if not visible_node(block):continue
-            for node in getattr(block,"block",[]) or []:
-                if node.__class__.__name__=="Say" and visible_node(node):
-                    value=as_text(getattr(node,"what",None))
-                    if eligible(value):yield value
     extra=getattr(translator,"additional_strings",{}) or {}
     if hasattr(extra,"items"):
         for filename,items in extra.items():
-            if "/tl/" in "/"+filename.replace("\\","/"):continue
+            if "/tl/" in "/"+filename.replace("\\","/") or "/ia_servidor_renpy/" in "/"+filename.replace("\\","/"):continue
             for item in items:
                 if len(item)>=2:
                     value=as_text(item[1])
                     if eligible(value):yield value
+
+def prepare_ticket(engine,client):
+    """The original native command is opt-in and never enters a game label."""
+    args=getattr(engine.game,"args",None)
+    requested=getattr(args,"command",None)=="ia_renpy_prepare"
+    ticket=os.path.join(client.side,"prepare-request.json")
+    if not requested:
+        if os.path.isfile(ticket):raise ValueError("IA_RENPY_PREPARACION_EN_CURSO")
+        return
+    nonce=os.environ.get("IA_RENPY_PREPARE_ID","")
+    if not re.match(r"^[0-9a-f]{32}$",nonce):raise ValueError("IA_RENPY_PREPARACION_INVALIDA")
+    with io.open(ticket,"r",encoding="utf-8") as inp:request=json.loads(inp.read(4096))
+    if request.get("schema")!=SCHEMA or request.get("id")!=nonce:raise ValueError("IA_RENPY_PREPARACION_INVALIDA")
+    api=getattr(engine,"arguments",None)
+    if api is None or not hasattr(api,"register_command"):raise ValueError("IA_RENPY_PREPARACION_NO_COMPATIBLE")
+    client.prepare_id=nonce
+    def prepare():
+        api.takes_no_arguments("IA Traductora: preparar textos antes de jugar")
+        cancel=os.path.join(client.side,"prepare-cancel-"+nonce+".txt")
+        result=os.path.join(client.side,"prepare-result-"+nonce+".json")
+        state="IA_RENPY_PREPARACION_INCOMPLETA"
+        last=None;changed=CLOCK();started=CLOCK()
+        try:
+            while not client.stopped:
+                p=client.snapshot()
+                if os.path.isfile(cancel):
+                    state="IA_RENPY_PREPARACION_CANCELADA";break
+                if p["scan_complete"] and p["pending"]==0 and client.connection:
+                    if not p["transport_failed"] and not p["deferred"]:state="IA_RENPY_PREPARACION_LISTA"
+                    break
+                if not p["scan_complete"] and p["pending"]==0:break
+                progress=(p["accepted"],p["unchanged"],p["transport_failed"],p["pending"])
+                if progress!=last:last=progress;changed=CLOCK()
+                if (not client.connection and CLOCK()-started>60) or CLOCK()-changed>180:break
+                time.sleep(.25)
+            data=client.snapshot();data["result"]=state;data["id"]=nonce
+            # Ticket-specific result written atomically; zero launcher exit
+            # alone is never a completion signal.
+            temp=result+".tmp"
+            with open(temp,"wb") as out:out.write(json.dumps(data,ensure_ascii=True).encode("ascii"))
+            os.rename(temp,result)
+        finally:
+            client.close()
+        return False
+    api.register_command("ia_renpy_prepare",prepare)
+
 _installed=False
 def install(engine,client=None):
     global _installed
@@ -312,6 +476,7 @@ def install(engine,client=None):
         return True
     waiters=collections.OrderedDict()
     live_client=isinstance(client,Client)
+    if live_client:prepare_ticket(engine,client)
     last_refresh=[0]
     def transform(value,missing=None,live=None):
         source=as_text(value)
@@ -398,12 +563,17 @@ def install(engine,client=None):
             config.periodic_callback=periodic
     complete=True
     if live_client:client.start_progress()
+    report={}
     try:
-        for text in inventory(engine):client.enqueue(text)
+        for text in inventory(engine,report):client.enqueue(text)
+        complete=not report.get("partial",False)
     except Exception:
         complete=False
         if hasattr(client,"note"):client.note("IA_RENPY_INVENTARIO_PARCIAL")
-    if live_client:client.finish_inventory(complete)
+    if live_client:
+        client.scan_report=report
+        client.finish_inventory(complete)
+        client.publish_progress()
     client.start_prefetch()
     if atexit is not None:atexit.register(client.close)
     return client

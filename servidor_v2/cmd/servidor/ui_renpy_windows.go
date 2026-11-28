@@ -53,7 +53,7 @@ func iaRenpySelect(ui *iaUI){
 }
 func iaStartRenpy(ui *iaUI,restore bool){
  if !ui.renpyActive||ui.busy||ui.renpyFile==""{return}
- question:="Se instalará exclusivamente el complemento Ren'Py en esta copia. No se reescriben guiones, archivos RPA ni partidas. Mantén el juego cerrado. ¿Continuar?"
+ question:="Se instalará el complemento Ren'Py en esta copia. En motores modernos se prepararán los textos antes de jugar, sin entrar a la partida. Puedes detener la preparación cerrando su ventana. Mantén el juego cerrado. ¿Continuar?"
  if restore{question="Se desactivará el complemento Ren'Py propio. Se conserva la memoria y se guardan sus archivos fuera de game/. Cierra el juego. ¿Continuar?"}
  yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,uintptr(unsafe.Pointer(iaUTF16(question))),uintptr(unsafe.Pointer(iaUTF16("Servidor · Ren'Py"))),0x24|0x100)
  if yes!=6{return}
@@ -66,7 +66,13 @@ func iaStartRenpy(ui *iaUI,restore bool){
   if restore{e=renpyRecover(p);if e==nil{result="IA_RENPY_RESTAURADO"}}else{
    var source string;source,e=os.Executable()
    if e==nil{var pkg *packageReader;pkg,e=readPackage(source);if e==nil{defer pkg.Close();e=renpyInstall(p,pkg)}}
-   if e==nil{result="IA_RENPY_INSTALADO"}
+   if e==nil{
+    result="IA_RENPY_INSTALADO"
+    if d,de:=detectRenpy(p);de==nil&&d.Profile==renpyModernProfile{
+     e=renpyPrepare(p)
+     if e==nil{result="IA_RENPY_PREPARACION_LISTA"}
+    }
+   }
   }
   if e!=nil{result=iaSafeInstallCode(renpyStageError("OPERACION",e).Error())}
  }()
@@ -76,6 +82,9 @@ func iaRenpyFinish(ui *iaUI){
  iaRenpyLog(ui,"["+s+"]")
  switch s{
  case "IA_RENPY_INSTALADO":iaSet(ui.renpyStatus,"Instalado. Abre normalmente el EXE original del juego.")
+ case "IA_RENPY_PREPARACION_LISTA":iaSet(ui.renpyStatus,"Inventario procesado. Abre normalmente el EXE original del juego.")
+ case "IA_RENPY_PREPARACION_CANCELADA":iaSet(ui.renpyStatus,"Instalado; preparación detenida. Se conserva la memoria.")
+ case "IA_RENPY_PREPARACION_INCOMPLETA","IA_RENPY_PREPARACION_NO_CONFIRMADA","IA_RENPY_PREPARACION_PROCESO_FALLO":iaSet(ui.renpyStatus,"Instalado; preparación incompleta. Consulta Estado IA Traductora.")
  case "IA_RENPY_RESTAURADO":iaSet(ui.renpyStatus,"Complemento desactivado. Partidas y memoria conservadas.")
  case "IA_RENPY_VERSION_ANTERIOR_RESTAURAR":iaSet(ui.renpyStatus,"Cierra el juego, pulsa Restaurar Ren'Py y vuelve a instalar.")
  default:iaSet(ui.renpyStatus,"Operación detenida. Revisa el diagnóstico; no fuerces cambios.")
@@ -89,7 +98,7 @@ func iaRenpyStatus(ui *iaUI){
 
 
 func iaRenpyTick(ui *iaUI){
- if !ui.renpyActive||ui.busy||ui.renpyFile==""{return}
+ if !ui.renpyActive||ui.renpyFile==""{return}
  side:=filepath.Join(filepath.Dir(ui.renpyFile),renpySide)
  if p,ok:=renpyReadProgress(side);ok{iaSet(ui.renpyStatus,renpyProgressLine(p))}
 }

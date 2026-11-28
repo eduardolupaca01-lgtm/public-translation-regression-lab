@@ -148,3 +148,9 @@ func TestRenpyPreservePriorMemory(t *testing.T){
  }
  if _,e:=os.Stat(filepath.Join(stage,"unrelated.txt"));!os.IsNotExist(e){t.Fatal("unrelated file copied")}
 }
+
+func TestRenpyPrepareRejectsUninstalled(t *testing.T){
+ exe:=renpyFixture(t)
+ if e:=renpyPrepare(exe);e==nil{t.Fatal("preparation accepted without installed verified hook")}
+ if _,e:=os.Stat(filepath.Join(filepath.Dir(exe),".ia-renpy-install.lock"));!os.IsNotExist(e){t.Fatal("preparation lock remains")}
+}

@@ -335,6 +335,7 @@ func renpyStartupText(side string)string{
 type renpyProgress struct{
  Schema string
  Phase string
+ PreparationID string `json:"preparation_id"`
  ScanComplete bool `json:"scan_complete"`
  Inventory,Discovered,Pending,Accepted,Unchanged,Deferred,Applied uint64
  TransportFailed uint64 `json:"transport_failed"`
@@ -401,4 +402,65 @@ func renpyPlay(exe string)error{
  if e=cmd.Start();e!=nil{return errors.New("IA_RENPY_INICIO_FALLO")}
  go func(){_ = cmd.Wait()}()
  return nil
+}
+
+// Dedicated preparation: run the installed native engine command, never
+// enter gameplay, use separate saves, and require an authenticated-by-ticket
+// result rather than trusting the launcher's exit code.
+func renpyPrepare(exe string)(err error){
+ defer func(){err=renpyStageError("PREPARACION",err)}()
+ d,e:=detectRenpy(exe);if e!=nil{return e}
+ if d.Profile!=renpyModernProfile{return errors.New("IA_RENPY_PREPARACION_CLASICA_PENDIENTE")}
+ release,e:=renpyLock(d.Root);if e!=nil{return e};defer release()
+ side:=filepath.Join(d.Root,renpySide)
+ m,e:=renpyReadReceipt(side);if e!=nil{return e}
+ if m.Profile!=d.Profile||m.GameRel!=d.GameRel||renpyPriorModern(m){return errors.New("IA_RENPY_VERSION_ANTERIOR_RESTAURAR")}
+ if e=renpyCheckSessions(side);e!=nil{return e}
+ if e=renpyVerifySide(side,m,m.Engine);e!=nil{return e}
+ hook:=filepath.Join(renpyHookAt(d),"boot.rpy")
+ if !renpyFile(hook){return errors.New("IA_RENPY_HOOK_NO_VERIFICADO")}
+ h,e:=digestFile(hook);if e!=nil||h!=m.Boot{return errors.New("IA_RENPY_HOOK_ALTERADO")}
+ raw:=make([]byte,16);if _,e=rand.Read(raw);e!=nil{return e};id:=hex.EncodeToString(raw)
+ request:=filepath.Join(side,"prepare-request.json")
+ body,e:=json.Marshal(map[string]string{"schema":renpySchema,"id":id});if e!=nil{return e}
+ if e=createNew(request,body);e!=nil{return errors.New("IA_RENPY_PREPARACION_OCUPADA")}
+ defer func(){if b,e:=os.ReadFile(request);e==nil&&string(b)==string(body){_ = os.Remove(request)}}()
+ saves:=filepath.Join(side,"prepare-saves-"+id)
+ if e=os.Mkdir(saves,0700);e!=nil{return e}
+ abs,e:=filepath.Abs(exe);if e!=nil{return e}
+ cmd:=exec.Command(abs,d.Root,"ia_renpy_prepare","--savedir",saves);cmd.Dir=d.Root
+ for _,v:=range os.Environ(){
+  k:=strings.ToUpper(strings.SplitN(v,"=",2)[0])
+  if k!="IA_RENPY_PREPARE_ID"&&k!="PYTHONHOME"&&k!="PYTHONPATH"{cmd.Env=append(cmd.Env,v)}
+ }
+ cmd.Env=append(cmd.Env,"IA_RENPY_PREPARE_ID="+id)
+ if e=cmd.Start();e!=nil{return e}
+ done:=make(chan error,1);go func(){done<-cmd.Wait()}()
+ result:=filepath.Join(side,"prepare-result-"+id+".json")
+ cancel:=filepath.Join(side,"prepare-cancel-"+id+".txt")
+ defer os.Remove(cancel)
+ initial:=time.Now().Add(120*time.Second)
+ deadline:=time.Now().Add(24*time.Hour)
+ for time.Now().Before(deadline){
+  if renpyFile(result){
+   var state struct{Schema,ID,Result string;Pending,Deferred uint64;ScanComplete bool `json:"scan_complete"`;TransportFailed uint64 `json:"transport_failed"`}
+   st,e:=os.Stat(result);if e!=nil||st.Size()>8192{return errors.New("IA_RENPY_PREPARACION_RESULTADO_INVALIDO")}
+   b,e:=os.ReadFile(result);if e!=nil{return e}
+   if json.Unmarshal(b,&state)!=nil||state.Schema!=renpySchema||state.ID!=id{return errors.New("IA_RENPY_PREPARACION_RESULTADO_INVALIDO")}
+   end:=time.Now().Add(45*time.Second)
+   for time.Now().Before(end)&&renpyCheckSessions(side)!=nil{time.Sleep(250*time.Millisecond)}
+   if e=renpyCheckSessions(side);e!=nil{return errors.New("IA_RENPY_PREPARACION_MOTOR_ACTIVO")}
+   if state.Result=="IA_RENPY_PREPARACION_LISTA"&&state.ScanComplete&&state.Pending==0&&state.Deferred==0&&state.TransportFailed==0{return nil}
+   if state.Result=="IA_RENPY_PREPARACION_CANCELADA"{return errors.New(state.Result)}
+   return errors.New("IA_RENPY_PREPARACION_INCOMPLETA")
+  }
+  select{case e=<-done:
+   if e!=nil{return errors.New("IA_RENPY_PREPARACION_PROCESO_FALLO")}
+  default:}
+  if p,ok:=renpyReadProgress(side);ok&&p.PreparationID==id&&time.Now().Unix()-p.Updated<=30{initial=time.Now().Add(120*time.Second)}
+  if time.Now().After(initial){_ = createNew(cancel,[]byte("cancel"));return errors.New("IA_RENPY_PREPARACION_NO_CONFIRMADA")}
+  time.Sleep(250*time.Millisecond)
+ }
+ _ = createNew(cancel,[]byte("cancel"))
+ return errors.New("IA_RENPY_PREPARACION_LIMITE")
 }

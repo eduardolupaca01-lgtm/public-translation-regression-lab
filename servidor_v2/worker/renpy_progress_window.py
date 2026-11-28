@@ -3,6 +3,7 @@ No interaction with the game thread, game windows, external services or input.
 Closing this window closes ONLY the progress view.
 """
 import os
+import re
 import threading
 
 SCHEMA="ia-renpy-progress-window-v1"
@@ -44,7 +45,7 @@ class ProgressWindow:
             "Nuevas: {:,} | Memoria: {:,}".format(state["translated"],state["cached"]),
             "Pendientes: {:,} | Sin cambio: {:,}".format(count("pending"),count("unchanged")),
             "Errores: {:,} | Aplicaciones: {:,}".format(count("transport_failed"),count("applied")),
-            "Puedes cerrar esta ventana; la traducción continúa.",
+            "Cierra para detener la preparación." if p.get("preparation_id") else "Puedes cerrar esta ventana; la traducción continúa.",
         )
     def run(self):
         try:self.run_native()
@@ -104,6 +105,18 @@ class ProgressWindow:
                     else:paint_values()
                     return 0
                 if msg==0x0010:
+                    # Closing a regular live view does not stop the motor.
+                    # In the explicitly requested preparation mode, close
+                    # is a cancellation request, matched to this ticket.
+                    try:
+                        p=self.read_json(self.side/"client-progress.json",8192)
+                        ticket=self.read_json(self.side/"prepare-request.json",4096)
+                        nonce=p.get("preparation_id","")
+                        if re.fullmatch("[0-9a-f]{32}",nonce) and ticket.get("schema")=="ia-servidor-renpy-v1" and ticket.get("id")==nonce:
+                            try:
+                                with (self.side/("prepare-cancel-"+nonce+".txt")).open("x",encoding="ascii") as marker:marker.write("cancel")
+                            except FileExistsError:pass
+                    except (OSError,ValueError,TypeError):pass
                     destroy(hwnd);return 0
                 if msg==0x0002:
                     killtimer(hwnd,1);quitmsg(0);return 0

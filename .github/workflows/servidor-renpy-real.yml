@@ -567,17 +567,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dir,$stage | Out-Null
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP "Servidor.exe") -Destination $stage
           'Servidor R45 - candidato experimental RENPY + RPG + WEB. Instala RenPy solo en una copia cerrada y abre el EXE original normalmente. Consulta Estado IA Traductora. OPUS local ingles/japones a espanol. Restaurar RenPy retira el complemento y conserva memoria y partidas. Compatibilidad universal no certificada; consultar resultados por version. No distribuir como estable.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
-          $package=Join-Path $dir "Servidor-R45-RenPy-Fix2.7z"
+          $package=Join-Path $dir "Servidor-R45-RenPy-Fix3.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $stage "Servidor.exe") (Join-Path $stage "LEEME.txt") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-R45-RenPy-Fix2.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
+          "$sha  Servidor-R45-RenPy-Fix3.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
       - name: Entregar solo candidato R45 experimental cifrado
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-R45-RENPY-RPG-WEB-FIX2-CIFRADO
+          name: SERVIDOR-R45-RENPY-RPG-WEB-FIX3-CIFRADO
           path: ${{ runner.temp }}/IA-R45-RenPy-Cifrado/
           retention-days: 7
           if-no-files-found: error

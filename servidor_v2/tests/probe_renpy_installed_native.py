@@ -25,7 +25,13 @@ define config.sound = False
 label main_menu:
     return
 
+screen ia_unvisited_screen():
+    text "Inventory is empty."
+    if True:
+        textbutton "Open settings" action NullAction()
+
 label ia_inventory_only:
+    $ renpy.notify("Quest completed.")
     "This archived dialogue is never played."
     menu:
         "Open the archived door":
@@ -56,9 +62,11 @@ label start:
                 raise RuntimeError("Say/menu hook missing")
             mode=os.environ["IA_RENPY_NATIVE_MODE"]
             c=module.active_client
-            expected_inventory=(u"This archived dialogue is never played.",u"Open the archived door",u"A second archived dialogue.")
+            expected_inventory=(u"This archived dialogue is never played.",u"Open the archived door",u"A second archived dialogue.",u"Inventory is empty.",u"Open settings",u"Quest completed.")
             if not c.snapshot()["scan_complete"] or not all(s in c.seen for s in expected_inventory):
-                raise RuntimeError("Native inventory did not discover archived dialogue and menu")
+                raise RuntimeError("Native inventory did not discover archived dialogue, screen and notification: "+repr([s for s in expected_inventory if s not in c.seen]))
+            if c.snapshot()["scan"]["archived_scripts"]<1:
+                raise RuntimeError("Native archive inventory not recorded")
             if mode=="preflight":
                 # Actual native constructors while no worker binary exists.
                 begin=time.time()

@@ -158,6 +158,28 @@ class RenpyR1(unittest.TestCase):
         self.assertEqual(list(c.pending),["Inventory one."])
         self.assertEqual(c.snapshot()["inventory"],2)
         self.assertEqual(c.snapshot()["discovered"],2)
+    def test_preplay_inventory_compiled_screen_and_python_literals(self):
+        from types import SimpleNamespace as NS
+        def make(kind,**attrs):
+            obj=type(kind,(),{})()
+            for key,value in attrs.items():setattr(obj,key,value)
+            return obj
+        def Text():pass
+        def _textbutton():pass
+        screen=make("SLScreen",children=[
+            make("SLDisplayable",displayable=Text,positional=['"Inventory is empty."'],keyword=[],children=[]),
+            make("SLIf",entries=[("flag",make("SLBlock",children=[make("SLDisplayable",displayable=_textbutton,positional=['"Open settings"'],keyword=[("action",'Jump("chapter_secret")')],children=[])]))])])
+        nodes=[make("Screen",filename="game/screens.rpy",screen=screen),
+               make("Python",filename="game/scene.rpy",code=NS(source='renpy.notify("Quest completed.")\nrenpy.input("Your name?", default="PRIVATE_INPUT")\npath="images/hidden.png"\nrenpy.jump("chapter_secret")')),
+               make("Define",filename="game/scene.rpy",code=NS(source='Character("Visible name")'))]
+        report={}
+        eng=NS(game=NS(script=NS(all_stmts=nodes,namemap={},translator=None)),loader=NS(listdirfiles=lambda common=False:[(None,"screens.rpyc"),("game","scene.rpy"),(None,"image.png")]))
+        found=set(client.inventory(eng,report))
+        self.assertEqual(found,{"Inventory is empty.","Open settings","Quest completed.","Your name?","Visible name"})
+        self.assertEqual(report["script_files"],2)
+        self.assertEqual(report["archived_scripts"],1)
+        self.assertGreaterEqual(report["screen_nodes"],3)
+        self.assertFalse(report["partial"])
     def test_inventory_translation_registry_and_progress(self):
         from types import SimpleNamespace as NS
         Say=type("Say",(),{})
