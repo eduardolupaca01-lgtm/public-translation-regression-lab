@@ -51,7 +51,7 @@ func TestGameMVPathAndForeignFile(t *testing.T){
 func fakePackage(t *testing.T)string{
  return fakePackageWith(t,[]byte("◆ IA Traductora · F10 \n IA Traductora · V95"),[]byte("fake neutron FOR TEST ONLY"))
 }
-func fakePackageWith(t *testing.T,plugin,worker []byte)string{
+func fakePackageWith(t *testing.T,plugin,worker []byte,extras ...map[string][]byte)string{
  t.Helper()
  directory:=t.TempDir();packageEXE:=filepath.Join(directory,"Servidor.exe")
  required:=map[string][]byte{
@@ -64,6 +64,7 @@ func fakePackageWith(t *testing.T,plugin,worker []byte)string{
  "models/opus_en_es/source.spm":[]byte("s"),
  "models/opus_en_es/target.spm":[]byte("t"),
  }
+ for _,group:=range extras{for k,v:=range group{required[k]=v}}
  manifest:=packageManifest{Schema:packageSchema,Files:map[string]string{}}
  for k,v:=range required{manifest.Files[k]=hash(v)}
  buffer:=new(bytes.Buffer);zw:=zip.NewWriter(buffer)

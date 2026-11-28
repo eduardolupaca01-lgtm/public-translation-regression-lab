@@ -56,10 +56,10 @@ func mvJSONRunDirectWorker(engine,dest,journal string)error{
  return mvJSONRunWorkerMode(engine,dest,journal,true)
 }
 func mvJSONRunWorkerMode(engine,dest,journal string,direct bool)error{
- // A private temporary directory per invocation avoids dependency on
- // the game's cwd, stale extraction directories or a shared TMP path.
- // No global environment variables, permissions, or security settings
- // are changed. The package's engine files have already been verified.
+ // The installed onedir worker does not extract or respawn itself.
+ // Keep ordinary temporary files isolated per invocation. Never change
+ // the machine's execution policy or try an alternate executable after
+ // an access denial. The runtime tree has already been verified.
  temp,e:=os.MkdirTemp("","IA-R44-")
  if e!=nil{return mvJSONError("TEMPORAL_NO_DISPONIBLE")}
  defer os.RemoveAll(temp)
@@ -68,10 +68,24 @@ func mvJSONRunWorkerMode(engine,dest,journal string,direct bool)error{
  ctx,cancel:=context.WithTimeout(context.Background(),20*time.Minute);defer cancel()
  mode:="--mv-json-pilot"
  if direct{mode="--mv-json-direct"}
- cmd:=exec.CommandContext(ctx,filepath.Join(engine,"IATraductora.exe"),
-  mode,"--game-root",dest,"--diagnostic-file",statusFile)
- cmd.Dir=engine
+ exe:=filepath.Join(engine,filepath.FromSlash(mvJSONRuntimeEXE))
+ if !ordinary(exe)||!vxaceCloneOrdinaryPath(exe)||vxaceCloneCheckAncestors(filepath.Dir(exe))!=nil{return mvJSONError("RUNTIME_NO_VERIFICADO")}
+ cmd:=exec.CommandContext(ctx,exe,mode,"--game-root",dest,"--diagnostic-file",statusFile)
+ cmd.Dir=filepath.Dir(exe)
  cmd.Env=append(os.Environ(),"TEMP="+temp,"TMP="+temp,"TMPDIR="+temp)
- if e=cmd.Run();e!=nil{return mvJSONWorkerFailure(ctx,e,statusFile)}
+ mvJSONConfigureCommand(cmd)
+ if e=cmd.Start();e!=nil{return mvJSONWorkerFailure(ctx,e,statusFile)}
+ pid:=cmd.Process.Pid
+ if e=cmd.Wait();e!=nil{return mvJSONWorkerFailure(ctx,e,statusFile)}
+ if mvJSONWorkerStatus(statusFile)!="IA_MV_JSON_CANDIDATO_LISTO"{return mvJSONError("MOTOR_INFORME_NO_VERIFICADO")}
+ raw,e:=mvJSONRead(filepath.Join(journal,"report.json"),8192)
+ var proof struct{
+  Schema string `json:"schema"`
+  PID int `json:"worker_pid"`
+  Mode string `json:"runtime_mode"`
+ }
+ // Real acceptance proves Python performed the work in the original
+ // process, not in a onefile child. Do not publish on missing proof.
+ if e!=nil||json.Unmarshal(raw,&proof)!=nil||proof.Schema!=mvJSONSchema||proof.PID!=pid||proof.Mode!="onedir"{return mvJSONError("RUNTIME_PROCESO_NO_VERIFICADO")}
  return nil
 }

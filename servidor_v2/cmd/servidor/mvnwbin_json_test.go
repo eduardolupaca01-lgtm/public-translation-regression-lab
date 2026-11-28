@@ -123,7 +123,7 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string,direct bool){
  reportFile:=filepath.Join(dest,"IA Traductora","install","mv-json","report.json")
  raw,e:=os.ReadFile(reportFile);if e!=nil{t.Fatal(e)}
  var report mvJSONReport
- if json.Unmarshal(raw,&report)!=nil||report.Lines!=2||report.New!=2||report.ChoiceLabels!=1||report.ChoiceGroups!=1{t.Fatalf("unexpected translation counts %+v",report)}
+ if json.Unmarshal(raw,&report)!=nil||report.Lines!=2||report.New!=2||report.ChoiceLabels!=1||report.ChoiceGroups!=1||report.RuntimeMode!="onedir"||report.WorkerPID<=0{t.Fatalf("unexpected translation counts %+v",report)}
  localized,e:=os.ReadFile(filepath.Join(dest,"www","data","Map001.json"))
  if e!=nil{t.Fatal(e)}
  if n,e:=mvJSONVerifyMap([]byte(mvJSONFixtureMap),localized);e!=nil||n!=2{t.Fatal("localized structure",n,e)}
@@ -169,7 +169,7 @@ func r44JSONDirectRealTrial(t *testing.T,sdk,packaged,root string,original map[s
  after,e:=os.ReadDir(filepath.Dir(root));if e!=nil||len(after)!=len(siblings){t.Fatal("direct mode created game copy",e)}
  active:=filepath.Join(mvJSONDirectBase(root),"active")
  var rec mvJSONDirectReceipt
- if _,e=mvJSONDirectRead(filepath.Join(active,"prepared.json"),&rec);e!=nil||rec.Report.Lines!=2||rec.Report.New!=2||rec.Report.Menu!=4||rec.Report.ChoiceLabels!=1{t.Fatalf("direct receipt %+v %v",rec,e)}
+ if _,e=mvJSONDirectRead(filepath.Join(active,"prepared.json"),&rec);e!=nil||rec.Report.Lines!=2||rec.Report.New!=2||rec.Report.Menu!=4||rec.Report.ChoiceLabels!=1||rec.Report.RuntimeMode!="onedir"||rec.Report.WorkerPID<=0{t.Fatalf("direct receipt %+v %v",rec,e)}
  for f,want:=range original{
   if filepath.Base(f)=="Map001.json"||filepath.Base(f)=="System.json"{continue}
   if h,e:=digestFile(f);e!=nil||h!=want{t.Fatal("original startup changed",filepath.Base(f),e)}

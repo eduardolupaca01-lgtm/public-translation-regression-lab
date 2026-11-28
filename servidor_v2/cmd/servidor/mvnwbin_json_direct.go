@@ -10,7 +10,6 @@ import (
  "fmt"
  "os"
  "path/filepath"
- "strings"
 )
 
 const mvJSONDirectSchema="ia-mv-json-direct-v1"
@@ -236,7 +235,11 @@ func mvJSONRecoverDirect(exe string)error{
 }
 
 func mvJSONInstallDirect(exe string,pkg *packageReader)(mvJSONReport,error){
- return mvJSONInstallDirectWith(exe,pkg,mvJSONRunDirectWorker,vxaceAtomicReplaceFrom)
+ offline,e:=mvJSONPackageForOffline(pkg);if e!=nil{return mvJSONReport{},e}
+ return mvJSONInstallDirectWith(exe,offline,func(engine,dest,journal string)error{
+  if e:=mvJSONVerifyRuntime(engine,offline);e!=nil{return e}
+  return mvJSONRunDirectWorker(engine,dest,journal)
+ },vxaceAtomicReplaceFrom)
 }
 
 func mvJSONInstallDirectWith(exe string,pkg *packageReader,run func(string,string,string)error,replace mvJSONReplace)(mvJSONReport,error){

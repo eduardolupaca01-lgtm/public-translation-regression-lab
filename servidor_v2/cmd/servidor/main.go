@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R42-20261127"
- packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-DIRECTO"
+ packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-DIRECTO-FIX2"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -50,7 +50,14 @@ type installReceipt struct{
  PluginSHA string `json:"plugin_sha256"`
  Status string `json:"status"`
 }
-type packageReader struct{ f *os.File; archive *zip.Reader; files map[string]*zip.File; manifest packageManifest }
+type packageReader struct{
+ f *os.File
+ archive *zip.Reader
+ files map[string]*zip.File
+ manifest packageManifest
+ jsonFiles map[string]*zip.File
+ jsonSHA map[string]string
+}
 func (p *packageReader)Close(){if p.f!=nil{_ =p.f.Close()}}
 func hash(b []byte)string{h:=sha256.Sum256(b);return hex.EncodeToString(h[:])}
 func ordinary(file string)bool{st,err:=os.Lstat(file);return err==nil&&st.Mode().IsRegular()&&st.Mode()&os.ModeSymlink==0}
@@ -76,12 +83,18 @@ func readPackage(filename string)(*packageReader,error){
  zr,err:=zip.NewReader(io.NewSectionReader(f,stat.Size()-56-size,size),size)
  if err!=nil{return nil,errors.New("IA_PAQUETE_ZIP_INVALIDO")}
  files:=map[string]*zip.File{};var sum int64
+ ordinaryCount,offlineCount:=0,0
+ offlineNames:=map[string]bool{}
  for _,item:=range zr.File{
   if !safeFile(item.Name)||item.FileInfo().IsDir()||item.Mode()&os.ModeSymlink!=0||
     item.UncompressedSize64>uint64(maxArchive){return nil,errors.New("IA_PAQUETE_RUTA_PELIGROSA")}
   if _,exists:=files[item.Name];exists{return nil,errors.New("IA_PAQUETE_REPETIDO")}
+  if strings.HasPrefix(strings.ToLower(item.Name),"json-runtime/"){
+   if !mvJSONRuntimeName(item.Name)||offlineNames[strings.ToLower(item.Name)]||item.UncompressedSize64==0{return nil,mvJSONError("RUNTIME_PAQUETE_INVALIDO")}
+   offlineNames[strings.ToLower(item.Name)]=true;offlineCount++
+  }else{ordinaryCount++}
   sum+=int64(item.UncompressedSize64)
-  if sum>maxArchive||len(files)>65{return nil,errors.New("IA_PAQUETE_EXPANSION")}
+  if sum>maxArchive||ordinaryCount>66||offlineCount>1024{return nil,errors.New("IA_PAQUETE_EXPANSION")}
   files[item.Name]=item
  }
  mf:=files["manifest.json"]
@@ -117,8 +130,22 @@ func readPackage(filename string)(*packageReader,error){
  hostCount:=0
  for _,name:=range webHostFiles{if files["webhost/"+name]!=nil{hostCount++}}
  if hostCount!=0&&hostCount!=len(webHostFiles){return nil,errors.New("IA_WEB_HOST_PAQUETE_INCOMPLETO")}
+ jsonFiles:=map[string]*zip.File{}
+ jsonSHA:=map[string]string{}
+ if offlineCount>0{
+  for _,name:=range mvJSONRequiredRuntime{
+   if files[name]==nil{return nil,mvJSONError("RUNTIME_PAQUETE_INCOMPLETO")}
+  }
+  for name,item:=range files{
+   if strings.HasPrefix(name,"json-runtime/"){
+    if !xpSHA(manifest.Files[name]){return nil,mvJSONError("RUNTIME_PAQUETE_INVALIDO")}
+    jsonFiles[name]=item;jsonSHA[name]=manifest.Files[name]
+    delete(files,name);delete(manifest.Files,name)
+   }
+  }
+ }
  good=true
- return &packageReader{f:f,archive:zr,files:files,manifest:manifest},nil
+ return &packageReader{f:f,archive:zr,files:files,manifest:manifest,jsonFiles:jsonFiles,jsonSHA:jsonSHA},nil
 }
 func readZip(item *zip.File,limit int64)([]byte,error){
  if item==nil||int64(item.UncompressedSize64)>limit{return nil,errors.New("IA_ARCHIVO_EXCESIVO")}

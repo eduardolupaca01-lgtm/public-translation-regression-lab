@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Un solo Servidor.exe con manifiesto, firmas y modelos locales propios."""
 from __future__ import annotations
-import argparse,hashlib,json,struct,zipfile
+import argparse,hashlib,json,struct,zipfile,re,stat
 from pathlib import Path
 
 if __package__:
@@ -23,12 +23,42 @@ def digest(file:Path):
 WEB_HOST=("Jugar-IA.exe","Jugar-IA.exe.config","Microsoft.Web.WebView2.Core.dll",
           "Microsoft.Web.WebView2.WinForms.dll","WebView2Loader.dll","WebView2-LICENSE.txt")
 
-def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path,*,vxace_helper=None,vxace_plugin=None,web_host_dir=None,rpgxp_launcher=None,rpgxp_plugin=None):
+def json_runtime_assets(root:Path):
+ required={"IATraductora.exe","_internal/python311.dll","_internal/base_library.zip"}
+ if not root.is_dir() or root.is_symlink() or getattr(root.lstat(),"st_file_attributes",0)&0x400:
+  raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO")
+ assets={}
+ seen=set()
+ for source in sorted(root.rglob("*")):
+  st=source.lstat()
+  if source.is_symlink() or getattr(st,"st_file_attributes",0)&0x400:
+   raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO")
+  if source.is_dir():continue
+  rel=source.relative_to(root).as_posix()
+  name="json-runtime/"+rel
+  if (not stat.S_ISREG(st.st_mode) or st.st_size<=0 or len(name)>200 or
+      (rel!="IATraductora.exe" and not rel.startswith("_internal/")) or
+      any(not re.fullmatch(r"[A-Za-z0-9_.+ @()-]+",part) or part.endswith(("."," ")) or
+          re.fullmatch(r"(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])",part.split(".",1)[0],re.I)
+          for part in name.split("/")) or name.casefold() in seen):
+   raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INVALIDO")
+  seen.add(name.casefold())
+  assets[name]=source
+  if len(assets)>1024:raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_EXCESIVO")
+ if not all("json-runtime/"+name in assets for name in required):
+  raise ValueError("IA_MV_JSON_RUNTIME_PAQUETE_INCOMPLETO")
+ return assets
+
+def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path,*,vxace_helper=None,vxace_plugin=None,web_host_dir=None,rpgxp_launcher=None,rpgxp_plugin=None,json_runtime_dir=None):
  if not executable.is_file() or not worker.is_file() or not plugin.is_file():
   raise RuntimeError("IA_ARCHIVOS_DE_COMPILACION_INCOMPLETOS")
  if out.resolve() in {executable.resolve(),worker.resolve(),plugin.resolve()}:
   raise RuntimeError("IA_NO_REEMPLAZAR_ORIGINALES")
  files={"IATraductora.exe":worker,"IATraductora.js":plugin}
+ if json_runtime_dir is not None:
+  assets=json_runtime_assets(json_runtime_dir)
+  if out.resolve() in {p.resolve() for p in assets.values()}:raise RuntimeError("IA_NO_REEMPLAZAR_ORIGINALES")
+  files.update(assets)
  if (vxace_helper is None)!=(vxace_plugin is None):
   raise ValueError("IA_VXACE_PAQUETE_INCOMPLETO")
  if vxace_helper is not None:
@@ -73,13 +103,16 @@ def build(executable:Path,worker:Path,plugin:Path,models:Path,out:Path,*,vxace_h
   files[f"models/{lang}/OPUS_LICENSE.txt"]=optional
  checks={name:digest(p) for name,p in files.items()}
  metadata={"schema":SCHEMA,"files":checks}
+ manifest=json.dumps(metadata,separators=(",",":")).encode("utf8")
+ if len(manifest)>256*1024 or sum(p.stat().st_size for p in files.values())+len(manifest)>900*1024*1024:
+  raise RuntimeError("IA_PAQUETE_EXCESIVO")
  import tempfile,os
  with tempfile.TemporaryDirectory() as d:
   temp=Path(d)/"assets.zip"
   with zipfile.ZipFile(temp,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=5,
                        allowZip64=True) as archive:
    for name,p in files.items():archive.write(p,name)
-   archive.writestr("manifest.json",json.dumps(metadata,separators=(",",":")))
+   archive.writestr("manifest.json",manifest)
   length=temp.stat().st_size
   if length>900*1024*1024:raise RuntimeError("IA_PAQUETE_EXCESIVO")
   # Appended ZIP footer: length:uint64 + sha256:32 + marker:16.
@@ -98,5 +131,6 @@ if __name__=="__main__":
  a.add_argument('--web-host-dir',type=Path)
  a.add_argument('--rpgxp-launcher',type=Path)
  a.add_argument('--rpgxp-plugin',type=Path)
+ a.add_argument('--json-runtime-dir',type=Path)
  args=a.parse_args()
- build(args.bootstrap,args.worker,args.plugin,args.models,args.out,vxace_helper=args.vxace_helper,vxace_plugin=args.vxace_plugin,web_host_dir=args.web_host_dir,rpgxp_launcher=args.rpgxp_launcher,rpgxp_plugin=args.rpgxp_plugin)
+ build(args.bootstrap,args.worker,args.plugin,args.models,args.out,vxace_helper=args.vxace_helper,vxace_plugin=args.vxace_plugin,web_host_dir=args.web_host_dir,rpgxp_launcher=args.rpgxp_launcher,rpgxp_plugin=args.rpgxp_plugin,json_runtime_dir=args.json_runtime_dir)

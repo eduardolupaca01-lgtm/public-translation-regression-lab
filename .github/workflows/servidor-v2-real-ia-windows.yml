@@ -258,6 +258,13 @@ jobs:
             throw "IA_MOTOR_PROPIO_NO_COMPILA"
           }
           Write-Host "IA_WORKER_BINARIO_NUEVO_NO_EJECUTA_GUI_ANTIGUA"
+      - name: Empaquetar motor JSON independiente en modo onedir sin segundo proceso
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onedir --console --contents-directory _internal --name IATraductora --distpath dist-json --workpath build-json --specpath spec-json --collect-all ctranslate2 --collect-all sentencepiece servidor_v2/worker/IATraductora.py
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath "dist-json/IATraductora/IATraductora.exe") -or !(Test-Path -LiteralPath "dist-json/IATraductora/_internal/python311.dll")) { throw "IA_MV_JSON_RUNTIME_NO_COMPILA" }
+          python servidor_v2/tests/audit_pyinstaller_warnings.py build-json/IATraductora/warn-IATraductora.txt
+          if ($LASTEXITCODE -ne 0) { throw "IA_MV_JSON_RUNTIME_ANALISIS_INVALIDO" }
       - name: Auditar advertencias de analisis PyInstaller sin exponer rutas privadas
         shell: pwsh
         run: |
@@ -288,7 +295,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "IA_SERVIDOR_EXE_NO_COMPILA" }
           } finally { Pop-Location }
           $out=Join-Path $env:RUNNER_TEMP "Servidor.exe"
-          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --vxace-helper servidor_v2/vxace-helper/target/release/servidor-vxace-helper.exe --vxace-plugin servidor_v2/vxace/IATraductoraVXACE.rb --web-host-dir (Join-Path $env:RUNNER_TEMP "ia-webhost") --rpgxp-launcher (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --rpgxp-plugin servidor_v2/rpgxp/IATraductoraXP.rb --out $out
+          python servidor_v2/tools/pack.py --bootstrap (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --worker dist/IATraductora.exe --plugin servidor_v2/plugin/IATraductora.js --models (Join-Path $env:RUNNER_TEMP "ia-v2-models") --vxace-helper servidor_v2/vxace-helper/target/release/servidor-vxace-helper.exe --vxace-plugin servidor_v2/vxace/IATraductoraVXACE.rb --web-host-dir (Join-Path $env:RUNNER_TEMP "ia-webhost") --rpgxp-launcher (Join-Path $env:RUNNER_TEMP "ia-v2-bootstrap.exe") --rpgxp-plugin servidor_v2/rpgxp/IATraductoraXP.rb --json-runtime-dir dist-json/IATraductora --out $out
           if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $out)) {
             throw "IA_SERVIDOR_PROPIO_PAQUETE_INVALIDO"
           }
@@ -548,18 +555,18 @@ jobs:
           $stage=Join-Path $env:RUNNER_TEMP "IA-R44-Staging"
           New-Item -ItemType Directory -Force -Path $dir,$stage | Out-Null
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP "Servidor.exe") -Destination $stage
-          'R44 JSON DIRECTO. INSTALAR TRADUCTOR permite localizar los JSON en la carpeta seleccionada con respaldos verificados en IA Traductora. Cierra el juego. Recuperar inicio RPG restaura los JSON originales y conserva la memoria. CREAR COPIA MV/JSON sigue disponible cuando el origen no tiene una operacion directa pendiente. No se toca el arranque ni sus verificaciones. Motor offline con diagnostico por fases, lotes pequenos y modelos bajo demanda. Admite arranques originales con uno o dos binarios NWBin. Selecciona el EXE MV/NWBin original, cierra el juego y pulsa CREAR COPIA MV/JSON. La carpeta nueva usa el nombre del juego seguido de - IA JSON; si ya existe, se numera sin sobrescribir. Se traducen el menu nativo, dialogos y elecciones compatibles del mapa inicial, con saltos de linea conservadores. Indices, scripts y binarios se conservan. Abre el EXE de la carpeta nueva. F10 en Servidor consulta el estado; no hay complemento dentro del juego. Si la copia no arranca, vuelve al original intacto. El modo no altera verificaciones del juego. Compatibilidad Edoriam pendiente; no es una traduccion completa.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
-          $package=Join-Path $dir "Servidor-R44-JSON-Directo.7z"
+          'R44 JSON DIRECTO FIX2. El motor JSON usa una distribucion interna onedir verificada. Windows conserva sus permisos y controles; un acceso denegado detiene la operacion. INSTALAR TRADUCTOR permite localizar los JSON en la carpeta seleccionada con respaldos verificados en IA Traductora. Cierra el juego. Recuperar inicio RPG restaura los JSON originales y conserva la memoria. CREAR COPIA MV/JSON sigue disponible cuando el origen no tiene una operacion directa pendiente. No se toca el arranque ni sus verificaciones. Motor offline con diagnostico por fases, lotes pequenos y modelos bajo demanda. Admite arranques originales con uno o dos binarios NWBin. Selecciona el EXE MV/NWBin original, cierra el juego y pulsa CREAR COPIA MV/JSON. La carpeta nueva usa el nombre del juego seguido de - IA JSON; si ya existe, se numera sin sobrescribir. Se traducen el menu nativo, dialogos y elecciones compatibles del mapa inicial, con saltos de linea conservadores. Indices, scripts y binarios se conservan. Abre el EXE de la carpeta nueva. F10 en Servidor consulta el estado; no hay complemento dentro del juego. Si la copia no arranca, vuelve al original intacto. El modo no altera verificaciones del juego. Compatibilidad Edoriam pendiente; no es una traduccion completa.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
+          $package=Join-Path $dir "Servidor-R44-JSON-Directo-Fix2.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $stage "Servidor.exe") (Join-Path $stage "LEEME.txt") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-R44-JSON-Directo.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
+          "$sha  Servidor-R44-JSON-Directo-Fix2.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
       - name: Entregar solo candidato R44 experimental cifrado
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-R44-MV-NWBIN-JSON-DIRECTO-CIFRADO
+          name: SERVIDOR-R44-MV-NWBIN-JSON-DIRECTO-FIX2-CIFRADO
           path: ${{ runner.temp }}/IA-R44-Cifrado/
           retention-days: 7
           if-no-files-found: error

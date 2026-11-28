@@ -48,6 +48,8 @@ type mvJSONReport struct{
  Breaks int `json:"added_breaks"`
  FitWarnings int `json:"fit_warnings"`
  Menu int `json:"menu_terms,omitempty"`
+ WorkerPID int `json:"worker_pid,omitempty"`
+ RuntimeMode string `json:"runtime_mode,omitempty"`
 }
 func mvJSONSource(exe string)(root,content string,err error){
  _,_,e:=detectGame(exe)
@@ -307,6 +309,13 @@ func mvJSONCopyFolder(root string)(string,error){
  return "",mvJSONError("DESTINO_NOMBRES_AGOTADOS")
 }
 func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
+ offline,e:=mvJSONPackageForOffline(pkg);if e!=nil{return "",mvJSONReport{},e}
+ return mvJSONCopyPilotWith(exe,offline,func(engine,dest,journal string)error{
+  if e:=mvJSONVerifyRuntime(engine,offline);e!=nil{return e}
+  return mvJSONRunWorker(engine,dest,journal)
+ })
+}
+func mvJSONCopyPilotWith(exe string,pkg *packageReader,run func(string,string,string)error)(string,mvJSONReport,error){
  var report mvJSONReport
  root,content,e:=mvJSONSource(exe);if e!=nil{return "",report,e}
  if pkg==nil{return "",report,mvJSONError("PAQUETE_INCOMPLETO")}
@@ -363,7 +372,7 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  request,_:=json.Marshal(mvJSONRequest{mvJSONSchema,rel,mapName,hash(before)})
  if e=createNew(filepath.Join(journal,"request.json"),request);e!=nil{return "",report,e}
  engine:=filepath.Join(sidecar,".local","Rpg","engine")
- if e=mvJSONRunWorker(engine,dest,journal);e!=nil{return "",report,e}
+ if e=run(engine,dest,journal);e!=nil{return "",report,e}
  report,e=mvJSONValidateCandidate(journal,mapName,before);if e!=nil{return "",report,e}
  candidate:=filepath.Join(journal,"candidate.json")
  if e=vxaceAtomicReplaceFrom(candidate,target,report.After,report.Before);e!=nil{return "",report,e}

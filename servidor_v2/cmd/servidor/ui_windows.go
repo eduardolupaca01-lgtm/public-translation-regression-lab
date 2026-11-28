@@ -180,6 +180,12 @@ func iaFriendlyInstall(code string)string{
     if strings.HasPrefix(code,"IA_MV_JSON_MOTOR_SALIDA_"){
         return "El proceso del motor terminó inesperadamente. Copia el código de salida y fase; no abras la copia incompleta."
     }
+    if code=="IA_MV_JSON_MOTOR_INICIO_OS_5"{
+        return "Windows denegó iniciar el motor. No se publicaron datos traducidos. Revisa el aviso o historial de protección de Windows y copia el diagnóstico. No desactives las protecciones."
+    }
+    if strings.HasPrefix(code,"IA_MV_JSON_RUNTIME_"){
+        return "No se pudo verificar el motor JSON o sus bibliotecas. No se publicaron datos traducidos. Usa el paquete completo y copia el diagnóstico."
+    }
     if strings.HasPrefix(code,"IA_MV_JSON_MOTOR_INICIO_"){
         return "No se pudo iniciar el motor local. Copia el código del sistema; revisa el espacio libre y los avisos de Windows."
     }
@@ -354,7 +360,7 @@ func iaStartInstall(){
         return
     }
     if !iaRPGActionAllowed(ui,iaCmdInstall){return}
-    if ui.jsonPilot{iaStartJSONPilot(true);return}
+    if ui.jsonPilot{iaJSONPilotAction(true);return}
     if kind,e:=detectInstallTarget(ui.gameFile);e==nil&&kind==rpgxpTrialKind{
         yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
             uintptr(unsafe.Pointer(iaUTF16("RPG Maker XP experimental. Usa una copia cerrada del juego, no el original. Se respaldará Scripts.rxdata; podrás usar Recuperar inicio RPG. La compatibilidad con los scripts personalizados aún no está confirmada. ¿Instalar en la copia seleccionada?"))),
@@ -423,6 +429,10 @@ func iaStartRecover(){
         }
     }()
 }
+// The two native commands select independent routes. The test can observe
+// dispatch without opening an interactive confirmation dialog.
+var iaJSONPilotAction=iaStartJSONPilot
+
 func iaStartJSONPilot(direct bool){
     ui:=&iaCurrentUI
     command:=iaCmdJSONCopy
@@ -646,7 +656,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         case iaCmdClone:
             if lparam==ui.cloneBtn {iaStartClone()}
         case iaCmdJSONCopy:
-            if lparam==ui.jsonBtn&&iaRPGActionAllowed(ui,iaCmdJSONCopy){iaStartJSONPilot(false)}
+            if lparam==ui.jsonBtn&&iaRPGActionAllowed(ui,iaCmdJSONCopy){iaJSONPilotAction(false)}
         case iaCmdCopy:
             if lparam==ui.copyBtn{
                 if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{

@@ -33,3 +33,22 @@ func TestR44JSONPendingSelectionCannotOverwrite(t *testing.T){
  iaStartJSONPilot(false)
  if ui.busy{t.Fatal("pending JSON operation dispatched an overwrite")}
 }
+
+func TestR44JSONNativeButtonCommandsDispatchCorrectMode(t *testing.T){
+ ui:=&iaCurrentUI
+ oldGame,oldPilot,oldPending,oldBusy:=ui.gameFile,ui.jsonPilot,ui.jsonRecovery,ui.busy
+ oldInstall,oldCopy,oldAction:=ui.install,ui.jsonBtn,iaJSONPilotAction
+ defer func(){ui.gameFile=oldGame;ui.jsonPilot=oldPilot;ui.jsonRecovery=oldPending;ui.busy=oldBusy;ui.install=oldInstall;ui.jsonBtn=oldCopy;iaJSONPilotAction=oldAction}()
+ ui.gameFile="synthetic Game.exe";ui.jsonPilot=true;ui.jsonRecovery=false;ui.busy=false
+ ui.install=111;ui.jsonBtn=112
+ var got []bool
+ iaJSONPilotAction=func(direct bool){got=append(got,direct)}
+ iaWinProc(0,iaWMCommand,uintptr(iaCmdJSONCopy),ui.jsonBtn)
+ iaWinProc(0,iaWMCommand,uintptr(iaCmdInstall),ui.install)
+ iaWinProc(0,iaWMCommand,uintptr(iaCmdJSONCopy),ui.install)
+ ui.busy=true
+ iaWinProc(0,iaWMCommand,uintptr(iaCmdJSONCopy),ui.jsonBtn)
+ ui.busy=false;ui.jsonRecovery=true
+ iaWinProc(0,iaWMCommand,uintptr(iaCmdInstall),ui.install)
+ if len(got)!=2||got[0]||!got[1]{t.Fatalf("incorrect native command routes %v",got)}
+}

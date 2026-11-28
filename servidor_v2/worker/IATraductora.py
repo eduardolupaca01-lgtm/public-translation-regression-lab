@@ -1278,12 +1278,24 @@ def main():
         if args.mv_json_pilot or args.mv_json_direct:
             if (args.mv_json_pilot and args.mv_json_direct) or args.rpgxp_lab or args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid:
                 raise ValueError("IA_MV_JSON_SOLICITUD_INVALIDA")
+            # The production offline worker is installed in its normal
+            # PyInstaller onedir layout, adjacent to the shared models.
+            # Do not mutate the bootloader's environment or retry a denied launch.
+            runtime_mode="source"
+            if getattr(sys,"frozen",False):
+                runtime_dir=engine
+                internal=getattr(sys,"_MEIPASS",None)
+                if (runtime_dir.name!="json-runtime" or not internal or
+                    Path(internal).resolve(strict=True)!=(runtime_dir/"_internal").resolve(strict=True)):
+                    raise ValueError("IA_MV_JSON_RUNTIME_NO_VERIFICADO")
+                engine=runtime_dir.parent
+                runtime_mode="onedir"
             from mv_json_pilot import run_pilot
             run_pilot(args.game_root,engine,
                       lambda folder:NeuralOPUS(folder,pilot_threads=2),
                       TranslationMemory,native_quality_reason,
                       checkpoint=lambda code:write_startup_code(args.diagnostic_file,code),
-                      direct=args.mv_json_direct)
+                      direct=args.mv_json_direct,runtime_mode=runtime_mode)
             write_startup_code(args.diagnostic_file,"IA_MV_JSON_CANDIDATO_LISTO")
             return
         if args.rpgxp_lab:

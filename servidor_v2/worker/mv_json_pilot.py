@@ -311,7 +311,7 @@ def create_new(path,data):
         import os
         os.fsync(f.fileno())
 
-def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambda _:None,direct=False):
+def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambda _:None,direct=False,runtime_mode="source"):
     checkpoint("IA_MV_JSON_FASE_VALIDAR")
     root=Path(game).absolute()
     for p in (root,*root.parents):
@@ -388,5 +388,7 @@ def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambd
     if digest(regular(source_path,MAX_BYTES))!=request["before_sha256"]:raise error("ORIGEN_CAMBIADO")
     checkpoint("IA_MV_JSON_FASE_PUBLICAR")
     create_new(journal/"candidate.json",result)
-    report={"schema":SCHEMA,"map":name,"before_sha256":digest(raw),"after_sha256":digest(result),**stats}
+    import os
+    report={"schema":SCHEMA,"map":name,"before_sha256":digest(raw),"after_sha256":digest(result),
+            "worker_pid":os.getpid(),"runtime_mode":runtime_mode,**stats}
     create_new(journal/"report.json",json.dumps(report,ensure_ascii=True,separators=(",",":")).encode("utf8"))
