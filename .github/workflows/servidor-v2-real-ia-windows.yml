@@ -313,6 +313,15 @@ jobs:
             go test ./cmd/servidor -run '^TestR44JSONPilotRealOPUS$' -count=1 -v -timeout=20m
             if ($LASTEXITCODE -ne 0) { throw "IA_R44_JSON_REAL_OPUS_ACCEPTANCE_FAIL" }
           } finally { Pop-Location }
+      - name: R44 direct JSON - real OPUS, original folder, native paint, exact restore and cache
+        shell: pwsh
+        run: |
+          $env:IA_R44_REAL_PACKAGE=Join-Path $env:RUNNER_TEMP "Servidor.exe"
+          Push-Location servidor_v2
+          try {
+            go test ./cmd/servidor -run '^TestR44JSONDirectRealOPUS$' -count=1 -v -timeout=24m
+            if ($LASTEXITCODE -ne 0) { throw "IA_R44_JSON_DIRECT_REAL_ACCEPTANCE_FAIL" }
+          } finally { Pop-Location }
       - name: XP lab - actual packaged installer, installed launcher, OPUS and restore
         shell: pwsh
         run: |
@@ -539,18 +548,18 @@ jobs:
           $stage=Join-Path $env:RUNNER_TEMP "IA-R44-Staging"
           New-Item -ItemType Directory -Force -Path $dir,$stage | Out-Null
           Copy-Item -LiteralPath (Join-Path $env:RUNNER_TEMP "Servidor.exe") -Destination $stage
-          'R44 JSON ORGANIZADO. Acciones independientes para instalacion, copia VX Ace y copia MV/JSON. Motor offline con diagnostico por fases, lotes pequenos y modelos bajo demanda. Admite arranques originales con uno o dos binarios NWBin. Selecciona el EXE MV/NWBin original, cierra el juego y pulsa CREAR COPIA MV/JSON. La carpeta nueva usa el nombre del juego seguido de - IA JSON; si ya existe, se numera sin sobrescribir. Se traducen el menu nativo, dialogos y elecciones compatibles del mapa inicial, con saltos de linea conservadores. Indices, scripts y binarios se conservan. Abre el EXE de la carpeta nueva. F10 en Servidor consulta el estado; no hay complemento dentro del juego. Si la copia no arranca, vuelve al original intacto. El modo no altera verificaciones del juego. Compatibilidad Edoriam pendiente; no es una traduccion completa.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
-          $package=Join-Path $dir "Servidor-R44-JSON-Organizado.7z"
+          'R44 JSON DIRECTO. INSTALAR TRADUCTOR permite localizar los JSON en la carpeta seleccionada con respaldos verificados en IA Traductora. Cierra el juego. Recuperar inicio RPG restaura los JSON originales y conserva la memoria. CREAR COPIA MV/JSON sigue disponible cuando el origen no tiene una operacion directa pendiente. No se toca el arranque ni sus verificaciones. Motor offline con diagnostico por fases, lotes pequenos y modelos bajo demanda. Admite arranques originales con uno o dos binarios NWBin. Selecciona el EXE MV/NWBin original, cierra el juego y pulsa CREAR COPIA MV/JSON. La carpeta nueva usa el nombre del juego seguido de - IA JSON; si ya existe, se numera sin sobrescribir. Se traducen el menu nativo, dialogos y elecciones compatibles del mapa inicial, con saltos de linea conservadores. Indices, scripts y binarios se conservan. Abre el EXE de la carpeta nueva. F10 en Servidor consulta el estado; no hay complemento dentro del juego. Si la copia no arranca, vuelve al original intacto. El modo no altera verificaciones del juego. Compatibilidad Edoriam pendiente; no es una traduccion completa.' | Set-Content (Join-Path $stage "LEEME.txt") -Encoding ascii
+          $package=Join-Path $dir "Servidor-R44-JSON-Directo.7z"
           & $seven a -t7z -mhe=on -mx=0 "-p$env:IA_PASSWORD" $package (Join-Path $stage "Servidor.exe") (Join-Path $stage "LEEME.txt") | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_FALLO" }
           & $seven t "-p$env:IA_PASSWORD" $package | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "IA_R44_CIFRADO_NO_VERIFICA" }
           $sha=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha  Servidor-R44-JSON-Organizado.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
+          "$sha  Servidor-R44-JSON-Directo.7z" | Set-Content (Join-Path $dir "SHA256.txt") -Encoding ascii
       - name: Entregar solo candidato R44 experimental cifrado
         uses: actions/upload-artifact@v6
         with:
-          name: SERVIDOR-R44-MV-NWBIN-JSON-ORGANIZADO-CIFRADO
+          name: SERVIDOR-R44-MV-NWBIN-JSON-DIRECTO-CIFRADO
           path: ${{ runner.temp }}/IA-R44-Cifrado/
           retention-days: 7
           if-no-files-found: error

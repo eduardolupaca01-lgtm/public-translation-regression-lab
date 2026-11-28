@@ -69,10 +69,18 @@ func TestR44JSONPilotRealOPUS(t *testing.T){
  if packaged==""{t.Skip("frozen real OPUS supplied by Windows acceptance")}
  sdk:=os.Getenv("IA_R44_NWBIN_SDK");if sdk==""{t.Fatal("missing SDK")}
  for _,profile:=range []string{"two_active","one_retained","one_absent"}{
-  t.Run(profile,func(t *testing.T){r44JSONPilotProfile(t,sdk,packaged,profile)})
+  t.Run(profile,func(t *testing.T){r44JSONPilotProfile(t,sdk,packaged,profile,false)})
  }
 }
-func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
+func TestR44JSONDirectRealOPUS(t *testing.T){
+ packaged:=os.Getenv("IA_R44_REAL_PACKAGE")
+ if packaged==""{t.Skip("frozen real OPUS supplied by Windows acceptance")}
+ sdk:=os.Getenv("IA_R44_NWBIN_SDK");if sdk==""{t.Fatal("missing SDK")}
+ for _,profile:=range []string{"two_active","one_absent"}{
+  t.Run(profile,func(t *testing.T){r44JSONPilotProfile(t,sdk,packaged,profile,true)})
+ }
+}
+func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string,direct bool){
  t.Helper()
  var root string
  if profile=="two_active"{root=mvnwbinFixture(t,false)}else{root=mvnwbinSingleFixture(t,profile=="one_retained")}
@@ -102,6 +110,7 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
  mvnwbinWrite(t,filepath.Join(js,"main.js"),mainSource)
  original:=mvnwbinOfflineSnapshot(t,root);mapSHA,e:=digestFile(mapPath);if e!=nil{t.Fatal(e)};original[mapPath]=mapSHA
  pkg,e:=readPackage(packaged);if e!=nil{t.Fatal(e)};defer pkg.Close()
+ if direct{r44JSONDirectRealTrial(t,sdk,packaged,root,original);return}
  // Use the executable's public CLI, not a mocked worker. The clone
  // function itself verifies the candidate and source hashes.
  ctx,cancel:=context.WithTimeout(context.Background(),4*time.Minute);defer cancel()
@@ -146,4 +155,42 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
  if !ordinary(filepath.Join(dest,"IA Traductora",".local","Rpg","cache","translation-memory-v2.sqlite3")){t.Fatal("cache missing")}
  mvnwbinSame(t,original)
  t.Log("IA_R44_JSON_REAL_OPUS_COPY_NATIVE_PAINT_ORIGINAL_UNCHANGED_PASS")
+}
+
+func r44JSONDirectRealTrial(t *testing.T,sdk,packaged,root string,original map[string]string){
+ t.Helper()
+ exe:=filepath.Join(root,"Game.exe")
+ siblings,e:=os.ReadDir(filepath.Dir(root));if e!=nil{t.Fatal(e)}
+ run:=func(args ...string){
+  ctx,cancel:=context.WithTimeout(context.Background(),5*time.Minute);defer cancel()
+  if out,e:=exec.CommandContext(ctx,packaged,args...).CombinedOutput();e!=nil{t.Fatalf("direct command %v %s",e,out)}
+ }
+ run("--mv-json-install","--game",exe)
+ after,e:=os.ReadDir(filepath.Dir(root));if e!=nil||len(after)!=len(siblings){t.Fatal("direct mode created game copy",e)}
+ active:=filepath.Join(mvJSONDirectBase(root),"active")
+ var rec mvJSONDirectReceipt
+ if _,e=mvJSONDirectRead(filepath.Join(active,"prepared.json"),&rec);e!=nil||rec.Report.Lines!=2||rec.Report.New!=2||rec.Report.Menu!=4||rec.Report.ChoiceLabels!=1{t.Fatalf("direct receipt %+v %v",rec,e)}
+ for f,want:=range original{
+  if filepath.Base(f)=="Map001.json"||filepath.Base(f)=="System.json"{continue}
+  if h,e:=digestFile(f);e!=nil||h!=want{t.Fatal("original startup changed",filepath.Base(f),e)}
+ }
+ ctx,cancel:=context.WithTimeout(context.Background(),90*time.Second)
+ cmd:=exec.CommandContext(ctx,filepath.Join(sdk,"nw.exe"),"--disable-background-networking",root);cmd.Dir=root
+ out,e:=cmd.CombinedOutput();cancel()
+ if e!=nil{t.Fatalf("direct native renderer %v %s",e,out)}
+ marker:=filepath.Join(root,"r44-json-native.txt")
+ value,e:=os.ReadFile(marker);if e!=nil||string(value)!="PASS"{t.Fatal("IA_R44_DIRECT_NATIVE_PAINT_FAIL",e)}
+ cache:=filepath.Join(root,brandFolder,".local","Rpg","cache","translation-memory-v2.sqlite3")
+ beforeCache,e:=digestFile(cache);if e!=nil{t.Fatal(e)}
+ run("--recover","--game",exe)
+ mvnwbinSame(t,original)
+ if h,e:=digestFile(cache);e!=nil||h!=beforeCache{t.Fatal("cache changed by recovery",e)}
+ if mvJSONDirectNeedsRecovery(exe){t.Fatal("recovery did not retire journal")}
+ run("--mv-json-install","--game",exe)
+ if _,e=mvJSONDirectRead(filepath.Join(active,"prepared.json"),&rec);e!=nil||rec.Report.New!=0||rec.Report.Hits!=2{t.Fatalf("cache reuse %+v %v",rec,e)}
+ run("--recover","--game",exe)
+ mvnwbinSame(t,original)
+ // Existing independent copy remains available from the restored source.
+ skip,unlock,e:=mvJSONDirectCopyGuard(root);if e!=nil||!skip{t.Fatal("copy disabled after restore",e)};unlock()
+ t.Log("IA_R44_DIRECT_REAL_OPUS_NATIVE_PAINT_RESTORE_CACHE_PASS")
 }

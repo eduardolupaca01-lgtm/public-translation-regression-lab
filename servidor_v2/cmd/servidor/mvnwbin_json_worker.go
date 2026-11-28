@@ -50,6 +50,12 @@ func mvJSONWorkerFailure(ctx context.Context,err error,statusFile string)error{
 }
 
 func mvJSONRunWorker(engine,dest,journal string)error{
+ return mvJSONRunWorkerMode(engine,dest,journal,false)
+}
+func mvJSONRunDirectWorker(engine,dest,journal string)error{
+ return mvJSONRunWorkerMode(engine,dest,journal,true)
+}
+func mvJSONRunWorkerMode(engine,dest,journal string,direct bool)error{
  // A private temporary directory per invocation avoids dependency on
  // the game's cwd, stale extraction directories or a shared TMP path.
  // No global environment variables, permissions, or security settings
@@ -60,8 +66,10 @@ func mvJSONRunWorker(engine,dest,journal string)error{
  if vxaceCloneCheckAncestors(temp)!=nil{return mvJSONError("TEMPORAL_NO_VERIFICADO")}
  statusFile:=filepath.Join(journal,"status.json")
  ctx,cancel:=context.WithTimeout(context.Background(),20*time.Minute);defer cancel()
+ mode:="--mv-json-pilot"
+ if direct{mode="--mv-json-direct"}
  cmd:=exec.CommandContext(ctx,filepath.Join(engine,"IATraductora.exe"),
-  "--mv-json-pilot","--game-root",dest,"--diagnostic-file",statusFile)
+  mode,"--game-root",dest,"--diagnostic-file",statusFile)
  cmd.Dir=engine
  cmd.Env=append(os.Environ(),"TEMP="+temp,"TMP="+temp,"TMPDIR="+temp)
  if e=cmd.Run();e!=nil{return mvJSONWorkerFailure(ctx,e,statusFile)}

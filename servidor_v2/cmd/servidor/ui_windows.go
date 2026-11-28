@@ -126,6 +126,7 @@ type iaUI struct{
     webBtn uintptr
     cloneAllowed bool
     jsonPilot bool
+    jsonRecovery bool
     jsonSummary string
     resultGame string
     titleLabel uintptr
@@ -189,6 +190,16 @@ func iaFriendlyInstall(code string)string{
         return "No hay memoria suficiente para la traducción. Cierra otros programas y vuelve a probar con el juego cerrado."
     case "IA_MV_JSON_SIN_TRADUCCIONES_VALIDAS":
         return "No se obtuvo una traducción válida del mapa inicial. El juego original permanece intacto."
+    case "IA_MV_JSON_DIRECTO_RECUPERAR_PRIMERO","IA_MV_JSON_DIRECTO_RECUPERACION_PENDIENTE":
+        return "Hay una operación JSON pendiente. Cierra el juego y pulsa Recuperar inicio RPG antes de instalar o copiar."
+    case "IA_MV_JSON_DIRECTO_DATOS_CAMBIADOS","IA_MV_JSON_DIRECTO_ARRANQUE_CAMBIADO","IA_MV_JSON_DIRECTO_ORIGEN_CAMBIADO","IA_MV_JSON_DIRECTO_RESPALDO_ALTERADO","IA_MV_JSON_DIRECTO_DIARIO_INVALIDO":
+        return "Los datos o respaldos no coinciden. No se sobrescriben archivos ajenos. Conserva el diario y copia el diagnóstico."
+    case "IA_MV_JSON_DIRECTO_REVERTIDO":
+        return "La publicación falló y se restauraron los JSON originales. Conserva el respaldo; puedes reintentar."
+    case "IA_MV_JSON_DIRECTO_OPERACION_ACTIVA":
+        return "Otra operación JSON está activa. Cierra el otro Servidor cuando termine."
+    case "IA_MV_JSON_DIRECTO_SIDECAR_NO_VERIFICADO":
+        return "La carpeta IA Traductora existente no corresponde a esta instalación JSON. No se sobrescribe."
     case "IA_MV_JSON_COPIA_PREVIA_NO_ADMITIDA":
         return "Selecciona una copia limpia del juego, sin IA Traductora ni una prueba JSON anterior."
     case mvnwbinManifestMissing:
@@ -311,10 +322,16 @@ func iaChooseFile(owner uintptr,filter []uint16,caption string)(selected string,
  // a recognized offline-only layout must never dispatch the normal installer.
 func iaRPGActionAllowed(ui *iaUI,command int)bool{
     if ui.busy||ui.gameFile==""{return false}
+    if ui.jsonPilot{
+        switch command{
+        case iaCmdInstall,iaCmdJSONCopy:return !ui.jsonRecovery
+        case iaCmdRecover:return ui.jsonRecovery
+        default:return false
+        }
+    }
     switch command{
-    case iaCmdInstall,iaCmdRecover:return !ui.jsonPilot
-    case iaCmdClone:return !ui.jsonPilot&&ui.cloneAllowed
-    case iaCmdJSONCopy:return ui.jsonPilot
+    case iaCmdInstall,iaCmdRecover:return true
+    case iaCmdClone:return ui.cloneAllowed
     }
     return false
 }
@@ -337,6 +354,7 @@ func iaStartInstall(){
         return
     }
     if !iaRPGActionAllowed(ui,iaCmdInstall){return}
+    if ui.jsonPilot{iaStartJSONPilot(true);return}
     if kind,e:=detectInstallTarget(ui.gameFile);e==nil&&kind==rpgxpTrialKind{
         yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
             uintptr(unsafe.Pointer(iaUTF16("RPG Maker XP experimental. Usa una copia cerrada del juego, no el original. Se respaldará Scripts.rxdata; podrás usar Recuperar inicio RPG. La compatibilidad con los scripts personalizados aún no está confirmada. ¿Instalar en la copia seleccionada?"))),
@@ -373,12 +391,18 @@ func iaStartInstall(){
 }
 func iaStartRecover(){
     ui:=&iaCurrentUI
-    if ui.jsonPilot{return}
     if ui.gameFile==""{
         iaLog("[IA_RECUPERACION_GAME_EXE_REQUERIDO] Selecciona Game.exe.")
         return
     }
     if !iaRPGActionAllowed(ui,iaCmdRecover){return}
+    jsonMode:=ui.jsonPilot
+    if jsonMode{
+        yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
+          uintptr(unsafe.Pointer(iaUTF16("Cierra el juego. Se restaurarán únicamente los JSON originales respaldados. Se conservan OPUS, memoria y partidas. Si los archivos cambiaron por una actualización, se detendrá la recuperación. ¿Continuar?"))),
+          uintptr(unsafe.Pointer(iaUTF16("Recuperar JSON original"))),0x24|0x100)
+        if yes!=6{return}
+    }
     ui.busy=true
     iaRefreshRPGActions(ui)
     iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
@@ -392,23 +416,38 @@ func iaStartRecover(){
             ui.mu.Lock();ui.result=info;ui.mu.Unlock()
             iaPostMessage.Call(ui.hwnd,iaWMAppDone,0,0)
         }()
-        if err:=RecoverGame(game);err!=nil{info=err.Error()}else{
+        if err:=RecoverGame(game);err!=nil{info=err.Error()}else if jsonMode{
+            info="IA_MV_JSON_DIRECTO_RECUPERADO"
+        }else{
             info="IA_RECUPERACION_REGISTRO_ORIGINAL_VERIFICADA"
         }
     }()
 }
-func iaStartJSONPilot(){
+func iaStartJSONPilot(direct bool){
     ui:=&iaCurrentUI
-    if !iaRPGActionAllowed(ui,iaCmdJSONCopy){return}
+    command:=iaCmdJSONCopy
+    message:="Cierra el juego. Se creará una carpeta con el nombre del juego seguido de - IA JSON, junto al original. Se traducen menú nativo, diálogos y elecciones del mapa inicial. El original no cambia. ¿Crear copia?"
+    title:="R44 - copia JSON"
+    if direct{
+        command=iaCmdInstall
+        message="Cierra el juego antes de continuar. Se traducirán los JSON de ESTA carpeta, sin duplicar el juego. Se respaldarán el mapa inicial y System.json en IA Traductora antes de cualquier cambio. Recuperar inicio RPG restaura los originales. El arranque y los binarios no se modifican. No hay F10 dentro del juego. ¿Instalar directamente?"
+        title="R44 - instalar JSON en el juego"
+    }
+    if !ui.jsonPilot||!iaRPGActionAllowed(ui,command){return}
     yes,_,_:=iaUser32.NewProc("MessageBoxW").Call(ui.hwnd,
-      uintptr(unsafe.Pointer(iaUTF16("Cierra el juego. Se creará una carpeta con el nombre del juego seguido de - IA JSON, junto al original, con sus archivos, menú nativo, diálogos y elecciones del mapa inicial traducidos. No se tocarán los binarios. F10 solo estará disponible en Servidor para ver el estado. Si el juego no admite estos datos, usa el original. ¿Crear copia de prueba?"))),
-      uintptr(unsafe.Pointer(iaUTF16("R44 - copia JSON de prueba"))),0x24|0x100)
+      uintptr(unsafe.Pointer(iaUTF16(message))),
+      uintptr(unsafe.Pointer(iaUTF16(title))),0x24|0x100)
     if yes!=6{return}
     ui.busy=true
     iaRefreshRPGActions(ui)
     iaEnableWindow.Call(ui.browse,0);iaEnableWindow.Call(ui.webBtn,0)
-    iaSet(ui.status,"Copiando recursos y traduciendo el mapa inicial con OPUS local...")
-    iaLog("[IA_MV_JSON_INICIADA] El juego original queda intacto. No abras la copia incompleta.")
+    if direct{
+        iaSet(ui.status,"Preparando traducción y respaldos en la carpeta actual...")
+        iaLog("[IA_MV_JSON_DIRECTO_INICIADO] No se duplica el juego. Mantén el juego cerrado.")
+    }else{
+        iaSet(ui.status,"Copiando recursos y traduciendo el mapa inicial con OPUS local...")
+        iaLog("[IA_MV_JSON_INICIADA] El juego original queda intacto. No abras la copia incompleta.")
+    }
     game:=ui.gameFile
     go func(){
         info:="IA_MV_JSON_MOTOR_FALLO";final:=""
@@ -419,9 +458,17 @@ func iaStartJSONPilot(){
         }()
         executable,e:=os.Executable();if e!=nil{info="IA_NO_SE_PUEDE_LEER_SERVIDOR";return}
         pkg,e:=readPackage(executable);if e!=nil{info=e.Error();return};defer pkg.Close()
-        path,report,e:=mvJSONCopyPilot(game,pkg)
+        var report mvJSONReport
+        var path,code string
+        if direct{
+            report,e=mvJSONInstallDirect(game,pkg)
+            path=game;code="IA_MV_JSON_DIRECTO_LISTO"
+        }else{
+            path,report,e=mvJSONCopyPilot(game,pkg)
+            code="IA_MV_JSON_COPIA_LISTA"
+        }
         if e!=nil{info=e.Error();return}
-        final=path;info=fmt.Sprintf("IA_MV_JSON_COPIA_LISTA|Diálogos: %d · Elecciones: %d · Menú: %d · Ajustes de línea: %d · Avisos de ancho: %d",report.Lines,report.ChoiceLabels,report.Menu,report.Wrapped,report.FitWarnings)
+        final=path;info=fmt.Sprintf("%s|Diálogos: %d · Elecciones: %d · Menú: %d · Ajustes de línea: %d · Avisos de ancho: %d",code,report.Lines,report.ChoiceLabels,report.Menu,report.Wrapped,report.FitWarnings)
     }()
 }
 func iaStartClone(){
@@ -540,7 +587,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                 iaLog("[IA_SELECTOR_ERROR] "+err.Error())
                 iaSet(ui.status,"No se pudo abrir el selector. Servidor sigue abierto.")
             }else if file!=""{
-                ui.jsonPilot=false
+                ui.jsonPilot=false;ui.jsonRecovery=false
                 if kind,e:=detectInstallTarget(file);e!=nil{
                     // An invalid new selection must never leave a different game armed for installation.
                     ui.gameFile="";iaSet(ui.input,"");ui.cloneAllowed=false
@@ -553,10 +600,15 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
                         iaLog("[IA_MV_NWBIN_DETECTADO] "+code)
                         iaSet(ui.status,iaFriendlyInstall(code))
                         if code==mvnwbinExtensionUnavailable{
-                            ui.gameFile=file;ui.jsonPilot=true;iaSet(ui.input,file)
+                            ui.gameFile=file;ui.jsonPilot=true;ui.jsonRecovery=mvJSONDirectNeedsRecovery(file);iaSet(ui.input,file)
                             iaRefreshRPGActions(ui)
-                            iaLog("[IA_MV_JSON_PRUEBA_DISPONIBLE] Usa CREAR COPIA MV/JSON. El original no se modifica.")
-                            iaSet(ui.status,"MV/NWBin: pulsa CREAR COPIA MV/JSON.")
+                            if ui.jsonRecovery{
+                                iaLog("[IA_MV_JSON_DIRECTO_DIARIO] Instalación o preparación previa. Recuperar inicio RPG disponible.")
+                                iaSet(ui.status,"JSON directo: puedes restaurar los originales.")
+                            }else{
+                                iaLog("[IA_MV_JSON_PRUEBA_DISPONIBLE] Instalar traductor: misma carpeta con respaldo. Crear copia MV/JSON: carpeta independiente.")
+                                iaSet(ui.status,"MV/NWBin: elige instalar aquí o crear copia.")
+                            }
                         }
                     }else if strings.HasPrefix(code,"IA_RPGXP_"){
                         iaLog("[IA_RPGXP_DETECTADO] "+code)
@@ -594,7 +646,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         case iaCmdClone:
             if lparam==ui.cloneBtn {iaStartClone()}
         case iaCmdJSONCopy:
-            if lparam==ui.jsonBtn&&iaRPGActionAllowed(ui,iaCmdJSONCopy){iaStartJSONPilot()}
+            if lparam==ui.jsonBtn&&iaRPGActionAllowed(ui,iaCmdJSONCopy){iaStartJSONPilot(false)}
         case iaCmdCopy:
             if lparam==ui.copyBtn{
                 if err:=iaCopyDiagnostics(hwnd,ui.logText);err!=nil{
@@ -613,10 +665,23 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
         ui.busy=false
         iaEnableWindow.Call(ui.browse,1)
         iaEnableWindow.Call(ui.webBtn,1)
+        if ui.jsonPilot{ui.jsonRecovery=mvJSONDirectNeedsRecovery(ui.gameFile)}
         iaRefreshRPGActions(ui)
         code:=iaSafeInstallCode(result)
-        if code=="IA_MV_JSON_COPIA_LISTA"&&newGame!=""{
-            ui.gameFile="";ui.jsonPilot=false;ui.cloneAllowed=false
+        if code=="IA_MV_JSON_DIRECTO_LISTO"&&newGame!=""{
+            ui.gameFile=newGame;ui.jsonRecovery=true
+            iaSet(ui.input,newGame);iaRefreshRPGActions(ui)
+            lines:=strings.TrimPrefix(result,"IA_MV_JSON_DIRECTO_LISTO|")
+            ui.jsonSummary=lines+"\n\nInstalación JSON en la misma carpeta. Recuperar inicio RPG restaura los originales. F10 solo en Servidor."
+            iaLog("[IA_MV_JSON_DIRECTO_LISTO] "+lines+". No se creó otra carpeta del juego.")
+            iaSet(ui.status,"Instalación JSON completa. Abre el mismo EXE.")
+            iaUser32.NewProc("MessageBoxW").Call(hwnd,uintptr(unsafe.Pointer(iaUTF16(ui.jsonSummary+"\n\nAbre el mismo Game.exe con el juego cerrado durante la instalación."))),uintptr(unsafe.Pointer(iaUTF16("Servidor R44"))),0x40)
+        }else if code=="IA_MV_JSON_DIRECTO_RECUPERADO"{
+            ui.jsonRecovery=false;ui.jsonSummary="";iaRefreshRPGActions(ui)
+            iaLog("[IA_MV_JSON_DIRECTO_RECUPERADO] JSON originales restaurados y verificados. Memoria y partidas conservadas.")
+            iaSet(ui.status,"Original recuperado. Puedes instalar o crear una copia.")
+        }else if code=="IA_MV_JSON_COPIA_LISTA"&&newGame!=""{
+            ui.gameFile="";ui.jsonPilot=false;ui.jsonRecovery=false;ui.cloneAllowed=false
             iaSet(ui.input,newGame)
             iaRefreshRPGActions(ui)
             lines:=strings.TrimPrefix(result,"IA_MV_JSON_COPIA_LISTA|")
@@ -630,7 +695,7 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             shell.Call(hwnd,uintptr(unsafe.Pointer(verb)),uintptr(unsafe.Pointer(folder)),0,0,1)
             runtime.KeepAlive(folder);runtime.KeepAlive(verb)
         }else if code=="IA_WEB_COPIA_LISTA"&&newGame!=""{
-            ui.gameFile="";ui.jsonPilot=false;ui.cloneAllowed=false;iaSet(ui.input,newGame)
+            ui.gameFile="";ui.jsonPilot=false;ui.jsonRecovery=false;ui.cloneAllowed=false;iaSet(ui.input,newGame)
             iaRefreshRPGActions(ui)
             iaLog("[IA_WEB_COPIA_LISTA] Abre Jugar-IA.exe en la nueva carpeta. Ventana propia, sin navegador externo.")
             iaSet(ui.status,"Copia web preparada. Abre Jugar-IA.exe y prueba F10.")

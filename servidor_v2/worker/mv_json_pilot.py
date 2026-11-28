@@ -311,7 +311,7 @@ def create_new(path,data):
         import os
         os.fsync(f.fileno())
 
-def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambda _:None):
+def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambda _:None,direct=False):
     checkpoint("IA_MV_JSON_FASE_VALIDAR")
     root=Path(game).absolute()
     for p in (root,*root.parents):
@@ -319,14 +319,21 @@ def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambd
         if not stat.S_ISDIR(info.st_mode) or getattr(info,"st_file_attributes",0)&0x400:
             raise error("RUTA_NO_VERIFICADA")
     root=root.resolve(strict=True)
-    regular(root/MARKER,4096)
+    if not direct:regular(root/MARKER,4096)
     sidecar=directory(root/"IA Traductora",root)
     local=directory(sidecar/".local",root)
     rpg=directory(local/"Rpg",root)
     expected=directory(rpg/"engine",root)
     if Path(engine).resolve(strict=True)!=expected:raise error("MOTOR_NO_VERIFICADO")
     directory(sidecar/"install",root)
-    journal=directory(sidecar/"install"/"mv-json",root)
+    if direct:
+        base=directory(sidecar/"install"/"mv-json-direct",root)
+        journal=directory(base/"active",root)
+        intent=decode(regular(journal/"intent.json",8192))
+        if not isinstance(intent,dict) or intent.get("schema")!="ia-mv-json-direct-v1":
+            raise error("SOLICITUD_INVALIDA")
+    else:
+        journal=directory(sidecar/"install"/"mv-json",root)
     request=decode(regular(journal/"request.json",8192))
     if not isinstance(request,dict) or request.get("schema")!=SCHEMA or request.get("content") not in ("www","."):
         raise error("SOLICITUD_INVALIDA")
@@ -334,7 +341,12 @@ def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambd
     if not isinstance(name,str) or not re.fullmatch(r"Map[0-9]{3,6}\.json",name):raise error("SOLICITUD_INVALIDA")
     content=root if request["content"]=="." else directory(root/"www",root)
     data=directory(content/"data",root)
-    system=decode(regular(data/"System.json",MAX_BYTES))
+    system_raw=regular(data/"System.json",MAX_BYTES)
+    if direct and (intent.get("content")!=request["content"] or intent.get("map")!=name or
+                   intent.get("map_before_sha256")!=request.get("before_sha256") or
+                   intent.get("system_before_sha256")!=digest(system_raw)):
+        raise error("ORIGEN_CAMBIADO")
+    system=decode(system_raw)
     start=system.get("startMapId") if isinstance(system,dict) else None
     if type(start) is not int or not 1<=start<=999999 or name!="Map%03d.json"%start:
         raise error("MAPA_INICIAL_INVALIDO")
@@ -348,6 +360,18 @@ def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambd
     # Validate the complete map before opening the models/cache.
     list(display_lines(doc))
     checkpoint("IA_MV_JSON_FASE_MEMORIA")
+    if direct:
+        # Existing SQLite files must be ordinary local files; never follow
+        # a junction or symlink into another directory during direct mode.
+        cache=rpg/"cache"
+        if cache.exists() or cache.is_symlink():
+            directory(cache,root)
+            for name_suffix in ("","-wal","-shm"):
+                f=cache/("translation-memory-v2.sqlite3"+name_suffix)
+                if f.exists() or f.is_symlink():
+                    info=f.lstat()
+                    if not stat.S_ISREG(info.st_mode) or getattr(info,"st_file_attributes",0)&0x400:
+                        raise error("RUTA_NO_VERIFICADA")
     memory=memory_factory(root)
     try:
         checkpoint("IA_MV_JSON_FASE_TOKENIZADORES")

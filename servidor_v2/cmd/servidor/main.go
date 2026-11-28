@@ -27,7 +27,7 @@ const (
  pluginName="IATraductora"
  // The JS payload now includes the read-only SOLData runtime adapter.
  installerBuildID="RPG-MVMZ-R42-20261127"
- packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-ORGANIZADO"
+ packageBuildID="RPG-MVMZ-VXACE-XP-WEB-R44-JSON-DIRECTO"
  maxArchive=int64(900*1024*1024)
 )
 type packageManifest struct{
@@ -450,7 +450,19 @@ func main(){
  xpParent:=flag.Int("xp-launch-parent",0,"Internal installed XP launcher; parent PID")
  xpProbe:=flag.Bool("xp-native-probe",false,"Validate genuine RGSS1 using an isolated synthetic game")
  jsonCopy:=flag.Bool("mv-json-copy",false,"Crear copia independiente de prueba con el mapa inicial MV/NWBin traducido")
+ jsonDirect:=flag.Bool("mv-json-install",false,"Instalación JSON explícita en la carpeta seleccionada, con respaldos y recuperación")
  flag.Parse()
+ if *jsonDirect{
+  valid:=*exe!=""&&flag.NArg()==0
+  flag.Visit(func(f *flag.Flag){if f.Name!="mv-json-install"&&f.Name!="game"&&f.Name!="package"{valid=false}})
+  if !valid{fmt.Fprintln(os.Stderr,"IA_MV_JSON_SOLICITUD_INVALIDA");os.Exit(1)}
+  source:=*payload;if source==""{var e error;source,e=os.Executable();if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}}
+  p,e:=readPackage(source);if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)};defer p.Close()
+  report,e:=mvJSONInstallDirect(*exe,p)
+  if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)}
+  fmt.Printf("IA_MV_JSON_DIRECTO_LISTO|%d\n",report.Lines)
+  return
+ }
  if *jsonCopy{
   valid:=*exe!=""&&flag.NArg()==0
   flag.Visit(func(f *flag.Flag){if f.Name!="mv-json-copy"&&f.Name!="game"&&f.Name!="package"{valid=false}})

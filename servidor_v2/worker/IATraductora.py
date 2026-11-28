@@ -1267,21 +1267,23 @@ def main():
     p.add_argument("--parent-pid",type=int,default=0)
     p.add_argument("--rpgxp-lab",action="store_true")
     p.add_argument("--mv-json-pilot",action="store_true")
+    p.add_argument("--mv-json-direct",action="store_true")
     p.add_argument("--check-models",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
     args=p.parse_args()
     try:
-        if args.mv_json_pilot:
+        if args.mv_json_pilot or args.mv_json_direct:
             write_startup_code(args.diagnostic_file,"IA_MV_JSON_FASE_ENTRADA")
         engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
-        if args.mv_json_pilot:
-            if args.rpgxp_lab or args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid:
+        if args.mv_json_pilot or args.mv_json_direct:
+            if (args.mv_json_pilot and args.mv_json_direct) or args.rpgxp_lab or args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid:
                 raise ValueError("IA_MV_JSON_SOLICITUD_INVALIDA")
             from mv_json_pilot import run_pilot
             run_pilot(args.game_root,engine,
                       lambda folder:NeuralOPUS(folder,pilot_threads=2),
                       TranslationMemory,native_quality_reason,
-                      checkpoint=lambda code:write_startup_code(args.diagnostic_file,code))
+                      checkpoint=lambda code:write_startup_code(args.diagnostic_file,code),
+                      direct=args.mv_json_direct)
             write_startup_code(args.diagnostic_file,"IA_MV_JSON_CANDIDATO_LISTO")
             return
         if args.rpgxp_lab:

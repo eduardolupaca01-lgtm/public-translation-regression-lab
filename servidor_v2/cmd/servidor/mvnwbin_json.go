@@ -244,7 +244,7 @@ func mvJSONVerifyMapDetailed(before,after []byte)(mvJSONChanges,error){
 func mvJSONVerifyMap(before,after []byte)(int,error){
  changes,e:=mvJSONVerifyMapDetailed(before,after);return changes.Lines,e
 }
-func mvJSONClonePlan(root,exe string)([]vxaceCloneEntry,uint64,error){
+func mvJSONClonePlan(root,exe string,skipRestoredDirect ...bool)([]vxaceCloneEntry,uint64,error){
  var entries []vxaceCloneEntry
  var total uint64
  seen:=map[string]bool{}
@@ -256,6 +256,10 @@ func mvJSONClonePlan(root,exe string)([]vxaceCloneEntry,uint64,error){
    if strings.HasSuffix(part,".")||strings.HasSuffix(part," "){return mvJSONError("RUTA_NO_VERIFICADA")}
   }
   key:=strings.ToLower(filepath.ToSlash(rel))
+  if key==strings.ToLower(brandFolder)&&len(skipRestoredDirect)==1&&skipRestoredDirect[0]{
+   if !d.IsDir()||vxaceCloneCheckAncestors(p)!=nil{return mvJSONError("RUTA_NO_VERIFICADA")}
+   return filepath.SkipDir
+  }
   if key==strings.ToLower(brandFolder)||key==strings.ToLower(mvJSONMarker)||strings.HasPrefix(key,".ia-traductora-stage-"){
    return mvJSONError("COPIA_PREVIA_NO_ADMITIDA")
   }
@@ -318,7 +322,9 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  before,e:=mvJSONRead(sourceMap,16*1024*1024);if e!=nil{return "",report,e}
  tree,e:=mvJSONDecode(before);if e!=nil{return "",report,e}
  if _,e=mvJSONDisplay(tree);e!=nil{return "",report,e}
- entries,total,e:=mvJSONClonePlan(root,exe);if e!=nil{return "",report,e}
+ // A restored, verified direct-mode sidecar stays in the original.
+ skip,unlock,e:=mvJSONDirectCopyGuard(root);if e!=nil{return "",report,e};defer unlock()
+ entries,total,e:=mvJSONClonePlan(root,exe,skip);if e!=nil{return "",report,e}
  if e=vxaceCheckDiskSpace(parent,total+2*1024*1024*1024);e!=nil{return "",report,e}
  exeInfo,e:=os.Lstat(exe);if e!=nil{return "",report,e}
  rel,e:=filepath.Rel(root,content);if e!=nil||rel!="www"&&rel!="."{return "",report,mvJSONError("RUTA_NO_VERIFICADA")}
@@ -358,12 +364,8 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  if e=createNew(filepath.Join(journal,"request.json"),request);e!=nil{return "",report,e}
  engine:=filepath.Join(sidecar,".local","Rpg","engine")
  if e=mvJSONRunWorker(engine,dest,journal);e!=nil{return "",report,e}
- raw,e:=mvJSONRead(filepath.Join(journal,"report.json"),8192)
- if e!=nil||json.Unmarshal(raw,&report)!=nil||report.Schema!=mvJSONSchema||report.Map!=mapName||report.Before!=hash(before)||report.Lines<0||report.ChoiceLabels<0||report.Lines+report.ChoiceLabels<=0||report.Units<0||report.Units>256||report.FitWarnings<0{return "",report,mvJSONError("INFORME_INVALIDO")}
+ report,e=mvJSONValidateCandidate(journal,mapName,before);if e!=nil{return "",report,e}
  candidate:=filepath.Join(journal,"candidate.json")
- after,e:=mvJSONRead(candidate,16*1024*1024);if e!=nil||hash(after)!=report.After{return "",report,mvJSONError("RESULTADO_INVALIDO")}
- changed,e:=mvJSONVerifyMapDetailed(before,after);if e!=nil{return "",report,e}
- if changed.Lines!=report.Lines||changed.ChoiceGroups!=report.ChoiceGroups||changed.ChoiceLabels!=report.ChoiceLabels||changed.Wrapped!=report.Wrapped||changed.Breaks!=report.Breaks{return "",report,mvJSONError("INFORME_INVALIDO")}
  if e=vxaceAtomicReplaceFrom(candidate,target,report.After,report.Before);e!=nil{return "",report,e}
  if e=xpHashFile(target,report.After);e!=nil{return "",report,mvJSONError("RESULTADO_INVALIDO")}
  report.Menu=menuCount
@@ -400,4 +402,15 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  if e=xpHashFile(final,protected[exe]);e!=nil{return "",report,mvJSONError("ARRANQUE_CAMBIADO")}
  if e=os.Remove(marker);e!=nil{return "",report,e}
  return final,report,nil
+}
+
+func mvJSONValidateCandidate(journal,mapName string,before []byte)(mvJSONReport,error){
+ var report mvJSONReport
+ raw,e:=mvJSONRead(filepath.Join(journal,"report.json"),8192)
+ if e!=nil||json.Unmarshal(raw,&report)!=nil||report.Schema!=mvJSONSchema||report.Map!=mapName||report.Before!=hash(before)||report.Lines<0||report.ChoiceLabels<0||report.Lines+report.ChoiceLabels<=0||report.Units<0||report.Units>256||report.FitWarnings<0{return report,mvJSONError("INFORME_INVALIDO")}
+ candidate:=filepath.Join(journal,"candidate.json")
+ after,e:=mvJSONRead(candidate,16*1024*1024);if e!=nil||hash(after)!=report.After{return report,mvJSONError("RESULTADO_INVALIDO")}
+ changed,e:=mvJSONVerifyMapDetailed(before,after);if e!=nil{return report,e}
+ if changed.Lines!=report.Lines||changed.ChoiceGroups!=report.ChoiceGroups||changed.ChoiceLabels!=report.ChoiceLabels||changed.Wrapped!=report.Wrapped||changed.Breaks!=report.Breaks{return report,mvJSONError("INFORME_INVALIDO")}
+ return report,nil
 }
