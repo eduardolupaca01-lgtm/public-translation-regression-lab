@@ -61,11 +61,23 @@ label start:
                        (u"\u304a\u306f\u3088\u3046\u3054\u3056\u3044\u307e\u3059\u3002",u"buenos|buen|d\u00edas|d\u00eda|hola"),
                        (u'{b}"Thank you for your help."{/b}',u"gracias|agradezco|ayuda|asistencia")]
                 for original,pattern in pairs:
+                    begin=time.time()
                     displayable=native(original)
-                    value=displayable.text
-                    if isinstance(value,(py_builtins.list,py_builtins.tuple)):
-                        if len(value)!=1:raise RuntimeError("Unexpected native text sequence")
-                        value=value[0]
+                    if time.time()-begin>.25:
+                        raise RuntimeError("Native text constructor waited on translation")
+                    # Show the genuine native object and allow its MAIN-thread
+                    # periodic callbacks to update it while the game runs.
+                    engine.show("ia_probe_text",what=displayable)
+                    until=time.time()+90
+                    value=original
+                    while time.time()<until:
+                        value=displayable.text
+                        if isinstance(value,(py_builtins.list,py_builtins.tuple)):
+                            if len(value)!=1:raise RuntimeError("Unexpected native text sequence")
+                            value=value[0]
+                        if value!=original:break
+                        engine.pause(.1,hard=True)
+                    engine.hide("ia_probe_text")
                     if value==original or not re.search(pattern,value,re.I):
                         raise RuntimeError("Native text was not translated: "+repr(value))
                     if "{" in original and ("{b}" not in value or "{/b}" not in value or value.count('"')!=2):
@@ -195,6 +207,10 @@ def main():
         if args.servidor:
             if "IA_RENPY_MOTOR_CONECTADO" not in status:raise RuntimeError("Missing real connection diagnostic")
             if not (side/"memory-v1.sqlite3").is_file():raise RuntimeError("Missing real translation memory")
+            progress=json.loads((side/"client-progress.json").read_text("utf-8"))
+            if not progress["scan_complete"] or progress["discovered"]<3:
+                raise RuntimeError("Missing real native scan/progress evidence")
+            print("NATIVE_RENPY_NONBLOCKING_VISIBLE_REFRESH_PASS",flush=True)
             end=time.monotonic()+90
             while list(side.glob("session-*.json")) and time.monotonic()<end:time.sleep(.25)
             command(args.servidor,"--renpy-recover","--game",launcher)

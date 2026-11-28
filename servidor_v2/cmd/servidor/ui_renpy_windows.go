@@ -4,6 +4,7 @@ package main
 
 import (
  "os"
+ "path/filepath"
  "unsafe"
 )
 
@@ -17,7 +18,8 @@ func iaCreateRenpyControls(ui *iaUI){
  ui.renpyLogs=iaControl(h,"EDIT","",iaWSBorder|iaWSVScroll|iaESMultiline|iaESReadOnly|iaESAutoVScroll,230,414,782,236,0)
  ui.renpyStatus=iaControl(h,"STATIC","Selecciona un juego Ren'Py.",0,230,664,773,39,0)
  ui.renpyRecover=iaControl(h,"BUTTON","Restaurar Ren'Py",0,501,710,274,36,iaCmdRenpyRecover)
- iaRenpyLog(ui,"[IA_RENPY_R1] Programa independiente experimental. Instalación reversible, escaneo nativo y traducción OPUS local.")
+ iaUser32.NewProc("SetTimer").Call(h,0x5245,1000,0)
+ iaRenpyLog(ui,"[IA_RENPY_FIX2] Escaneo nativo y traducción OPUS en segundo plano. Progreso automático al abrir el juego.")
 }
 func iaRenpyLog(ui *iaUI,s string){
  if ui.renpyLogText!=""{ui.renpyLogText+="\r\n"};ui.renpyLogText+=s
@@ -85,3 +87,9 @@ func iaRenpyStatus(ui *iaUI){
  iaRenpyLog(ui,"[IA_RENPY_ESTADO] "+s);iaSet(ui.renpyStatus,s)
 }
 
+
+func iaRenpyTick(ui *iaUI){
+ if !ui.renpyActive||ui.busy||ui.renpyFile==""{return}
+ side:=filepath.Join(filepath.Dir(ui.renpyFile),renpySide)
+ if p,ok:=renpyReadProgress(side);ok{iaSet(ui.renpyStatus,renpyProgressLine(p))}
+}

@@ -101,6 +101,71 @@ class RenpyR1(unittest.TestCase):
                     self.assertEqual(resp.status,status)
                     if status==200:self.assertEqual(body["text"],"Continuar")
             finally:http.shutdown();t.join();http.server_close();s.close()
+    def test_live_cache_misses_never_call_network(self):
+        import time
+        from unittest.mock import patch
+        c=client.Client("synthetic")
+        with patch.object(c,"request",side_effect=AssertionError("UI attempted I/O")) as request:
+            before=time.perf_counter()
+            for i in range(1000):
+                self.assertEqual(c.translate("Unique dialogue %d."%i),"Unique dialogue %d."%i)
+            self.assertLess(time.perf_counter()-before,1.0)
+            request.assert_not_called()
+        self.assertEqual(c.snapshot()["pending"],1000)
+        c.remember("Unique dialogue 0.","Dialogo traducido.")
+        self.assertEqual(c.translate("Unique dialogue 0."),"Dialogo traducido.")
+        c.remember("No change.","No change.")
+        c.translate("No change.")
+        self.assertNotIn("No change.",c.queued)
+    def test_visible_priority_and_no_duplicate_queue(self):
+        c=client.Client("synthetic")
+        c.enqueue("Inventory one.")
+        c.enqueue("Inventory two.")
+        c.finish_inventory(True)
+        c.translate("Inventory two.",True)
+        c.translate("Inventory two.",True)
+        self.assertEqual(list(c.urgent),["Inventory two."])
+        self.assertEqual(list(c.pending),["Inventory one."])
+        self.assertEqual(c.snapshot()["inventory"],2)
+        self.assertEqual(c.snapshot()["discovered"],2)
+    def test_inventory_translation_registry_and_progress(self):
+        from types import SimpleNamespace as NS
+        Say=type("Say",(),{})
+        node=Say();node.what="An archived dialogue.";node.filename="game/scene.rpy"
+        block=NS(filename="game/scene.rpy",block=[node])
+        eng=NS(game=NS(script=NS(all_stmts=[],translator=NS(default_translates={"x":block},additional_strings={"game/options.rpy":[(1,"A menu string.")]}))))
+        with tempfile.TemporaryDirectory() as d:
+            side=Path(d)/client.SIDECAR;side.mkdir()
+            c=client.Client(d)
+            for text in client.inventory(eng):c.enqueue(text)
+            c.finish_inventory(True);c.publish_progress()
+            data=json.loads((side/"client-progress.json").read_text("utf-8"))
+            self.assertEqual(data["inventory"],2)
+            self.assertTrue(data["scan_complete"])
+            self.assertEqual(data["pending"],2)
+    def test_main_thread_refreshes_only_current_native_object(self):
+        from types import SimpleNamespace as NS
+        from unittest.mock import patch
+        class Text:
+            def set_text(self,value,*a,**kw):self.text=value
+        class Input(Text):pass
+        c=client.Client("synthetic")
+        cfg=NS(say_menu_text_filter=None,periodic_callbacks=[])
+        eng=NS(config=cfg,game=NS(script=NS(all_stmts=[]),context=lambda:NS(init_phase=False)),
+            predicting=lambda:False,text=NS(text=NS(Text=Text)),display=NS(behavior=NS(Input=Input)))
+        client._installed=False
+        with patch.object(c,"start_prefetch"),patch.object(c,"request",side_effect=AssertionError("network in native setter")):
+            client.install(eng,c)
+            obj=Text();obj.set_text("Cold dialogue.")
+            self.assertEqual(obj.text,"Cold dialogue.")
+            old=Text();old.set_text("Old dialogue.");old.set_text("New dialogue.")
+            c.remember("Cold dialogue.","Dialogo listo.")
+            c.remember("Old dialogue.","No aplicar.")
+            cfg.periodic_callbacks[0]()
+            self.assertEqual(obj.text,"Dialogo listo.")
+            self.assertEqual(old.text,"New dialogue.")
+            inp=Input();inp.set_text("Cold dialogue.");self.assertEqual(inp.text,"Cold dialogue.")
+        client._installed=False
     def test_native_hook_keeps_input_and_existing_filter(self):
         from types import SimpleNamespace as NS
         class Text:

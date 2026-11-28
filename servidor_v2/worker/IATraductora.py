@@ -1283,9 +1283,13 @@ def main():
                 args.rpgxp_lab or args.check_models or args.mv_json_pilot or args.mv_json_direct):
                 raise ValueError("IA_RENPY_ARGUMENTOS_INVALIDOS")
             from renpy_runtime import run_renpy
+            # RenPy only: leave CPU capacity for game rendering, even on
+            # low-core machines. RPG/WEB keep their existing configuration.
+            os.environ.setdefault("OMP_WAIT_POLICY","PASSIVE")
+            threads=min(2,max(1,(os.cpu_count() or 2)//2))
             write_startup_code(args.diagnostic_file,"IA_RENPY_MOTOR_VALIDANDO")
             run_renpy(args.renpy_root,engine,args.renpy_session,args.parent_pid,
-                      NeuralOPUS,native_quality_reason,monitor_game_lifetime,
+                      lambda folder:NeuralOPUS(folder,pilot_threads=threads),native_quality_reason,monitor_game_lifetime,
                       checkpoint=lambda code:write_startup_code(args.diagnostic_file,code))
             return
         if args.mv_json_pilot or args.mv_json_direct:

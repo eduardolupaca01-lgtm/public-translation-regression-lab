@@ -16,6 +16,7 @@ import (
  "sort"
  "strings"
  "syscall"
+ "time"
 )
 
 // New, independent Ren'Py program. No game scripts, archives or saves are rewritten.
@@ -99,7 +100,9 @@ func renpyLock(root string)(func(),error){
 func renpyPriorModern(m renpyReceipt)bool{
  if m.Profile!=renpyModernProfile{return false}
  return (m.Client=="dc159fe8d20894385b1c7804dff7cd1d5891e1f225b8d4c764539240c51956a8"&&m.Boot=="dd03fe41a71f5f321778b9684ee8a9f7f3d659d8a8172fc85dbe1069c19afc2d")||
- (m.Client=="41ee8c5d2ba898e863cf2e1c278a0f39c7172461414ce3e7b4e4fdc2d30433fd"&&m.Boot=="0926373c6fcd744f6995431aa2f91cc566acb02f38695f5da36e130d0de17a9c")
+ (m.Client=="41ee8c5d2ba898e863cf2e1c278a0f39c7172461414ce3e7b4e4fdc2d30433fd"&&m.Boot=="0926373c6fcd744f6995431aa2f91cc566acb02f38695f5da36e130d0de17a9c")||
+ (m.Client=="3545f887a66c263d165d5c84cc6e7545473ed3e466e77e0424d43abe8e512e53"&&m.Boot=="d2f9785d563334b55dd75b380a790b83428c2dc9451cf31dd1331d06825da6d4")||
+ (m.Client=="6cc0ddb46e62076329f2787886190bb58149c6fbc6b220f385cda2bde4808e59"&&m.Boot=="bbd6d7f60a19b2324ac9bb1010b7806dcc3bc3b84b73f8f7e1a848ad61b1988f")
 }
 func renpyReadReceipt(side string)(renpyReceipt,error){
  var m renpyReceipt
@@ -171,6 +174,36 @@ func renpyStageError(phase string,e error)error{
  if errors.Is(e,os.ErrNotExist){return fmt.Errorf("IA_RENPY_%s_NO_ENCONTRADO",phase)}
  return fmt.Errorf("IA_RENPY_%s_FALLO",phase)
 }
+// Retry only transient OS failures on our already verified staged files.
+// Never elevate privileges, change ACLs, disable protection or overwrite a target.
+func renpyMoveRetry(src,dst string,move func(string,string)error,sleep func(time.Duration))error{
+ var last error
+ for i:=0;i<9;i++{
+  if _,e:=os.Lstat(dst);!os.IsNotExist(e){if e!=nil{return e};return errors.New("IA_RENPY_DESTINO_OCUPADO")}
+  last=move(src,dst);if last==nil{return nil}
+  var n syscall.Errno
+  if !errors.As(last,&n)||!(n==5||n==32||n==33){return last}
+  if _,e:=os.Lstat(src);e!=nil{return last}
+  if i<8{sleep(350*time.Millisecond)}
+ }
+ return last
+}
+func renpyMove(src,dst string)error{return renpyMoveRetry(src,dst,os.Rename,time.Sleep)}
+func renpyPreserveMemory(old,stage string)error{
+ // Game closed and previous session absent; retain source and copy only
+ // owned SQLite database and WAL if present, not arbitrary files.
+ for _,name:=range []string{"memory-v1.sqlite3","memory-v1.sqlite3-wal"}{
+  from:=filepath.Join(old,name)
+  if _,e:=os.Lstat(from);os.IsNotExist(e){continue}else if e!=nil{return e}
+  if !renpyFile(from){return errors.New("IA_RENPY_CACHE_INVALIDA")}
+  in,e:=os.Open(from);if e!=nil{return e}
+  out,e:=os.OpenFile(filepath.Join(stage,name),os.O_CREATE|os.O_EXCL|os.O_WRONLY,0600)
+  if e!=nil{in.Close();return e}
+  _,e=io.Copy(out,in);in.Close();syncErr:=out.Sync();closeErr:=out.Close()
+  if e!=nil{return e};if syncErr!=nil{return syncErr};if closeErr!=nil{return closeErr}
+ }
+ return nil
+}
 func renpyInstall(exe string,p *packageReader)(err error){
  phase:="DETECTAR"
  defer func(){err=renpyStageError(phase,err)}()
@@ -195,10 +228,12 @@ func renpyInstall(exe string,p *packageReader)(err error){
  }
  phase="PREPARAR_MOTOR"
  if _,e:=os.Lstat(side);os.IsNotExist(e){
+  phase="PREPARAR_CARPETA_MOTOR"
   stage,e:=os.MkdirTemp(d.Root,".ia-renpy-stage-");if e!=nil{return e};defer os.RemoveAll(stage)
+  phase="EXTRAER_MOTOR"
   if e=renpyExtract(stage,p,want,d);e!=nil{return e}
-  if _,e=os.Lstat(side);!os.IsNotExist(e){return errors.New("IA_RENPY_DESTINO_OCUPADO")}
-  if e=os.Rename(stage,side);e!=nil{return e}
+  phase="PUBLICAR_MOTOR"
+  if e=renpyMove(stage,side);e!=nil{return e}
  }else if e!=nil{return e}
  phase="VERIFICAR_MOTOR"
  m,e:=renpyReadReceipt(side);if e!=nil{return e}
@@ -211,11 +246,14 @@ func renpyInstall(exe string,p *packageReader)(err error){
   if e=renpyVerifySide(side,m,m.Engine);e!=nil{return e}
   stage,e:=os.MkdirTemp(d.Root,".ia-renpy-stage-");if e!=nil{return e};defer os.RemoveAll(stage)
   if e=renpyExtract(stage,p,want,d);e!=nil{return e}
+  phase="CONSERVAR_MEMORIA"
+  if e=renpyPreserveMemory(side,stage);e!=nil{return e}
+  phase="ACTUALIZAR_MOTOR"
   backup,e:=os.MkdirTemp(d.Root,"IA Traductora RenPy - respaldo-");if e!=nil{return e}
   old:=filepath.Join(backup,renpySide)
-  if e=os.Rename(side,old);e!=nil{return e}
-  if e=os.Rename(stage,side);e!=nil{
-   if undo:=os.Rename(old,side);undo!=nil{return errors.New("IA_RENPY_ACTUALIZACION_RESPALDO_CONSERVADO")}
+  if e=renpyMove(side,old);e!=nil{return e}
+  if e=renpyMove(stage,side);e!=nil{
+   if undo:=renpyMove(old,side);undo!=nil{return errors.New("IA_RENPY_ACTUALIZACION_RESPALDO_CONSERVADO")}
    return e
   }
   m,e=renpyReadReceipt(side);if e!=nil{return e}
@@ -235,7 +273,7 @@ func renpyInstall(exe string,p *packageReader)(err error){
  stage,e:=os.MkdirTemp(d.Root,".ia-renpy-hook-");if e!=nil{return e};defer os.RemoveAll(stage)
  if e=createNew(filepath.Join(stage,"boot.rpy"),boot);e!=nil{return e}
  if _,e=os.Lstat(hook);!os.IsNotExist(e){return errors.New("IA_RENPY_DESTINO_OCUPADO")}
- return os.Rename(stage,hook)
+ return renpyMove(stage,hook)
 }
 func renpyRecover(exe string)(err error){
  defer func(){err=renpyStageError("RESTAURAR",err)}()
@@ -262,7 +300,7 @@ func renpyRecover(exe string)(err error){
  for _,n:=range entries{if (n.Name()!="boot.rpy"&&n.Name()!="boot.rpyc")||!renpyFile(filepath.Join(hook,n.Name())){return errors.New("IA_RENPY_ARCHIVO_AJENO")}}
  // Preserve all owned material outside game/; no destructive deletion.
  q,e:=os.MkdirTemp(side,"retired-");if e!=nil{return e}
- return os.Rename(hook,filepath.Join(q,renpyHook))
+ return renpyMove(hook,filepath.Join(q,renpyHook))
 }
 func renpyStartupText(side string)string{
  out:=[]string{}
@@ -292,10 +330,35 @@ func renpyStartupText(side string)string{
  if len(out)>12{out=out[len(out)-12:]}
  return "IA Traductora: "+strings.Join(out," | ")
 }
+type renpyProgress struct{
+ Schema string
+ Phase string
+ ScanComplete bool `json:"scan_complete"`
+ Inventory,Discovered,Pending,Accepted,Unchanged,Deferred,Applied uint64
+ TransportFailed uint64 `json:"transport_failed"`
+ Updated int64
+}
+func renpyReadProgress(side string)(renpyProgress,bool){
+ var p renpyProgress
+ path:=filepath.Join(side,"client-progress.json")
+ if !renpyFile(path){return p,false}
+ st,e:=os.Stat(path);if e!=nil||st.Size()>8192{return p,false}
+ b,e:=os.ReadFile(path);if e!=nil||json.Unmarshal(b,&p)!=nil||p.Schema!=renpySchema{return p,false}
+ switch p.Phase{case "ESCANEO","CONECTANDO","ESPERANDO_MOTOR","TRADUCIENDO","LISTO":default:return p,false}
+ return p,true
+}
+func renpyProgressLine(p renpyProgress)string{
+ phase:=p.Phase
+ if time.Now().Unix()-p.Updated>15{phase="ULTIMO REGISTRO"}
+ return fmt.Sprintf("IA Traductora | %s | Detectados %d | Traducidos %d | Pendientes %d",phase,p.Discovered,p.Accepted,p.Pending)
+}
 func renpyStatusText(exe string)(string,error){
  d,e:=detectRenpy(exe);if e!=nil{return "",e};side:=filepath.Join(d.Root,renpySide)
  if _,e=renpyReadReceipt(side);e!=nil{return "",e}
  startup:=renpyStartupText(side)
+ if p,ok:=renpyReadProgress(side);ok{
+  startup+=fmt.Sprintf(" | %s | inventario=%d (completo=%t) | aplicaciones=%d | sin cambio=%d | errores de transporte=%d | cola saturada=%d",renpyProgressLine(p),p.Inventory,p.ScanComplete,p.Applied,p.Unchanged,p.TransportFailed,p.Deferred)
+ }
  p:=filepath.Join(side,"status.json");if !renpyFile(p){return startup+" | Todavía no hay sesión de traducción registrada.",nil}
  st,e:=os.Stat(p);if e!=nil||st.Size()>8192{return "",errors.New("IA_RENPY_ESTADO_INVALIDO")}
  b,e:=os.ReadFile(p);if e!=nil{return "",e}

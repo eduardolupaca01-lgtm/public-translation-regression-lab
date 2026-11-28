@@ -8,6 +8,8 @@ import (
  "bytes"
  "encoding/json"
  "strings"
+ "syscall"
+ "time"
 )
 func renpyFixture(t *testing.T)string{
  t.Helper();root:=t.TempDir()
@@ -114,4 +116,22 @@ func TestRenpyStartupDiagnosticAndNoPrivatePath(t *testing.T){
  if !strings.Contains(s,"7.3.2.320")||!strings.Contains(s,"ImportError")||!strings.Contains(s,"IA_RENPY_MOTOR_LISTO")||strings.Contains(s,"private"){t.Fatal(s)}
  e:=renpyStageError("PUBLICAR_HOOK",&os.PathError{Op:"rename",Path:"private",Err:os.ErrPermission})
  if strings.Contains(e.Error(),"private")||!strings.HasPrefix(e.Error(),"IA_RENPY_PUBLICAR_HOOK_"){t.Fatal(e)}
+}
+
+func TestRenpyTransientPublishRetry(t *testing.T){
+ root:=t.TempDir();src:=filepath.Join(root,"stage");dst:=filepath.Join(root,"final")
+ if e:=os.Mkdir(src,0700);e!=nil{t.Fatal(e)}
+ calls:=0
+ e:=renpyMoveRetry(src,dst,func(a,b string)error{calls++;if calls<3{return &os.LinkError{Op:"rename",Old:a,New:b,Err:syscall.Errno(5)}};return os.Rename(a,b)},func(time.Duration){})
+ if e!=nil||calls!=3||!renpyDir(dst){t.Fatal(e,calls)}
+ // Existing destination is never replaced.
+ if e=renpyMoveRetry(dst,dst,os.Rename,func(time.Duration){});e==nil{t.Fatal("overwrite accepted")}
+}
+func TestRenpyProgressAndFix1Receipt(t *testing.T){
+ root:=t.TempDir()
+ data:=[]byte("{\"schema\":\"ia-servidor-renpy-v1\",\"phase\":\"TRADUCIENDO\",\"scan_complete\":true,\"inventory\":844,\"discovered\":859,\"pending\":15,\"accepted\":844,\"updated\":100}")
+ if e:=os.WriteFile(filepath.Join(root,"client-progress.json"),data,0600);e!=nil{t.Fatal(e)}
+ p,ok:=renpyReadProgress(root);if !ok||!p.ScanComplete||p.Inventory!=844||p.Discovered!=859||p.Accepted!=844||p.Pending!=15{t.Fatal(p)}
+ m:=renpyReceipt{Profile:renpyModernProfile,Client:"6cc0ddb46e62076329f2787886190bb58149c6fbc6b220f385cda2bde4808e59",Boot:"bbd6d7f60a19b2324ac9bb1010b7806dcc3bc3b84b73f8f7e1a848ad61b1988f"}
+ if !renpyPriorModern(m){t.Fatal("Fix1 recovery rejected")}
 }

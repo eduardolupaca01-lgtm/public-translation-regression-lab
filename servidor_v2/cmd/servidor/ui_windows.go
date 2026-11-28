@@ -664,6 +664,8 @@ func iaWinProc(hwnd uintptr,message uint32,wparam,lparam uintptr)(ret uintptr){
             if lparam==ui.closeBtn && !ui.busy{iaDestroyWindow.Call(hwnd)}
         }
         return 0
+    case 0x0113: // WM_TIMER: RenPy progress only
+        if wparam==0x5245{iaRenpyTick(ui);return 0}
     case iaWMRenpyDone:
         iaRenpyFinish(ui);return 0
     case iaWMWebProgress:
