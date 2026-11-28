@@ -83,6 +83,25 @@ class RenpyR1(unittest.TestCase):
             self.assertEqual(s.translate("Continue"),"Continuar");self.assertFalse(n.calls);self.assertEqual(s.cached,1)
             s.close();s=RenpyService(p,"model-b",n,quality)
             self.assertEqual(s.translate("Continue"),"Continuar");self.assertEqual(len(n.calls),1);s.close()
+    def test_model_identity_survives_worker_rebuild_and_migrates_verified_memory(self):
+        from renpy_runtime import model_memory_identity,legacy_memory_identity
+        old={"IATraductora.exe":"a"*64,"models/opus_en_es/model.bin":"b"*64,"models/opus_ja_es/model.bin":"c"*64}
+        new=dict(old);new["IATraductora.exe"]="d"*64
+        changed=dict(new);changed["models/opus_ja_es/model.bin"]="e"*64
+        self.assertEqual(model_memory_identity(old),model_memory_identity(new))
+        self.assertNotEqual(legacy_memory_identity(old),legacy_memory_identity(new))
+        self.assertNotEqual(model_memory_identity(old),model_memory_identity(changed))
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);n=Neural()
+            s=RenpyService(p,legacy_memory_identity(old),n,quality)
+            self.assertEqual(s.translate("Continue"),"Continuar");s.close()
+            n=Neural();s=RenpyService(p,model_memory_identity(new),n,quality,[legacy_memory_identity(old)])
+            self.assertEqual(s.translate("Continue"),"Continuar")
+            self.assertEqual(s.cached,1);self.assertEqual(n.calls,[])
+            self.assertEqual(s.memory.get("Continue"),"Continuar");s.close()
+            n=Neural();s=RenpyService(p,model_memory_identity(changed),n,quality)
+            self.assertEqual(s.translate("Continue"),"Continuar")
+            self.assertEqual(len(n.calls),1);s.close()
     def test_rejected_not_cached(self):
         with tempfile.TemporaryDirectory() as d:
             s=RenpyService(Path(d),"m",Neural(),lambda *_:"reject")

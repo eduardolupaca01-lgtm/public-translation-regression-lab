@@ -248,6 +248,8 @@ func renpyInstall(exe string,p *packageReader)(err error){
   if e=renpyExtract(stage,p,want,d);e!=nil{return e}
   phase="CONSERVAR_MEMORIA"
   if e=renpyPreserveMemory(side,stage);e!=nil{return e}
+  previous,e:=json.Marshal(m);if e!=nil{return e}
+  if e=createNew(filepath.Join(stage,"previous-owner-v1.json"),previous);e!=nil{return e}
   phase="ACTUALIZAR_MOTOR"
   backup,e:=os.MkdirTemp(d.Root,"IA Traductora RenPy - respaldo-");if e!=nil{return e}
   old:=filepath.Join(backup,renpySide)

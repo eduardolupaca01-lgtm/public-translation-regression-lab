@@ -133,6 +133,16 @@ def atomic_json(path,data):
     finally:
         if temp.exists():temp.unlink()
 
+def legacy_memory_identity(manifest):
+    return hashlib.sha256(("surface-v2:"+json.dumps(manifest,sort_keys=True)).encode()).hexdigest()
+
+def model_memory_identity(manifest):
+    # Model bytes plus translation surface revision, not the unrelated
+    # executable build hash. Rebuilding the UI must not invalidate memory.
+    model_files={n:h for n,h in manifest.items() if n.startswith(("models/opus_en_es/","models/opus_ja_es/"))}
+    if not model_files:raise ValueError("IA_RENPY_MANIFIESTO_INVALIDO")
+    return hashlib.sha256(("surface-v2-models:"+json.dumps(model_files,sort_keys=True)).encode()).hexdigest()
+
 def installation(root,engine):
     root=root.absolute();side=root/SIDECAR
     if not ordinary(root,True) or not ordinary(side,True) or not ordinary(side/"engine",True) or engine.resolve()!=(side/"engine").resolve():
@@ -153,11 +163,29 @@ def installation(root,engine):
     models=receipt.get("engine_sha256",{})
     if not isinstance(models,dict) or not models or not all(isinstance(v,str) and re.fullmatch(r"[0-9a-f]{64}",v) for v in models.values()):
         raise ValueError("IA_RENPY_MANIFIESTO_INVALIDO")
-    return side,hashlib.sha256(("surface-v2:"+json.dumps(models,sort_keys=True)).encode()).hexdigest(),receipt
+    identity=model_memory_identity(models)
+    aliases=[legacy_memory_identity(models)]
+    # The installer stores the verified prior receipt only when it stages a
+    # replacement of an exact known owned installation. Never reuse translations
+    # across different model fingerprints.
+    previous=side/"previous-owner-v1.json"
+    if ordinary(previous):
+        try:
+            old=read_json(previous)
+            old_models=old.get("engine_sha256",{})
+            if (old.get("schema")==SCHEMA and (old.get("profile") or "modern")==profile
+                    and (old.get("game_rel") or "game")==rel
+                    and isinstance(old_models,dict) and old_models
+                    and all(isinstance(v,str) and re.fullmatch(r"[0-9a-f]{64}",v) for v in old_models.values())
+                    and model_memory_identity(old_models)==identity):
+                aliases.append(legacy_memory_identity(old_models))
+        except (OSError,ValueError,TypeError,AttributeError):pass
+    receipt["_memory_aliases"]=list(dict.fromkeys(aliases))
+    return side,identity,receipt
 
 class Memory:
-    def __init__(self,folder,identity):
-        self.identity=identity
+    def __init__(self,folder,identity,aliases=()):
+        self.identity=identity;self.aliases=tuple(x for x in aliases if x!=identity)
         path=folder/"memory-v1.sqlite3"
         for f in (path,folder/"memory-v1.sqlite3-wal",folder/"memory-v1.sqlite3-shm"):
             if (f.exists() or f.is_symlink()) and not ordinary(f):raise ValueError("IA_RENPY_CACHE_INVALIDA")
@@ -167,20 +195,24 @@ class Memory:
         self.db.execute("CREATE TABLE IF NOT EXISTS memory (model TEXT NOT NULL, original TEXT NOT NULL, output TEXT NOT NULL, PRIMARY KEY(model,original))")
         self.db.commit()
     def get(self,source):
-        row=self.db.execute("SELECT output FROM memory WHERE model=? AND original=?",(self.identity,source)).fetchone()
-        if row:
-            try:
-                if [v for c,v in protected_parts(source) if c]==[v for c,v in protected_parts(row[0]) if c] and row[0]!=source:return row[0]
-            except ValueError:pass
+        for identity in (self.identity,)+self.aliases:
+            row=self.db.execute("SELECT output FROM memory WHERE model=? AND original=?",(identity,source)).fetchone()
+            if row:
+                try:
+                    if [v for c,v in protected_parts(source) if c]==[v for c,v in protected_parts(row[0]) if c] and row[0]!=source:
+                        if identity!=self.identity:self.put(source,row[0])
+                        return row[0]
+                except ValueError:pass
         return None
     def put(self,source,target):
         self.db.execute("INSERT OR REPLACE INTO memory VALUES(?,?,?)",(self.identity,source,target));self.db.commit()
     def close(self):self.db.close()
 
 class RenpyService:
-    def __init__(self,side,identity,neural,quality):
+    def __init__(self,side,identity,neural,quality,aliases=()):
         self.side=side;self.neural=neural;self.quality=quality
-        self.memory=Memory(side,identity);self.lock=threading.RLock()
+        self.memory=Memory(side,identity,aliases);self.lock=threading.RLock()
+        self.throttle_status=False
         self.translated=0;self.cached=0;self.rejected=0
         self.token=secrets.token_hex(32)
         self.status_lock=threading.Lock();self.last_publish=0;self.last_published=None
@@ -191,7 +223,7 @@ class RenpyService:
         # into a failed translation response. Avoid a disk fsync per text.
         with self.status_lock:
             now=time.monotonic()
-            if not force and now-self.last_publish<.75:return
+            if self.throttle_status and not force and now-self.last_publish<.75:return
             state=self.status()
             if not force and state==self.last_published:return
             try:atomic_json(self.side/"status.json",state)
@@ -252,10 +284,13 @@ def run_renpy(root,engine,nonce,parent,neural_factory,quality,monitor,checkpoint
         if hashlib.sha256(raw).hexdigest()!=receipt.get("classic_key_sha256") or not secrets.compare_digest(raw,nonce.encode("ascii")):
             raise ValueError("IA_RENPY_CLAVE_INVALIDA")
         from renpy_classic_bridge import run_classic
-        return run_classic(side,identity,nonce,parent,neural_factory,engine,quality,monitor,RenpyService,ordinary,atomic_json)
+        def classic_service(folder,key,neural,q):
+            return RenpyService(folder,key,neural,q,receipt["_memory_aliases"])
+        return run_classic(side,identity,nonce,parent,neural_factory,engine,quality,monitor,classic_service,ordinary,atomic_json)
     session=side/("session-"+nonce+".json")
     if session.exists():raise ValueError("IA_RENPY_SESION_EXISTENTE")
-    service=RenpyService(side,identity,neural_factory(engine),quality)
+    service=RenpyService(side,identity,neural_factory(engine),quality,receipt["_memory_aliases"])
+    service.throttle_status=True
     server=None;window=None;status_thread=None;stop_status=threading.Event()
     try:
         server=ThreadingHTTPServer(("127.0.0.1",0),handler(service))
