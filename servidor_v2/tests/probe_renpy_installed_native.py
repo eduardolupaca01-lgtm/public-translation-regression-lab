@@ -57,6 +57,42 @@ label start:
             if str(engine.version_only)!="7.3.2.320":
                 raise RuntimeError("Unexpected SDK version "+str(engine.version_only))
             native=engine.text.text.Text
+            # The underlying 7.3.2 package exposes the native interaction
+            # functions through exports rather than the script-store facade.
+            api=engine.exports
+            for method in ("show","hide","pause"):
+                if not callable(getattr(api,method,None)):
+                    raise RuntimeError("Native display API unavailable: "+method)
+            def native_value(obj):
+                value=obj.text
+                if isinstance(value,(py_builtins.list,py_builtins.tuple)):
+                    if len(value)!=1:raise RuntimeError("Unexpected native text sequence")
+                    value=value[0]
+                return value
+            def present_and_refresh(obj,original,deliver=None):
+                # Both gates run the real renderer and its periodic callbacks.
+                # Only preflight supplies a deterministic cache arrival.
+                api.show("ia_probe_text",what=obj)
+                try:
+                    api.pause(.12,hard=True,with_none=False)
+                    if obj.get_layout() is None:
+                        raise RuntimeError("Native Text was not rendered")
+                    if deliver is not None:
+                        if native_value(obj)!=original:
+                            raise RuntimeError("Unexpected prepared value in cold fixture")
+                        deliver()
+                    until=time.time()+90
+                    while native_value(obj)==original and time.time()<until:
+                        api.pause(.1,hard=True,with_none=False)
+                    value=native_value(obj)
+                    if value==original:
+                        raise RuntimeError("Native periodic text refresh did not apply result")
+                    api.pause(.12,hard=True,with_none=False)
+                    if obj.get_layout() is None:
+                        raise RuntimeError("Translated native Text was not rendered")
+                    return value
+                finally:
+                    api.hide("ia_probe_text")
             if getattr(native.set_text,"__module__","")!=module.__name__:
                 raise RuntimeError("Native Text hook missing")
             if not engine.config.say_menu_text_filter:
@@ -76,12 +112,22 @@ label start:
                     native(u"Cold undiscovered display text %d."%i)
                 if time.time()-begin>2.0:
                     raise RuntimeError("Native constructors blocked without worker")
+                # Detect actual display API/callback problems before spending
+                # time packaging the real models.
+                cold=u"Cold native text "+u"awaiting translation."
+                translated=u"Texto nativo listo."
+                obj=native(cold,slow=False)
+                if native_value(obj)!=cold or not c.waiting(cold):
+                    raise RuntimeError("Cold native refresh fixture not queued")
+                value=present_and_refresh(obj,cold,lambda:c.remember(cold,translated))
+                if value!=translated:
+                    raise RuntimeError("Native periodic refresh returned wrong text")
+                api.write_log("NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS")
             if mode=="real":
                 # The actual previous preparation must already have made
                 # this archived sentence available BEFORE any worker wait.
                 first=native(u"Thank you for your help.")
-                value=first.text
-                if isinstance(value,(py_builtins.list,py_builtins.tuple)):value=value[0]
+                value=native_value(first)
                 if c.snapshot()["preloaded"]<1 or not re.search(u"gracias|agradezco|ayuda|asistencia",value,re.I):
                     raise RuntimeError("Prepared dialogue unavailable on first native display")
                 deadline=time.time()+90
@@ -117,28 +163,21 @@ label start:
                 pairs=[(u"Thank you for your help.",u"gracias|agradezco|ayuda|asistencia"),
                        (u"\u304a\u306f\u3088\u3046\u3054\u3056\u3044\u307e\u3059\u3002",u"buenos|buen|d\u00edas|d\u00eda|hola"),
                        (u'{b}"Thank you for your help."{/b}',u"gracias|agradezco|ayuda|asistencia")]
+                cold_count=0
                 for original,pattern in pairs:
                     begin=time.time()
-                    displayable=native(original)
+                    displayable=native(original,slow=False)
                     if time.time()-begin>.25:
                         raise RuntimeError("Native text constructor waited on translation")
-                    # Show the genuine native object and allow its MAIN-thread
-                    # periodic callbacks to update it while the game runs.
-                    engine.show("ia_probe_text",what=displayable)
-                    until=time.time()+90
-                    value=original
-                    while time.time()<until:
-                        value=displayable.text
-                        if isinstance(value,(py_builtins.list,py_builtins.tuple)):
-                            if len(value)!=1:raise RuntimeError("Unexpected native text sequence")
-                            value=value[0]
-                        if value!=original:break
-                        engine.pause(.1,hard=True)
-                    engine.hide("ia_probe_text")
+                    if native_value(displayable)==original:cold_count+=1
+                    value=present_and_refresh(displayable,original)
                     if value==original or not re.search(pattern,value,re.I):
                         raise RuntimeError("Native text was not translated: "+repr(value))
                     if "{" in original and ("{b}" not in value or "{/b}" not in value or value.count('"')!=2):
                         raise RuntimeError("Formatting/quotes lost")
+                if not cold_count:
+                    raise RuntimeError("No previously unprepared dynamic text exercised real periodic refresh")
+                api.write_log("NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS")
                 source=u"Thank you for your help."
                 target=engine.config.say_menu_text_filter(source)
                 if target==source or not re.search(u"gracias|agradezco|ayuda|asistencia",target,re.I):
@@ -317,6 +356,11 @@ def main():
         status=(side/"client-startup.txt").read_text("ascii")
         if "IA_RENPY_HOOKS_LISTOS" not in status or "RENPY_VERSION=7.3.2.320" not in status:
             raise RuntimeError("Missing production boot diagnostics")
+        render_marker="NATIVE_REAL_RENDER_AND_PERIODIC_REFRESH_PASS" if args.servidor else "NATIVE_PREBUILD_RENDER_AND_PERIODIC_REFRESH_PASS"
+        if render_marker not in (root/"log.txt").read_text("utf-8-sig",errors="replace"):
+            diagnostics(root,result)
+            raise RuntimeError("Missing actual native render/refresh evidence")
+        print(render_marker,flush=True)
         if any(sha(p)!=v for p,v in before.items()):raise RuntimeError("Original archive/launcher/save changed")
         if args.servidor:
             if "IA_RENPY_MOTOR_CONECTADO" not in status:raise RuntimeError("Missing real connection diagnostic")

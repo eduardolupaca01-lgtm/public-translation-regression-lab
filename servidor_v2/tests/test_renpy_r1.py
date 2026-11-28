@@ -316,6 +316,11 @@ class RenpyR1(unittest.TestCase):
         v.tokenized=False
         e.predicting=lambda:True
         v.set_text("Continue");self.assertIn(("Continue",False),fake.seen)
+        del e.predicting
+        e.exports=NS(predicting=lambda:True)
+        v.set_text("Save");self.assertEqual(fake.seen[-1],("Save",False))
+        e.exports.predicting=lambda:False
+        v.set_text("Continue");self.assertEqual(fake.seen[-1],("Continue",True))
 class ClassicRenpyR1(unittest.TestCase):
     def classic(self):
         s=importlib.util.spec_from_file_location("classic_client",BASE/"cmd/servidor/renpy_assets/classic_client.py")

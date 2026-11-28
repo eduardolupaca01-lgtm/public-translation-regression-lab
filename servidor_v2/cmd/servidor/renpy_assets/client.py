@@ -590,7 +590,11 @@ def install(engine,client=None):
     client=client or Client(engine.config.basedir)
     def foreground():
         try:
-            if getattr(engine,"predicting",lambda:False)():return False
+            # 7.x exposes this API via exports, unlike some newer engines.
+            predicting=getattr(engine,"predicting",None)
+            if not callable(predicting):
+                predicting=getattr(getattr(engine,"exports",None),"predicting",None)
+            if callable(predicting) and predicting():return False
             if engine.game.context().init_phase:return False
         except Exception:pass
         return True
