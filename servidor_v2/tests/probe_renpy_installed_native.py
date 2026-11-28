@@ -38,6 +38,8 @@ label start:
             module=sys.modules.get("_ia_servidor_renpy_r1")
             if module is None or getattr(module,"active_client",None) is None:
                 raise RuntimeError("Installed boot did not activate")
+            if not isinstance(module.__name__,py_builtins.str):
+                raise RuntimeError("Boot did not use native interpreter module name")
             if str(engine.version_only)!="7.3.2.320":
                 raise RuntimeError("Unexpected SDK version "+str(engine.version_only))
             native=engine.text.text.Text

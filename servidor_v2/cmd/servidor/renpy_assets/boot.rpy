@@ -24,11 +24,22 @@ init 999 python hide:
             _iasr_code = _iasr_f.read(262144)
         if _iasr_owner.get("schema") != "ia-servidor-renpy-v1" or _iasr_hash.sha256(_iasr_code).hexdigest() != _iasr_owner.get("client_sha256"):
             raise ValueError("IA_RENPY_CLIENTE_NO_VERIFICADO")
-        _iasr_phase = "CARGA_CLIENTE"
-        _iasr_mod = _iasr_types.ModuleType("_ia_servidor_renpy_r1")
+        # Ren'Py 7 compiles script literals as Unicode; Python 2's
+        # ModuleType requires a native byte-string name (CPython S format).
+        # Use actual interpreter builtins, not names shadowed by game stores.
+        _iasr_phase = "CREAR_MODULO"
+        try:
+            import builtins as _iasr_builtins
+        except ImportError:
+            import __builtin__ as _iasr_builtins
+        _iasr_name = _iasr_builtins.str("_ia_servidor_renpy_r1")
+        _iasr_mod = _iasr_types.ModuleType(_iasr_name)
         _iasr_mod.__file__ = _iasr_source
-        _iasr_sys.modules[_iasr_mod.__name__] = _iasr_mod
-        eval(compile(_iasr_code, _iasr_source, "exec"), _iasr_mod.__dict__)
+        _iasr_sys.modules[_iasr_name] = _iasr_mod
+        _iasr_phase = "COMPILAR_CLIENTE"
+        _iasr_compiled = _iasr_builtins.compile(_iasr_code, _iasr_builtins.str("ia_servidor_renpy_client.py"), _iasr_builtins.str("exec"))
+        _iasr_phase = "EJECUTAR_CLIENTE"
+        _iasr_builtins.eval(_iasr_compiled, _iasr_mod.__dict__, _iasr_mod.__dict__)
         _iasr_phase = "CONEXION_HOOKS"
         _iasr_mod.active_client = _iasr_mod.install(_iasr_engine)
         if _iasr_mod.active_client is None:
