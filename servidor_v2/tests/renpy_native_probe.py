@@ -20,6 +20,11 @@ init 999 python hide:
     import os
     import sys
     import renpy as engine
+    # This synthetic text-only scene has no audio. Old SDKs raise on CI
+    # machines without a DirectSound device, before the start label runs.
+    # Do not apply this setting in the actual translator or player games.
+    if hasattr(engine.config,"sound"):
+        engine.config.sound=False
     sys.path.insert(0, config.basedir)
     import ia_native_client
     class IATestClient(object):
