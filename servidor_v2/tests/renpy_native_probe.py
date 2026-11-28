@@ -41,6 +41,13 @@ init 999 python hide:
             }.get(value,value)
     ia_test_client=IATestClient()
     try:
+        # Exercise the actual client's initialization in the bundled runtime,
+        # not just the deterministic presentation fake.
+        actual_client=ia_native_client.Client(config.basedir)
+        import re
+        assert re.match(r'^[0-9a-f]{32}$',actual_client.nonce)
+        assert actual_client.nonce!=ia_native_client.new_nonce()
+        actual_client.close()
         ia_native_client.install(engine,ia_test_client)
     except Exception:
         import traceback

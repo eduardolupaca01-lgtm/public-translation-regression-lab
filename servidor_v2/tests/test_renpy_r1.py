@@ -22,6 +22,16 @@ class Neural:
                 "Welcome":"Bienvenido","Save":"Guardar"}.get(text,"Texto traducido")
 def quality(lang,source,target):return None
 class RenpyR1(unittest.TestCase):
+    def test_secure_nonce_works_without_uuid(self):
+        import re
+        from unittest.mock import patch
+        with patch.object(client.os, 'urandom', return_value=b'\x01'*16) as random_bytes:
+            self.assertEqual(client.new_nonce(), '01'*16)
+            random_bytes.assert_called_once_with(16)
+        a=client.Client('synthetic-root');b=client.Client('synthetic-root')
+        self.assertRegex(a.nonce, r'^[0-9a-f]{32}$')
+        self.assertNotEqual(a.nonce,b.nonce)
+        self.assertTrue(a.session.endswith('session-'+a.nonce+'.json'))
     def test_quotes_including_end_of_dialogue(self):
         n=Neural()
         self.assertEqual(translate_surface('She said "Hello"',n,quality),'Ella dijo "Hola"')

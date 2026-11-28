@@ -10,7 +10,7 @@ import re
 import subprocess
 import threading
 import time
-import uuid
+import binascii
 try:
     import http.client as http_client
 except ImportError:
@@ -22,6 +22,10 @@ except NameError:
 SCHEMA="ia-servidor-renpy-v1"
 SIDECAR="IA Traductora RenPy"
 CLOCK=getattr(time,"monotonic",time.time)
+def new_nonce():
+    # Legacy RenPy SDKs omit uuid from their bundled standard library.
+    # Keep 128 bits from the OS CSPRNG; do not use time or predictable random.
+    return binascii.hexlify(os.urandom(16)).decode("ascii")
 TECH=re.compile(r"^(?:https?://|[A-Za-z]:[\\/]|(?:[\w.-]+[/\\])+[\w.-]+$)|\.(?:rpyc?|rpa|png|jpe?g|webp|ogg|mp3|wav|ttf|otf|json|py|exe)$",re.I)
 LETTERS=re.compile(u"[A-Za-z\u00c0-\u024f\u3040-\u30ff\u3400-\u9fff\uff66-\uff9d]")
 def eligible(value):
@@ -29,7 +33,7 @@ def eligible(value):
             and not TECH.search(value.strip()) and not re.match(r"^[A-Z0-9_]+_\w+$",value.strip()))
 class Client(object):
     def __init__(self,root):
-        self.root=root;self.side=os.path.join(root,SIDECAR);self.nonce=uuid.uuid4().hex
+        self.root=root;self.side=os.path.join(root,SIDECAR);self.nonce=new_nonce()
         self.session=os.path.join(self.side,"session-"+self.nonce+".json")
         self.lock=threading.RLock();self.launch_lock=threading.Lock()
         self.proc=None;self.connection=None;self.cooldown=0
@@ -48,7 +52,7 @@ class Client(object):
         try:
             if self.stopped:return None
             if not self.proc or self.proc.poll() is not None:
-                self.connection=None;self.nonce=uuid.uuid4().hex
+                self.connection=None;self.nonce=new_nonce()
                 self.session=os.path.join(self.side,"session-"+self.nonce+".json")
                 exe=os.path.join(self.side,"engine","IATraductora.exe")
                 try:
