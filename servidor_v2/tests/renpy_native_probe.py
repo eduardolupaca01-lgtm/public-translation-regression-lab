@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import sys
 
 SOURCE=pathlib.Path(__file__).resolve().parents[1]/"cmd"/"servidor"/"renpy_assets"/"client.py"
 SCRIPT=r'''
@@ -15,10 +16,10 @@ SCRIPT=r'''
 define config.name = "Servidor RenPy R1 Native Test"
 define config.save_directory = "ServidorRenPyR1NativeLab"
 
-init python:
+init 999 python hide:
     import os
     import sys
-    import renpy
+    import renpy as engine
     sys.path.insert(0, config.basedir)
     import ia_native_client
     class IATestClient(object):
@@ -39,7 +40,18 @@ init python:
                 u'Inventory':u'Inventario',
             }.get(value,value)
     ia_test_client=IATestClient()
-    ia_native_client.install(renpy,ia_test_client)
+    try:
+        ia_native_client.install(engine,ia_test_client)
+    except Exception:
+        import traceback
+        with open(os.path.join(config.basedir,"native-init-error.txt"),"wb") as report:
+            report.write(traceback.format_exc().encode("utf-8","backslashreplace"))
+        raise
+    with open(os.path.join(config.basedir,"native-init-ok.txt"),"wb") as report:
+        report.write(b"INIT_OK")
+
+label main_menu:
+    return
 
 label start:
     python:
@@ -66,12 +78,22 @@ label start:
                 report.write(u"NATIVE_TEXT_CONTRACT_OK")
         except Exception:
             import traceback
-            with open(os.path.join(config.basedir,"native-error.txt"),"w") as report:
-                report.write(traceback.format_exc())
+            with open(os.path.join(config.basedir,"native-error.txt"),"wb") as report:
+                report.write(traceback.format_exc().encode("utf-8","backslashreplace"))
     $ renpy.quit()
     return
 '''
+def diagnostics(root):
+    for name in ("native-init-error.txt","native-error.txt","native-init-ok.txt","traceback.txt","errors.txt","log.txt"):
+        p=root/name
+        if p.exists():
+            print(name, p.read_text(encoding="utf-8-sig",errors="replace")[-10000:], flush=True)
+
 def main():
+    # Windows CI's legacy cp1252 output otherwise masks the Ren'Py exception.
+    if hasattr(sys.stdout,"reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8",errors="backslashreplace")
+        sys.stderr.reconfigure(encoding="utf-8",errors="backslashreplace")
     parser=argparse.ArgumentParser()
     parser.add_argument("--sdk-root",type=pathlib.Path,required=True)
     parser.add_argument("--version",required=True)
@@ -87,20 +109,24 @@ def main():
         shutil.copyfile(SOURCE,root/"ia_native_client.py")
         env=os.environ.copy()
         env["RENPY_DISABLE_JOYSTICK"]="1"
+        env["RENPY_SKIP_MAIN_MENU"]="1"
         proc=subprocess.Popen([str(candidates[0]),str(root)],cwd=str(candidates[0].parent),env=env)
         try:
             deadline=time.monotonic()+120
             marker=root/"native-result.txt"
             err=root/"native-error.txt"
             while time.monotonic()<deadline:
-                if err.exists():raise RuntimeError(err.read_text(encoding="utf-8",errors="replace"))
+                if err.exists() or (root/"native-init-error.txt").exists() or (root/"traceback.txt").exists() or (root/"errors.txt").exists():
+                    diagnostics(root)
+                    raise RuntimeError("RenPy reported a native initialization or execution error")
+                if proc.poll() is not None and not marker.exists():
+                    diagnostics(root)
+                    raise RuntimeError("RenPy exited before the native marker: "+str(proc.returncode))
                 if marker.exists() and marker.read_text(encoding="utf-8")=="NATIVE_TEXT_CONTRACT_OK":
                     print("REAL_SDK_NATIVE_CONTRACT",args.version,"PASS (deterministic responses, not OPUS)")
                     return
                 time.sleep(.5)
-            for name in ("traceback.txt","errors.txt","log.txt"):
-                p=root/name
-                if p.exists():print(name,p.read_text(encoding="utf-8",errors="replace")[-6000:])
+            diagnostics(root)
             raise RuntimeError("Native marker missing for "+args.version)
         finally:
             if proc.poll() is None:

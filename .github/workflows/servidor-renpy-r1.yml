@@ -73,4 +73,7 @@ jobs:
           "RENPY_SDK_ROOT=$dst" >> $env:GITHUB_ENV
       - name: Run a new original synthetic scene using the actual SDK
         shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
         run: python servidor_v2/tests/renpy_native_probe.py --sdk-root "$env:RENPY_SDK_ROOT" --version "${{ matrix.version }}"
