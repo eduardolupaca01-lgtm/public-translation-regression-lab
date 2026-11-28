@@ -91,6 +91,75 @@ class PilotTests(unittest.TestCase):
         self.assertTrue(all(p.estimated_width(line)<=p.WRAP_PIXELS for line in out.split("\n")))
         short="Cruza el puente."
         self.assertEqual(p.wrap_display(short),(short,0,0))
+    def test_small_batches_and_lazy_language_release(self):
+        class BudgetNeural:
+            def __init__(self):
+                self.active=None
+                self.batches=[]
+                self.released=[]
+            def translate_many(self,lang,texts):
+                self.assert_active(lang)
+                self.batches.append((lang,len(texts)))
+                if len(texts)>2:raise AssertionError("batch too large")
+                return ["Traducción válida."]*len(texts)
+            def assert_active(self,lang):
+                if self.active not in (None,lang):raise AssertionError("two models active")
+                self.active=lang
+            def release_pilot_language(self,lang):
+                if self.active!=lang:raise AssertionError("wrong model release")
+                self.active=None
+                self.released.append(lang)
+        class Memory:
+            def __init__(self):self.data={}
+            def get(self,k,lang,text):return self.data.get(k)
+            def put(self,k,lang,text,out):self.data[k]=out;return True
+        keys=[("en","Authored sentence "+chr(65+i)) for i in range(7)]+[("ja","橋を渡ってください。")]
+        neural=BudgetNeural();memory=Memory();phases=[]
+        results,stats=p.resolve_local(keys,neural,memory,lambda *_:None,phases.append)
+        self.assertEqual(len(results),8)
+        self.assertEqual(stats["new_translations"],8)
+        self.assertEqual(neural.batches,[("en",2),("en",2),("en",2),("en",1),("ja",1)])
+        self.assertEqual(neural.released,["en","ja"])
+        self.assertEqual(neural.active,None)
+        self.assertIn("IA_MV_JSON_FASE_INFERENCIA_EN",phases)
+        self.assertIn("IA_MV_JSON_FASE_INFERENCIA_JA",phases)
+        self.assertEqual(phases[-1],"IA_MV_JSON_FASE_PROYECCION")
+        neural.batches.clear();neural.released.clear()
+        _,stats=p.resolve_local(keys,neural,memory,lambda *_:None)
+        self.assertEqual(stats["cache_hits"],8)
+        self.assertEqual(neural.batches,[])
+        self.assertEqual(neural.released,[])
+
+    def test_pilot_does_not_eagerly_load_both_models(self):
+        import json
+        class FakeNeural(MockNeural):
+            def check_all(self):raise AssertionError("eager model load")
+            def release_pilot_language(self,lang):self.released=lang
+        doc=fixture()
+        doc["events"][1]["pages"][0]["list"]=[doc["events"][1]["pages"][0]["list"][1]]
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            engine=root/"IA Traductora"/".local"/"Rpg"/"engine"
+            engine.mkdir(parents=True)
+            journal=root/"IA Traductora"/"install"/"mv-json"
+            journal.mkdir(parents=True)
+            data=root/"www"/"data"
+            data.mkdir(parents=True)
+            (root/p.MARKER).write_text("incomplete",encoding="utf8")
+            (data/"System.json").write_text('{"startMapId":1}',encoding="utf8")
+            (data/"Actors.json").write_text("[]",encoding="utf8")
+            raw=json.dumps(doc,ensure_ascii=False).encode("utf8")
+            (data/"Map001.json").write_bytes(raw)
+            (journal/"request.json").write_text(json.dumps({"schema":p.SCHEMA,"content":"www","map":"Map001.json","before_sha256":p.digest(raw)}),encoding="utf8")
+            neural=FakeNeural();phases=[]
+            p.run_pilot(root,engine,lambda _:neural,TranslationMemory,native_quality_reason,phases.append)
+            self.assertEqual(neural.calls,[("en","Please open the wooden gate.")])
+            self.assertEqual(neural.released,"en")
+            self.assertNotIn("IA_MV_JSON_FASE_INFERENCIA_JA",phases)
+            self.assertEqual(phases[-1],"IA_MV_JSON_FASE_PUBLICAR")
+            self.assertEqual((data/"Map001.json").read_bytes(),raw)
+            self.assertTrue((journal/"candidate.json").is_file())
+
     def test_malformed_map_and_duplicate_json(self):
         with self.assertRaises(ValueError):list(p.display_lines({"events":[{"pages":[{"list":[{"code":401,"indent":0,"parameters":[]}]}]}]}))
         with self.assertRaises(ValueError):p.decode(b'{"x":1,"x":2}')

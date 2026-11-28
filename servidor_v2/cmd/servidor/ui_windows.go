@@ -171,7 +171,20 @@ func iaSafeInstallCode(message string)string{
     return message[:end]
 }
 func iaFriendlyInstall(code string)string{
+    if strings.HasPrefix(code,"IA_MV_JSON_TIEMPO_AGOTADO"){
+        return "El motor agotó el tiempo de traducción. El origen sigue intacto. Copia el código completo para identificar la fase."
+    }
+    if strings.HasPrefix(code,"IA_MV_JSON_MOTOR_SALIDA_"){
+        return "El proceso del motor terminó inesperadamente. Copia el código de salida y fase; no abras la copia incompleta."
+    }
+    if strings.HasPrefix(code,"IA_MV_JSON_MOTOR_INICIO_"){
+        return "No se pudo iniciar el motor local. Copia el código del sistema; revisa el espacio libre y los avisos de Windows."
+    }
     switch code{
+    case "IA_MV_JSON_TEMPORAL_NO_DISPONIBLE","IA_MV_JSON_TEMPORAL_NO_VERIFICADO":
+        return "No se pudo crear o verificar una carpeta temporal privada para el motor. El juego sigue intacto."
+    case "IA_MEMORIA_INSUFICIENTE":
+        return "No hay memoria suficiente para la traducción. Cierra otros programas y vuelve a probar con el juego cerrado."
     case "IA_MV_JSON_SIN_TRADUCCIONES_VALIDAS":
         return "No se obtuvo una traducción válida del mapa inicial. El juego original permanece intacto."
     case "IA_MV_JSON_COPIA_PREVIA_NO_ADMITIDA":

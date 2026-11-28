@@ -229,13 +229,16 @@ def encode_source(tokenizer, text, eos=None):
     return tokens
 
 class NeuralOPUS:
-    def __init__(self, engine: Path):
+    def __init__(self, engine: Path, *, pilot_threads=None):
         try:
             import ctranslate2
             import sentencepiece as spm
         except ImportError as exc:
             raise RuntimeError("IA_DEPENDENCIAS_MODELO_FALTANTES") from exc
         self.ct2 = ctranslate2
+        # The offline copy runs on its own worker. Keep its native memory
+        # and CPU budget conservative; live RPG/WEB behavior is unchanged.
+        self.pilot_threads = pilot_threads
         self.models = {}
         self.roots = {}
         self.source_end_tokens = {}
@@ -271,11 +274,23 @@ class NeuralOPUS:
                     content[name] = file.read_bytes()
             if "model.bin" not in content or "config.json" not in content:
                 raise RuntimeError("IA_MODELO_INCOMPLETO")
-            model = self.ct2.Translator("IA_OPUS_" + lang, device="cpu",
-                                        compute_type="int8", inter_threads=1,
-                                        files=content)
+            options = {"device":"cpu","compute_type":"int8","inter_threads":1,"files":content}
+            threads=getattr(self,"pilot_threads",None)
+            if threads is not None:options["intra_threads"]=threads
+            model = self.ct2.Translator("IA_OPUS_" + lang, **options)
             self.models[lang] = (model, source, target)
         return self.models[lang]
+
+    def release_pilot_language(self,lang):
+        """Release an offline-only native translator between languages."""
+        if getattr(self,"pilot_threads",None) is None:return
+        with self.lock:
+            _,source,target=self.models[lang]
+            self.models[lang]=(None,source,target)
+        # Drop the final local reference before loading another model.
+        del _
+        import gc
+        gc.collect()
 
     def check_all(self):
         with self.lock:
@@ -1200,6 +1215,7 @@ def safe_startup_code(error):
              "IA_WEB_MODULO_NO_ADMITIDO","IA_WEB_RECURSOS_INCOMPLETOS","IA_WEB_PUERTO_OCUPADO"}
     if str(error) in allowed:return str(error)
     if re.fullmatch(r"IA_MV_JSON_[A-Z0-9_]{1,64}",str(error)):return str(error)
+    if isinstance(error,MemoryError):return "IA_MEMORIA_INSUFICIENTE"
     if isinstance(error,sqlite3.Error):return "IA_CACHE_PERSISTENTE_INACCESIBLE"
     if "version" in raw and ("model" in raw or "binary" in raw):
         return "IA_MODELO_VERSION_INCOMPATIBLE"
@@ -1254,13 +1270,18 @@ def main():
     p.add_argument("--check-models",action="store_true")
     p.add_argument("--diagnostic-file",type=Path)
     args=p.parse_args()
-    engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
     try:
+        if args.mv_json_pilot:
+            write_startup_code(args.diagnostic_file,"IA_MV_JSON_FASE_ENTRADA")
+        engine=Path(sys.executable if getattr(sys,"frozen",False) else __file__).resolve().parent
         if args.mv_json_pilot:
             if args.rpgxp_lab or args.check_models or args.web_root is not None or args.halva_content is not None or args.game_root is None or args.parent_pid:
                 raise ValueError("IA_MV_JSON_SOLICITUD_INVALIDA")
             from mv_json_pilot import run_pilot
-            run_pilot(args.game_root,engine,NeuralOPUS,TranslationMemory,native_quality_reason)
+            run_pilot(args.game_root,engine,
+                      lambda folder:NeuralOPUS(folder,pilot_threads=2),
+                      TranslationMemory,native_quality_reason,
+                      checkpoint=lambda code:write_startup_code(args.diagnostic_file,code))
             write_startup_code(args.diagnostic_file,"IA_MV_JSON_CANDIDATO_LISTO")
             return
         if args.rpgxp_lab:

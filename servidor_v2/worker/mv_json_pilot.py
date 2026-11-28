@@ -265,11 +265,12 @@ def localize_map(doc,names,resolve,quality):
             "choice_groups":groups,"choice_labels":labels_changed,"wrapped_lines":wrapped,
             "added_breaks":added_breaks,"fit_warnings":fit_warnings,**stats}
 
-def resolve_local(keys,neural,memory,quality):
+def resolve_local(keys,neural,memory,quality,checkpoint=lambda _:None):
     answers={}
     new=0
     hits=0
     for lang in ("en","ja"):
+        checkpoint("IA_MV_JSON_FASE_CACHE_"+lang.upper())
         missing=[]
         for key in keys:
             if key[0]!=lang:continue
@@ -280,15 +281,27 @@ def resolve_local(keys,neural,memory,quality):
                 answers[key]=found
                 hits+=1
             else:missing.append((key,digest_key))
-        for at in range(0,len(missing),6):
-            batch=missing[at:at+6]
-            values=neural.translate_many(lang,[k[1] for k,_ in batch])
-            if len(values)!=len(batch):raise error("RESPUESTA_INVALIDA")
-            for (key,digest_key),out in zip(batch,values):
-                if not isinstance(out,str) or FORBIDDEN.search(out) or quality(lang,key[1],out):continue
-                if memory.put(digest_key,lang,key[1],out):
-                    answers[key]=out
-                    new+=1
+        if not missing:continue
+        # A small offline batch bounds the native decoder's peak working
+        # memory. Persist each accepted result before continuing. The other
+        # language's model is not loaded until it actually has missing work.
+        try:
+            for at in range(0,len(missing),2):
+                checkpoint("IA_MV_JSON_FASE_INFERENCIA_"+lang.upper())
+                batch=missing[at:at+2]
+                values=neural.translate_many(lang,[k[1] for k,_ in batch])
+                if len(values)!=len(batch):raise error("RESPUESTA_INVALIDA")
+                for (key,digest_key),out in zip(batch,values):
+                    if not isinstance(out,str) or FORBIDDEN.search(out) or quality(lang,key[1],out):continue
+                    if memory.put(digest_key,lang,key[1],out):
+                        answers[key]=out
+                        new+=1
+        finally:
+            release=getattr(neural,"release_pilot_language",None)
+            if callable(release):
+                checkpoint("IA_MV_JSON_FASE_LIBERAR_"+lang.upper())
+                release(lang)
+    checkpoint("IA_MV_JSON_FASE_PROYECCION")
     return answers,{"new_translations":new,"cache_hits":hits}
 
 def create_new(path,data):
@@ -298,7 +311,8 @@ def create_new(path,data):
         import os
         os.fsync(f.fileno())
 
-def run_pilot(game,engine,neural_factory,memory_factory,quality):
+def run_pilot(game,engine,neural_factory,memory_factory,quality,checkpoint=lambda _:None):
+    checkpoint("IA_MV_JSON_FASE_VALIDAR")
     root=Path(game).absolute()
     for p in (root,*root.parents):
         info=p.lstat()
@@ -333,17 +347,22 @@ def run_pilot(game,engine,neural_factory,memory_factory,quality):
     names={v[field] for v in actors if isinstance(v,dict) for field in ("name","nickname") if isinstance(v.get(field),str)}
     # Validate the complete map before opening the models/cache.
     list(display_lines(doc))
+    checkpoint("IA_MV_JSON_FASE_MEMORIA")
     memory=memory_factory(root)
     try:
+        checkpoint("IA_MV_JSON_FASE_TOKENIZADORES")
         neural=neural_factory(expected)
-        neural.check_all()
-        stats=localize_map(doc,names,lambda keys:resolve_local(keys,neural,memory,quality),quality)
+        # Do not eagerly load both CT2 models for a monolingual map.
+        # The packaged build still independently verifies both weights.
+        checkpoint("IA_MV_JSON_FASE_INVENTARIO")
+        stats=localize_map(doc,names,lambda keys:resolve_local(keys,neural,memory,quality,checkpoint),quality)
     finally:
         memory.close()
     if stats["translated_lines"]+stats["choice_labels"]<=0:raise error("SIN_TRADUCCIONES_VALIDAS")
     result=json.dumps(doc,ensure_ascii=False,separators=(",",":"),allow_nan=False).encode("utf8")
     if len(result)>MAX_BYTES:raise error("RESULTADO_EXCESIVO")
     if digest(regular(source_path,MAX_BYTES))!=request["before_sha256"]:raise error("ORIGEN_CAMBIADO")
+    checkpoint("IA_MV_JSON_FASE_PUBLICAR")
     create_new(journal/"candidate.json",result)
     report={"schema":SCHEMA,"map":name,"before_sha256":digest(raw),"after_sha256":digest(result),**stats}
     create_new(journal/"report.json",json.dumps(report,ensure_ascii=True,separators=(",",":")).encode("utf8"))

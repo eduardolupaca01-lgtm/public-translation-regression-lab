@@ -95,6 +95,7 @@ func r44JSONPilotProfile(t *testing.T,sdk,packaged,profile string){
  if e!=nil||len(copies)!=1{t.Fatal("missing unique copy",e)}
  dest:=copies[0]
  if _,e=os.Lstat(filepath.Join(dest,mvJSONMarker));!os.IsNotExist(e){t.Fatal("incomplete marker remained")}
+ if got:=mvJSONWorkerStatus(filepath.Join(dest,"IA Traductora","install","mv-json","status.json"));got!="IA_MV_JSON_CANDIDATO_LISTO"{t.Fatalf("worker terminal status: %s",got)}
  reportFile:=filepath.Join(dest,"IA Traductora","install","mv-json","report.json")
  raw,e:=os.ReadFile(reportFile);if e!=nil{t.Fatal(e)}
  var report mvJSONReport

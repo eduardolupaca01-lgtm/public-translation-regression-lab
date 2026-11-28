@@ -5,21 +5,18 @@ package main
 // loader, manifest, protection logic, event scripts, choice indices or saves.
 import (
  "bytes"
- "context"
- "encoding/json"
+  "encoding/json"
  "errors"
  "fmt"
  "io"
  "io/fs"
  "os"
- "os/exec"
- "path/filepath"
+  "path/filepath"
  "reflect"
  "regexp"
  "sort"
  "strings"
- "time"
-)
+ )
 
 const mvJSONSchema="ia-mv-json-pilot-v1"
 const mvJSONMarker="IA_COPIA_JSON_INCOMPLETA.txt"
@@ -342,15 +339,7 @@ func mvJSONCopyPilot(exe string,pkg *packageReader)(string,mvJSONReport,error){
  request,_:=json.Marshal(mvJSONRequest{mvJSONSchema,rel,mapName,hash(before)})
  if e=createNew(filepath.Join(journal,"request.json"),request);e!=nil{return "",report,e}
  engine:=filepath.Join(sidecar,".local","Rpg","engine")
- statusFile:=filepath.Join(journal,"status.json")
- ctx,cancel:=context.WithTimeout(context.Background(),20*time.Minute);defer cancel()
- cmd:=exec.CommandContext(ctx,filepath.Join(engine,"IATraductora.exe"),"--mv-json-pilot","--game-root",dest,"--diagnostic-file",statusFile)
- cmd.Dir=dest
- if e=cmd.Run();e!=nil{
-  var s struct{Code string `json:"code"`}
-  if raw,er:=mvJSONRead(statusFile,1024);er==nil&&json.Unmarshal(raw,&s)==nil&&regexp.MustCompile("^IA_[A-Z0-9_]{4,90}$").MatchString(s.Code){return "",report,errors.New(s.Code)}
-  return "",report,mvJSONError("MOTOR_FALLO")
- }
+ if e=mvJSONRunWorker(engine,dest,journal);e!=nil{return "",report,e}
  raw,e:=mvJSONRead(filepath.Join(journal,"report.json"),8192)
  if e!=nil||json.Unmarshal(raw,&report)!=nil||report.Schema!=mvJSONSchema||report.Map!=mapName||report.Before!=hash(before)||report.Lines<0||report.ChoiceLabels<0||report.Lines+report.ChoiceLabels<=0||report.Units<0||report.Units>256||report.FitWarnings<0{return "",report,mvJSONError("INFORME_INVALIDO")}
  candidate:=filepath.Join(journal,"candidate.json")
